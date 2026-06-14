@@ -219,41 +219,108 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  /// Ejecuta un comando usando el bin/sh del rootfs
+  /// Ejecuta un comando usando el rootfs de Alpine
+  /// En Android 10+ el directorio de la app está montado noexec,
+  /// así que usamos el linker del sistema para cargar los binarios.
   Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 30)}) async {
     if (!_initialized || _rootfsPath == null) {
       return 'Error: Linux no inicializado.\n';
     }
 
-    final shPath = '$_rootfsPath/bin/sh';
-    final shExists = await File(shPath).exists();
-    if (!shExists) {
+    final rootfs = _rootfsPath!;
+
+    // Detectar linker del sistema Android
+    String linker = '/system/bin/linker64';
+    if (!await File(linker).exists()) {
+      linker = '/system/bin/linker';
+    }
+    final hasLinker = await File(linker).exists();
+
+    // Buscar busybox o sh en rootfs
+    final busyboxPath = '$rootfs/bin/busybox';
+    final shPath = '$rootfs/bin/sh';
+    final hasBusybox = await File(busyboxPath).exists();
+    final hasSh = await File(shPath).exists();
+
+    if (!hasBusybox && !hasSh) {
       return 'Error: /bin/sh no encontrado en rootfs.\n';
     }
 
     try {
-      final result = await Process.run(
-        shPath,
-        ['-c', command],
-        environment: {
-          'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-          'HOME': '/root',
-          'TERM': 'xterm-256color',
-          'LD_LIBRARY_PATH': '/lib:/usr/lib:/usr/local/lib',
-          'PREFIX': _rootfsPath!,
-        },
-        workingDirectory: _rootfsPath,
-        runInShell: false,
-      ).timeout(timeout);
+      // Estrategia 1: Linker del sistema + busybox (funciona en noexec)
+      if (hasLinker && hasBusybox) {
+        try {
+          final result = await Process.run(
+            linker,
+            [busyboxPath, 'sh', '-c', command],
+            environment: {
+              'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
+                      '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin',
+              'HOME': '$rootfs/root',
+              'TERM': 'xterm-256color',
+              'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
+              'PREFIX': rootfs,
+            },
+            workingDirectory: rootfs,
+          ).timeout(timeout);
 
-      final out = result.stdout as String;
-      final err = result.stderr as String;
-      _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
-      return _lastOutput;
+          final out = result.stdout as String;
+          final err = result.stderr as String;
+          _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
+          return _lastOutput;
+        } catch (e) {
+          _lastOutput = 'Linker falló, intentando método directo: $e\n';
+        }
+      }
+
+      // Estrategia 2: Sistema Android shell con PATH hacia rootfs
+      if (await File('/system/bin/sh').exists()) {
+        final result = await Process.run(
+          '/system/bin/sh',
+          ['-c', command],
+          environment: {
+            'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
+                    '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin:'
+                    '/system/bin:/system/xbin',
+            'HOME': '$rootfs/root',
+            'TERM': 'xterm-256color',
+            'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
+            'PREFIX': rootfs,
+          },
+          workingDirectory: rootfs,
+        ).timeout(timeout);
+
+        final out = result.stdout as String;
+        final err = result.stderr as String;
+        _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
+        return _lastOutput;
+      }
+
+      // Estrategia 3: Intentar ejecución directa como fallback
+      if (hasSh) {
+        final result = await Process.run(
+          shPath, ['-c', command],
+          environment: {
+            'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+            'HOME': '/root', 'TERM': 'xterm-256color',
+          },
+          workingDirectory: rootfs,
+        ).timeout(timeout);
+
+        final out = result.stdout as String;
+        final err = result.stderr as String;
+        _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
+        return _lastOutput;
+      }
+
+      return 'Error: No se pudo ejecutar el comando.\n';
     } on TimeoutException {
       return '\n[Timeout] El comando excedió ${timeout.inSeconds}s\n';
     } catch (e) {
-      return '\n[Error] $e\n';
+      _lastOutput = '\n[Error] $e\n';
+      _statusMessage = 'Error de ejecución';
+      notifyListeners();
+      return _lastOutput;
     }
   }
 
