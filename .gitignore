@@ -1,0 +1,27 @@
+# Flutter
+.dart_tool/
+.packages
+build/
+*.iml
+.idea/
+.vscode/
+*.lock
+
+# Android
+android/.gradle/
+android/app/build/
+android/local.properties
+
+# Dart
+.dart_tool/
+.packages
+.pub/
+pubspec.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
