@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:archive/archive.dart';
 
 class ProotService extends ChangeNotifier {
   String? _rootfsPath;
@@ -9,39 +10,32 @@ class ProotService extends ChangeNotifier {
   bool _isDownloading = false;
   double _downloadProgress = 0.0;
   String _statusMessage = 'No iniciado';
-  final bool _useDebian = true;
+  String _lastOutput = '';
 
   bool get initialized => _initialized;
   bool get isDownloading => _isDownloading;
   double get downloadProgress => _downloadProgress;
   String get statusMessage => _statusMessage;
-  String? get rootfsPath => _rootfsPath;
-  bool get useDebian => _useDebian;
+  String get lastOutput => _lastOutput;
 
-  Future<String> get _rootfsDir async {
+  Future<String> get _appDir async {
     final dir = await getApplicationDocumentsDirectory();
-    return '${dir.path}/linux_container/rootfs';
-  }
-
-  Future<String> get _tarPath async {
-    final dir = await getApplicationDocumentsDirectory();
-    await Directory('${dir.path}/linux_container').create(recursive: true);
-    return '${dir.path}/linux_container/rootfs.tar.xz';
+    return '${dir.path}/linux_container';
   }
 
   Future<bool> checkEnvironment() async {
     try {
-      final rootfs = await _rootfsDir;
+      final rootfs = '${await _appDir}/rootfs';
       _rootfsPath = rootfs;
       if (await Directory(rootfs).exists()) {
-        if (await File('$rootfs/bin/bash').exists() || await File('$rootfs/bin/sh').exists()) {
+        if (await File('$rootfs/bin/sh').exists()) {
           _initialized = true;
           _statusMessage = 'Linux listo';
           notifyListeners();
           return true;
         }
       }
-      _statusMessage = 'Rootfs no encontrado - haz Setup';
+      _statusMessage = 'Rootfs no encontrado - pulsa Setup';
       notifyListeners();
       return false;
     } catch (e) {
@@ -56,138 +50,123 @@ class ProotService extends ChangeNotifier {
     _isDownloading = true;
     _downloadProgress = 0.0;
     _statusMessage = 'Iniciando descarga...';
+    _lastOutput = '';
     notifyListeners();
 
     try {
-      final rootfs = await _rootfsDir;
+      final appDir = await _appDir;
+      final rootfs = '$appDir/rootfs';
       _rootfsPath = rootfs;
+
+      // Crear directorios
+      await Directory(appDir).create(recursive: true);
       await Directory(rootfs).create(recursive: true);
+      await Directory('$rootfs/proc').create(recursive: true);
+      await Directory('$rootfs/sys').create(recursive: true);
+      await Directory('$rootfs/tmp').create(recursive: true);
 
       _downloadProgress = 0.05;
-      _statusMessage = 'Descargando Debian Bookworm (ARM64)...';
+      _statusMessage = 'Descargando Alpine Linux minimal...';
       notifyListeners();
 
-      // Debian Bookworm rootfs for ARM64
-      // Using debootstrap approach or prebuilt rootfs
-      final tarPath = await _tarPath;
-      if (!await File(tarPath).exists()) {
-        // Try to download a prebuilt Debian rootfs
-        final urls = [
-          'https://github.com/debuerreotype/docker-debian-artifacts/raw/dist-arm64v8/bookworm/rootfs.tar.xz',
-          'https://github.com/debuerreotype/docker-debian-artifacts/raw/dist-arm64v8/stable/rootfs.tar.xz',
-        ];
+      // Descargar Alpine minirootfs (ARM64)
+      final tarGzFile = File('$appDir/rootfs.tar.gz');
 
-        bool downloaded = false;
-        for (final url in urls) {
-          try {
-            await _downloadFile(url, tarPath);
-            downloaded = true;
-            break;
-          } catch (_) {
-            continue;
-          }
-        }
-
-        if (!downloaded) {
-          // Fallback: Create minimal rootfs with debootstrap
-          _statusMessage = 'Creando rootfs con debootstrap...';
-          notifyListeners();
-          final result = await Process.run('debootstrap', [
-            '--arch=arm64', '--include=ca-certificates,curl,wget,openssh-server,ping',
-            'bookworm', rootfs, 'http://deb.debian.org/debian',
-          ], runInShell: false).timeout(const Duration(seconds: 300));
-          if (result.exitCode != 0) {
-            // Try qemu-debootstrap or manual approach
-            await _createMinimalRootfs(rootfs);
-          }
-          _downloadProgress = 0.9;
-        } else {
-          _downloadProgress = 0.5;
-          _statusMessage = 'Extrayendo rootfs...';
-          notifyListeners();
-
-          if (!await File('$rootfs/bin/bash').exists()) {
-            final result = await Process.run(
-              'tar', ['-xJf', tarPath, '-C', rootfs, '--no-same-owner'],
-            );
-            if (result.exitCode != 0) {
-              // Try gz format
-              final result2 = await Process.run(
-                'tar', ['-xzf', tarPath, '-C', rootfs, '--no-same-owner'],
-              );
-              if (result2.exitCode != 0) {
-                throw Exception('Error extrayendo rootfs');
-              }
-            }
-          }
-          _downloadProgress = 0.8;
-        }
-      } else {
-        _downloadProgress = 0.5;
-        _statusMessage = 'Usando rootfs en caché';
-        notifyListeners();
+      if (!await tarGzFile.exists()) {
+        await _downloadFile(
+          'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz',
+          tarGzFile.path,
+        );
       }
 
-      // Extract if tar exists but rootfs not ready
-      if (await File(tarPath).exists() && !await File('$rootfs/bin/bash').exists()) {
-        _statusMessage = 'Extrayendo rootfs del caché...';
-        notifyListeners();
-        final result = await Process.run(
-          'tar', ['-xJf', tarPath, '-C', rootfs, '--no-same-owner'],
-        );
-        if (result.exitCode != 0) {
-          final result2 = await Process.run(
-            'tar', ['-xzf', tarPath, '-C', rootfs, '--no-same-owner'],
-          );
-          if (result2.exitCode != 0) {
-            throw Exception('Error extrayendo rootfs');
-          }
-        }
+      _downloadProgress = 0.5;
+      _statusMessage = 'Extrayendo rootfs...';
+      notifyListeners();
+
+      // Extraer usando Dart puro (no necesita tar externo)
+      if (!await File('$rootfs/bin/sh').exists()) {
+        await _extractTarGz(tarGzFile.path, rootfs);
       }
 
       _downloadProgress = 0.85;
-      _statusMessage = 'Configurando entorno Debian...';
+      _statusMessage = 'Configurando entorno...';
       notifyListeners();
 
-      // Configure DNS
+      // DNS
+      final resolvDir = Directory('$rootfs/etc');
+      await resolvDir.create(recursive: true);
       await File('$rootfs/etc/resolv.conf').writeAsString(
         'nameserver 8.8.8.8\nnameserver 1.1.1.1\n',
       );
 
-      // Set up apt sources
-      await File('$rootfs/etc/apt/sources.list').writeAsString(
-        'deb http://deb.debian.org/debian bookworm main contrib non-free\n'
-        'deb http://deb.debian.org/debian-security bookworm-security main contrib non-free\n'
-        'deb http://deb.debian.org/debian bookworm-updates main contrib non-free\n',
+      // hosts
+      await File('$rootfs/etc/hosts').writeAsString(
+        '127.0.0.1 localhost\n::1 localhost\n',
       );
-
-      // Create necessary mount points
-      for (final dir in ['proc', 'sys', 'dev', 'dev/pts', 'tmp']) {
-        await Directory('$rootfs/$dir').create(recursive: true);
-      }
 
       _downloadProgress = 1.0;
       _initialized = true;
-      _statusMessage = 'Debian Linux listo';
+      _statusMessage = 'Alpine Linux listo';
+
+      // Verificar que sh existe
+      final hasSh = await File('$rootfs/bin/sh').exists();
+      if (!hasSh) {
+        _statusMessage = 'Error: /bin/sh no encontrado en rootfs';
+        _initialized = false;
+      }
     } catch (e) {
       _statusMessage = 'Error: $e';
+      _lastOutput = '$_lastOutput\nError: $e';
     } finally {
       _isDownloading = false;
       notifyListeners();
     }
   }
 
-  Future<void> _createMinimalRootfs(String rootfs) async {
-    // Create minimal directory structure
-    for (final dir in ['bin', 'etc', 'lib', 'usr/bin', 'usr/lib', 'var']) {
-      await Directory('$rootfs/$dir').create(recursive: true);
-    }
-
-    // Write a minimal /bin/sh using busybox
-    await Process.run('cp', ['/bin/busybox', '$rootfs/bin/']);
-
-    _statusMessage = 'Usando busybox como fallback';
+  Future<void> _extractTarGz(String tarPath, String destPath) async {
+    final bytes = await File(tarPath).readAsBytes();
+    _statusMessage = 'Descomprimiendo gzip...';
     notifyListeners();
+
+    // Descomprimir gzip
+    final gzipBytes = GZipDecoder().decodeBytes(bytes);
+
+    _statusMessage = 'Extrayendo archivos...';
+    notifyListeners();
+
+    // Decodificar tar
+    final archive = TarDecoder().decodeBytes(gzipBytes);
+    int extracted = 0;
+    final total = archive.length;
+
+    for (final file in archive) {
+      final outPath = '$destPath/${file.name}';
+
+      if (file.isFile) {
+        // Crear directorio padre
+        await Directory(outPath).parent.create(recursive: true);
+        await File(outPath).writeAsBytes(file.content as List<int>);
+        // Preservar permisos de ejecución
+        if (file.name.startsWith('bin/') || file.name.startsWith('usr/bin/') ||
+            file.name.startsWith('sbin/') || file.name.startsWith('lib/')) {
+          await Process.run('chmod', ['+x', outPath]);
+        }
+      } else if (file.isSymbolicLink) {
+        final target = file.symbolicLink ?? '';
+        await Directory(outPath).parent.create(recursive: true);
+        if (await File(outPath).exists() || await Link(outPath).exists()) {
+          try { await File(outPath).delete(); } catch (_) {}
+          try { await Link(outPath).delete(); } catch (_) {}
+        }
+        await Link(outPath).create(target);
+      }
+
+      extracted++;
+      if (extracted % 500 == 0) {
+        _statusMessage = 'Extrayendo $extracted/$total archivos...';
+        notifyListeners();
+      }
+    }
   }
 
   Future<void> _downloadFile(String url, String path) async {
@@ -197,6 +176,7 @@ class ProotService extends ChangeNotifier {
       final response = await request.close();
       final totalBytes = response.contentLength;
       int receivedBytes = 0;
+
       final sink = File(path).openWrite();
       await for (final chunk in response) {
         sink.add(chunk);
@@ -213,58 +193,42 @@ class ProotService extends ChangeNotifier {
     }
   }
 
+  /// Ejecuta un comando usando el bin/sh del rootfs
   Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 30)}) async {
     if (!_initialized || _rootfsPath == null) {
-      return 'Error: Linux no inicializado. Ve a Inicio > Setup Linux.\n';
+      return 'Error: Linux no inicializado.\n';
     }
+
+    final shPath = '$_rootfsPath/bin/sh';
+    final shExists = await File(shPath).exists();
+    if (!shExists) {
+      return 'Error: /bin/sh no encontrado en rootfs.\n';
+    }
+
     try {
       final result = await Process.run(
-        'chroot',
-        [_rootfsPath!, '/bin/bash', '-c', command],
+        shPath,
+        ['-c', command],
         environment: {
           'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
           'HOME': '/root',
           'TERM': 'xterm-256color',
-          'DEBIAN_FRONTEND': 'noninteractive',
+          'LD_LIBRARY_PATH': '/lib:/usr/lib:/usr/local/lib',
+          'PREFIX': _rootfsPath!,
         },
+        workingDirectory: _rootfsPath,
         runInShell: false,
       ).timeout(timeout);
 
       final out = result.stdout as String;
       final err = result.stderr as String;
-      if (err.isNotEmpty && out.isEmpty) return err;
-      if (err.isNotEmpty) return '$out\n$err';
-      return out;
+      _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
+      return _lastOutput;
     } on TimeoutException {
       return '\n[Timeout] El comando excedió ${timeout.inSeconds}s\n';
     } catch (e) {
-      // Try with /bin/sh as fallback
-      try {
-        final result = await Process.run(
-          'chroot',
-          [_rootfsPath!, '/bin/sh', '-c', command],
-          environment: {
-            'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-            'HOME': '/root',
-            'TERM': 'xterm-256color',
-            'DEBIAN_FRONTEND': 'noninteractive',
-          },
-          runInShell: false,
-        ).timeout(timeout);
-        return result.stdout as String;
-      } catch (e2) {
-        return '\n[Error] $e2\n';
-      }
+      return '\n[Error] $e\n';
     }
   }
 
-  Future<String> runApt(String args) async {
-    if (!_initialized) return 'Error: Linux no inicializado.\n';
-    // First run apt-get update if it's an install
-    if (args.startsWith('install') || args.startsWith('search')) {
-      await runCommand('apt-get update -qq', timeout: const Duration(seconds: 60));
-    }
-    return runCommand('DEBIAN_FRONTEND=noninteractive apt-get $args -qq 2>&1 || true',
-        timeout: const Duration(seconds: 120));
-  }
 }

@@ -22,17 +22,21 @@ class OpenCloudService {
   String get adminPassword => _adminPassword;
 
   Future<void> installNextcloud() async {
-    _status = 'Instalando Nextcloud...';
-    _output = await _proot.runApt('install apache2 mariadb-server php php-mysql '
-        'php-gd php-xml php-curl php-zip php-mbstring php-intl php-bcmath php-gmp wget unzip');
+    _status = 'Instalando dependencias PHP/Apache...';
+    _output = await _proot.runCommand(
+      'apk add apache2 php php-mysqli php-gd php-xml php-curl '
+      'php-zip php-mbstring php-intl php-bcmath php-gmp wget unzip '
+      'mariadb mariadb-client 2>&1',
+      timeout: const Duration(seconds: 120),
+    );
 
     _output += '\n--- Descargando Nextcloud ---\n';
     _output += await _proot.runCommand(
-      'cd /var/www && '
+      'cd /var/www/localhost/htdocs 2>/dev/null || cd /var/www && '
       'wget -q https://download.nextcloud.com/server/releases/latest.zip -O nextcloud.zip 2>&1 && '
       'unzip -q nextcloud.zip 2>&1 && '
-      'chown -R www-data:www-data nextcloud 2>&1 && '
-      'rm -f nextcloud.zip',
+      'chmod -R 755 nextcloud 2>&1 || '
+      'echo "Nextcloud download attempted"',
       timeout: const Duration(seconds: 180),
     );
 
@@ -41,12 +45,13 @@ class OpenCloudService {
   }
 
   Future<void> startServer() async {
-    _status = 'Iniciando servicios...';
+    _status = 'Iniciando servidores...';
     _output = await _proot.runCommand(
-      'service mysql start 2>/dev/null || mysqld_safe --datadir=/var/lib/mysql &>/dev/null & '
-      '&& sleep 2 && '
-      'service apache2 start 2>/dev/null || apachectl start 2>/dev/null || true',
-      timeout: const Duration(seconds: 15),
+      'nohup /usr/bin/mysqld --user=root --datadir=/var/lib/mysql &>/dev/null & '
+      'sleep 1; '
+      'nohup /usr/sbin/httpd -d /etc/apache2 &>/dev/null & '
+      'echo "Servers started"',
+      timeout: const Duration(seconds: 10),
     );
     _running = true;
     _status = 'OpenCloud activo en $_webUrl';
@@ -54,8 +59,7 @@ class OpenCloudService {
 
   Future<void> stopServer() async {
     _output = await _proot.runCommand(
-      'service apache2 stop 2>/dev/null; service mysql stop 2>/dev/null; '
-      'killall mysqld 2>/dev/null; killall httpd 2>/dev/null; true',
+      'killall httpd mysqld 2>/dev/null; true',
     );
     _running = false;
     _status = 'Servidores detenidos';
@@ -63,7 +67,9 @@ class OpenCloudService {
 
   Future<void> getVersion() async {
     final result = await _proot.runCommand(
-      'cat /var/www/nextcloud/version.php 2>/dev/null | grep OC_VersionString | head -1 || echo "N/A"',
+      'cat /var/www/localhost/htdocs/nextcloud/version.php 2>/dev/null | '
+      'grep OC_VersionString | head -1 || cat /var/www/nextcloud/version.php '
+      '2>/dev/null | grep OC_VersionString | head -1 || echo "N/A"',
     );
     _version = result.replaceAll(RegExp(r'[^0-9.]'), '');
   }
