@@ -128,45 +128,71 @@ class ProotService extends ChangeNotifier {
     _statusMessage = 'Descomprimiendo gzip...';
     notifyListeners();
 
-    // Descomprimir gzip
     final gzipBytes = GZipDecoder().decodeBytes(bytes);
-
     _statusMessage = 'Extrayendo archivos...';
     notifyListeners();
 
-    // Decodificar tar
     final archive = TarDecoder().decodeBytes(gzipBytes);
     int extracted = 0;
     final total = archive.length;
 
+    // Primera pasada: extraer todos los archivos
     for (final file in archive) {
-      final outPath = '$destPath/${file.name}';
+      // Normalizar nombre (quitar ./ inicial)
+      String cleanName = file.name;
+      if (cleanName.startsWith('./')) cleanName = cleanName.substring(2);
+      if (cleanName.isEmpty || cleanName == '.') continue;
+
+      final outPath = '$destPath/$cleanName';
 
       if (file.isFile) {
-        // Crear directorio padre
         await Directory(outPath).parent.create(recursive: true);
         await File(outPath).writeAsBytes(file.content as List<int>);
-        // Preservar permisos de ejecución
-        if (file.name.startsWith('bin/') || file.name.startsWith('usr/bin/') ||
-            file.name.startsWith('sbin/') || file.name.startsWith('lib/')) {
-          await Process.run('chmod', ['+x', outPath]);
-        }
       } else if (file.isSymbolicLink) {
         final target = file.symbolicLink ?? '';
         await Directory(outPath).parent.create(recursive: true);
-        if (await File(outPath).exists() || await Link(outPath).exists()) {
-          try { await File(outPath).delete(); } catch (_) {}
-          try { await Link(outPath).delete(); } catch (_) {}
-        }
+        try { await File(outPath).delete(); } catch (_) {}
+        try { await Link(outPath).delete(); } catch (_) {}
         await Link(outPath).create(target);
       }
 
       extracted++;
-      if (extracted % 500 == 0) {
+      if (extracted % 1000 == 0) {
         _statusMessage = 'Extrayendo $extracted/$total archivos...';
         notifyListeners();
       }
     }
+
+    _statusMessage = 'Aplicando permisos de ejecución...';
+    notifyListeners();
+
+    // Segunda pasada: marcar ejecutables en directorios bin/
+    final execDirs = ['bin', 'sbin', 'usr/bin', 'usr/sbin', 'usr/local/bin'];
+    for (final dir in execDirs) {
+      final dirPath = '$destPath/$dir';
+      if (await Directory(dirPath).exists()) {
+        await _chmodRecursive(dirPath, true);
+      }
+    }
+
+    // También asegurar que /bin/sh y /bin/busybox sean ejecutables
+    for (final execPath in ['/bin/sh', '/bin/busybox', '/sbin/apk']) {
+      final fullPath = '$destPath$execPath';
+      if (await File(fullPath).exists()) {
+        await Process.run('chmod', ['755', fullPath]);
+      }
+    }
+  }
+
+  Future<void> _chmodRecursive(String dirPath, bool exec) async {
+    final dir = Directory(dirPath);
+    try {
+      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+        if (entity is File) {
+          await Process.run('chmod', ['755', entity.path]);
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _downloadFile(String url, String path) async {
