@@ -686,70 +686,119 @@ class ProotService extends ChangeNotifier {
   }
 
   // ────────── runCommand ──────────
-  Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 60)}) async {
+    Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     if (!_initialized || _rootfsPath == null) {
       return 'Error: Linux no inicializado.\nPulsa "Setup Linux" primero.\n';
     }
 
     final rootfs = _rootfsPath!;
+    final appDir = await _appDir;
     final linker = await _linker;
 
+    // Buscar el shell del rootfs
     String? shellPath;
-    for (final p in ['$rootfs/bin/sh', '$rootfs/bin/busybox', '$rootfs/bin/dash']) {
-      if (await File(p).exists() && await File(p).length() > 0) { shellPath = p; break; }
+    for (final p in ['$rootfs/bin/sh', '$rootfs/bin/busybox', '$rootfs/bin/dash', '$rootfs/bin/bash']) {
+      try {
+        if (await File(p).exists() && await File(p).length() > 0) { shellPath = p; break; }
+      } catch (_) { continue; }
+    }
+    if (shellPath == null) {
+      return 'Error: No hay shell disponible en rootfs.\n';
     }
 
-    if (shellPath == null && await File('/system/bin/sh').exists()) {
-      try {
+    try {
+      // ─── ESTRATEGIA 1: PROOT-rs (la mejor opción) ───
+      final prootPath = '$appDir/proot';
+      if (linker != null && await File(prootPath).exists() && await File(prootPath).length() > 0) {
+        try {
+          final result = await Process.run(
+            linker,
+            [prootPath, '-r', rootfs, '-0', '-w', '/root',
+             '/bin/sh', '-c', command],
+            environment: {
+              'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+              'HOME': '/root',
+              'TERM': 'xterm-256color',
+              'LD_LIBRARY_PATH': '/lib:/usr/lib',
+            },
+          ).timeout(timeout);
+          final out = result.stdout as String;
+          final err = result.stderr as String;
+          if (err.isNotEmpty && out.isEmpty) {
+            _lastOutput = err;
+          } else if (err.isNotEmpty) {
+            _lastOutput = '$out\n$err';
+          } else {
+            _lastOutput = out;
+          }
+          return _lastOutput;
+        } catch (e) {
+          _lastOutput = 'proot-rs fallo: $e\n';
+        }
+      }
+
+      // ─── ESTRATEGIA 2: Linker del sistema + shell rootfs ───
+      if (linker != null) {
+        try {
+          final result = await Process.run(
+            linker, [shellPath, '-c', command],
+            environment: {
+              'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
+                      '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin'
+                      ':/system/bin:/system/xbin',
+              'HOME': '/root',
+              'TERM': 'xterm-256color',
+              'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
+            },
+            workingDirectory: rootfs,
+          ).timeout(timeout);
+          final out = result.stdout as String;
+          final err = result.stderr as String;
+          _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
+          return _lastOutput;
+        } catch (e) {
+          _lastOutput = 'linker fallo: $e\n';
+        }
+      }
+
+      // ─── ESTRATEGIA 3: Shell del sistema + PATH al rootfs ───
+      if (await File('/system/bin/sh').exists()) {
         final result = await Process.run(
           '/system/bin/sh', ['-c', command],
           environment: {
             'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
                     '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin'
                     ':/system/bin:/system/xbin',
-            'HOME': '/root', 'TERM': 'xterm-256color',
+            'HOME': '/root',
+            'TERM': 'xterm-256color',
             'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
           },
-          workingDirectory: rootfs,
         ).timeout(timeout);
-        _lastOutput = (result.stderr as String).isNotEmpty
-            ? '${result.stdout}\n${result.stderr}' : result.stdout as String;
-        return _lastOutput;
-      } catch (e) { _lastOutput = 'system sh falló: $e\n'; }
-    }
-
-    if (shellPath == null) { return 'Error: No hay shell disponible.\n'; }
-
-    try {
-      if (linker != null) {
-        final result = await Process.run(
-          linker, [shellPath, '-c', command],
-          environment: {
-            'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
-                    '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin'
-                    ':/system/bin:/system/xbin',
-            'HOME': '/root', 'TERM': 'xterm-256color',
-            'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
-          },
-          workingDirectory: rootfs,
-        ).timeout(timeout);
-        _lastOutput = (result.stderr as String).isNotEmpty
-            ? '${result.stdout}\n${result.stderr}' : result.stdout as String;
+        final out = result.stdout as String;
+        final err = result.stderr as String;
+        _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
         return _lastOutput;
       }
 
+      // ─── ESTRATEGIA 4: Ejecucion directa del shell rootfs ───
       final result = await Process.run(
         shellPath, ['-c', command],
+        environment: {
+          'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          'HOME': '/root',
+          'TERM': 'xterm-256color',
+        },
         workingDirectory: rootfs,
       ).timeout(timeout);
-      _lastOutput = (result.stderr as String).isNotEmpty
-          ? '${result.stdout}\n${result.stderr}' : result.stdout as String;
+      final out = result.stdout as String;
+      final err = result.stderr as String;
+      _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
       return _lastOutput;
     } on TimeoutException {
-      return '\n[Timeout] El comando excedió ${timeout.inSeconds}s\n';
+      return '\n[Timeout] ${timeout.inSeconds}s excedido\n';
     } catch (e) {
       _lastOutput = '\n[Error] $e\n';
-      _statusMessage = 'Error de ejecución';
+      _statusMessage = 'Error de ejecucion';
       notifyListeners();
       return _lastOutput;
     }
