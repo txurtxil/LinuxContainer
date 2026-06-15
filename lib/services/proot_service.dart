@@ -5,7 +5,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive.dart';
 
 class ProotService extends ChangeNotifier {
-  // ─── Singleton ───
   static final ProotService _instance = ProotService._internal();
   factory ProotService() => _instance;
   ProotService._internal();
@@ -30,7 +29,6 @@ class ProotService extends ChangeNotifier {
     return '${dir.path}/linux_container';
   }
 
-  // ─── Comprobación ───
   Future<bool> checkEnvironment() async {
     try {
       final rootfs = '${await _appDir}/rootfs';
@@ -54,7 +52,6 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ─── Setup ───
   Future<void> setupEnvironment() async {
     if (_isDownloading) return;
     _isDownloading = true;
@@ -84,44 +81,41 @@ class ProotService extends ChangeNotifier {
         );
       }
 
-      // ── 2. Extraer busybox del tar.gz (con Dart) ──
+      // ── 2. Extraer rootfs ──
       _downloadProgress = 0.50;
-      _statusMessage = 'Extrayendo BusyBox…';
+      _statusMessage = 'Extrayendo rootfs…';
       notifyListeners();
 
-      final bbPath = '$appDir/bin/busybox';
-      await Directory('$appDir/bin').create(recursive: true);
-      if (!await File(bbPath).exists()) {
-        await _extractSingleEntry(tgzPath, 'bin/busybox', bbPath);
-        await Process.run('chmod', ['755', bbPath]);
-      }
-
-      // ── 3. Usar busybox (via linker) para extraer rootfs completo ──
       if (!await File('$rootfs/bin/sh').exists() ||
-          await File('$rootfs/bin/sh').length() == 0) {
-
-        _downloadProgress = 0.55;
-        _statusMessage = 'Extrayendo rootfs con BusyBox…';
-        notifyListeners();
-
-        await _extractRootfsWithBusybox(tgzPath, rootfs, bbPath);
+           await File('$rootfs/bin/sh').length() == 0) {
+        await _extractRootfs(tgzPath, rootfs);
       }
 
-      // ── 4. Verificar y configurar ──
+      // ── 3. Verificar /bin/sh y reparar hardlinks si necesario ──
       _downloadProgress = 0.75;
-      _statusMessage = 'Configurando…';
+      _statusMessage = 'Verificando…';
       notifyListeners();
 
-      // Asegurar ejecutables
-      await _chmodCritical(rootfs);
+      final shOk = await File('$rootfs/bin/sh').exists() &&
+                   await File('$rootfs/bin/sh').length() > 0;
 
-      // DNS
+      if (!shOk) {
+        _statusMessage = 'Reparando hardlinks…';
+        notifyListeners();
+        await _fixHardlinks(rootfs);
+      }
+
+      // ── 4. Configurar red ──
+      await Directory('$rootfs/etc').create(recursive: true);
       await File('$rootfs/etc/resolv.conf').writeAsString(
         'nameserver 8.8.8.8\nnameserver 1.1.1.1\n');
       await File('$rootfs/etc/hosts').writeAsString(
         '127.0.0.1 localhost\n::1 localhost\n');
 
-      // ── 5. PROOT ──
+      // ── 5. Hacer ejecutables binarios ──
+      await _chmodKeyBins(rootfs);
+
+      // ── 6. PROOT ──
       _downloadProgress = 0.85;
       _statusMessage = 'Descargando PROOT…';
       notifyListeners();
@@ -141,13 +135,14 @@ class ProotService extends ChangeNotifier {
       if (await File(prootPath).exists()) _prootPath = prootPath;
 
       // ── Verificación final ──
-      final shOk = await File('$rootfs/bin/sh').exists()
-                  && await File('$rootfs/bin/sh').length() > 0;
+      final shFinal = await File('$rootfs/bin/sh').exists() &&
+                      await File('$rootfs/bin/sh').length() > 0;
 
       _downloadProgress = 1.0;
-      _initialized = shOk;
-      _statusMessage = shOk ? 'Alpine Linux listo'
-                           : 'Error: /bin/sh no encontrado en rootfs';
+      _initialized = shFinal;
+      _statusMessage = shFinal
+          ? 'Alpine Linux listo'
+          : 'Error: /bin/sh no encontrado en rootfs';
       _lastOutput += '\n$_statusMessage';
     } catch (e) {
       _statusMessage = 'Error: $e';
@@ -159,96 +154,34 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ─── Extraer un solo archivo del tar.gz ───
-  Future<void> _extractSingleEntry(String tarPath, String entryName, String outPath) async {
-    final bytes = await File(tarPath).readAsBytes();
-    final gz = GZipDecoder().decodeBytes(bytes);
-    final archive = TarDecoder().decodeBytes(gz);
-
-    for (final entry in archive) {
-      String name = entry.name;
-      if (name.startsWith('./')) name = name.substring(2);
-      if (name == entryName && entry.isFile) {
-        final data = entry.content;
-        if (data.isNotEmpty) {
-          await File(outPath).writeAsBytes(data);
-          return;
-        }
-      }
-    }
-    // Si no encontramos el entry, intentar extraer todo y luego copiar
-    for (final entry in archive) {
-      String name = entry.name;
-      if (name.startsWith('./')) name = name.substring(2);
-      if (name == entryName && entry.isFile) {
-        // entry.content podría ser vacío (hardlink)
-        await File(outPath).writeAsBytes(entry.content);
-        return;
-      }
-    }
-    throw Exception('No se encontró $entryName en el rootfs');
-  }
-
-  // ─── Extraer rootfs usando busybox (via linker) ───
-  Future<void> _extractRootfsWithBusybox(String tgzPath, String rootfs, String bbPath) async {
-    final linker = (await File('/system/bin/linker64').exists())
-        ? '/system/bin/linker64'
-        : (await File('/system/bin/linker').exists())
-            ? '/system/bin/linker'
-            : null;
-
-    if (linker == null) {
-      // Sin linker, intentar extraer con Dart completo
-      _statusMessage = 'Sin linker – extrayendo con Dart…';
-      notifyListeners();
-      await _extractAllDart(tgzPath, rootfs);
-      return;
-    }
-
-    // Intentar toybox tar del sistema primero (maneja hardlinks)
+  // ─── Extraer rootfs (toybox → Dart + post-procesado hardlinks) ───
+  Future<void> _extractRootfs(String tgzPath, String rootfs) async {
+    // MÉTODO 1: toybox/toolbox tar del sistema (maneja hardlinks)
     for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
       if (await File(tb).exists()) {
         try {
+          _lastOutput += 'Intentando extraer con $tb\n';
           await Process.run(
-            tb, ['tar', '-xf', tgzPath, '-C', rootfs,
-                 '--no-same-permissions', '--no-same-owner'],
+            tb, ['tar', '-xf', tgzPath, '-C', rootfs],
           ).timeout(const Duration(seconds: 120));
-          // Verificar que extrajo bien
+
           if (await File('$rootfs/bin/sh').exists() &&
               await File('$rootfs/bin/sh').length() > 0) {
-            _lastOutput += 'Extraído con $tb\n';
+            _lastOutput += 'Extraído con $tb (hardlinks OK)\n';
             return;
           }
-        } catch (_) {}
+        } catch (e) {
+          _lastOutput += '$tb falló: $e\n';
+        }
       }
     }
 
-    // Usar linker64 + busybox tar (funciona porque busybox es estático
-    // y linker64 carga musl desde LD_LIBRARY_PATH)
-    try {
-      await Process.run(
-        linker, [bbPath, 'tar', '-xf', tgzPath, '-C', rootfs,
-                 '--no-same-permissions', '--no-same-owner'],
-        environment: {
-          'PATH': '$rootfs/usr/bin:$rootfs/bin:/system/bin',
-          'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
-        },
-      ).timeout(const Duration(seconds: 120));
-
-      if (await File('$rootfs/bin/sh').exists() &&
-          await File('$rootfs/bin/sh').length() > 0) {
-        _lastOutput += 'Extraído con linker+busybox\n';
-        return;
-      }
-    } catch (_) {}
-
-    // Fallback: extraer todo con Dart (sin detección de hardlinks)
-    _statusMessage = 'Usando extracción Dart (fallback)…';
-    notifyListeners();
+    // MÉTODO 2: Extracción Dart completa (hardlinks = 0 bytes)
+    _lastOutput += 'Usando extracción Dart\n';
     await _extractAllDart(tgzPath, rootfs);
   }
 
-  // ─── Extracción con Dart (hardlinks quedan como archivos vacíos) ───
+  // ─── Extracción completa con Dart ───
   Future<void> _extractAllDart(String tarPath, String destPath) async {
     final bytes = await File(tarPath).readAsBytes();
     final gz = GZipDecoder().decodeBytes(bytes);
@@ -264,69 +197,109 @@ class ProotService extends ChangeNotifier {
 
       final outPath = '$destPath/$name';
 
+      // Directorio
       if (name.endsWith('/')) {
         await Directory(outPath).create(recursive: true);
         count++;
-        if (count % 100 == 0) _pulseExtract(count, total);
+        if (count % 200 == 0) _pulse(count, total);
         continue;
       }
 
       await Directory(outPath).parent.create(recursive: true);
 
+      // Symlink → copiar archivo destino
       if (entry.isSymbolicLink) {
         final target = entry.symbolicLink ?? '';
         if (target.isNotEmpty) {
           final resolved = target.startsWith('/')
               ? '$destPath$target'
               : '${Directory(outPath).parent.path}/$target';
-          resolved.replaceAll(RegExp(r'/+'), '/');
           if (await File(resolved).exists()) {
             try { await File(resolved).copy(outPath); } catch (_) {}
           }
         }
         count++;
-        if (count % 100 == 0) _pulseExtract(count, total);
+        if (count % 200 == 0) _pulse(count, total);
         continue;
       }
 
+      // Archivo normal
       if (entry.isFile) {
         final data = entry.content;
         if (data.isNotEmpty) {
           await File(outPath).writeAsBytes(data);
         } else {
-          // Hardlink o archivo vacío legítimo
+          // Hardlink (0 bytes) → crear vacío, se reparará después
           await File(outPath).writeAsString('');
         }
         count++;
-        if (count % 100 == 0) _pulseExtract(count, total);
+        if (count % 200 == 0) _pulse(count, total);
         continue;
       }
 
       count++;
     }
+
+    _lastOutput += 'Extraídos $count archivos\n';
   }
 
-  void _pulseExtract(int count, int total) {
+  void _pulse(int count, int total) {
     if (total > 0) {
-      _downloadProgress = 0.55 + (count / total) * 0.20;
+      _downloadProgress = 0.50 + (count / total) * 0.25;
       _statusMessage = 'Extrayendo ${(count * 100 / total).toInt()}%';
       notifyListeners();
     }
   }
 
-  // ─── Hacer ejecutables los binarios clave ───
-  Future<void> _chmodCritical(String rootfs) async {
+  // ─── Reparar hardlinks: copiar busybox a archivos de 0 bytes ───
+  Future<void> _fixHardlinks(String rootfs) async {
+    // Buscar busybox (es un archivo real, no hardlink)
+    final bbFile = File('$rootfs/bin/busybox');
+    List<int>? bbData;
+    if (await bbFile.exists()) {
+      final len = await bbFile.length();
+      if (len > 0) {
+        bbData = await bbFile.readAsBytes();
+      }
+    }
+
+    if (bbData == null || bbData.isEmpty) {
+      _lastOutput += 'Error: busybox no encontrado o vacío\n';
+      return;
+    }
+
+    // Buscar todos los archivos de 0 bytes en bin/, sbin/, usr/bin/, usr/sbin/
+    int fixed = 0;
+    for (final dir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin']) {
+      final d = Directory('$rootfs$dir');
+      if (!await d.exists()) continue;
+
+      await for (final entity in d.list(followLinks: false)) {
+        if (entity is File) {
+          try {
+            final len = await entity.length();
+            if (len == 0) {
+              // Es un hardlink a busybox → copiar contenido
+              await entity.writeAsBytes(bbData!);
+              fixed++;
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    _lastOutput += 'Hardlinks reparados: $fixed\n';
+  }
+
+  // ─── Hacer ejecutables ───
+  Future<void> _chmodKeyBins(String rootfs) async {
     for (final dir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/lib']) {
       final d = Directory('$rootfs$dir');
       if (await d.exists()) {
         try {
-          final files = await d.list().toList();
-          for (final f in files) {
-            if (f is File) {
-              final name = f.path.split('/').last;
-              if (name.contains('.so') || name.length < 20) {
-                try { await Process.run('chmod', ['755', f.path]); } catch (_) {}
-              }
+          await for (final entity in d.list()) {
+            if (entity is File) {
+              try { await Process.run('chmod', ['755', entity.path]); } catch (_) {}
             }
           }
         } catch (_) {}
@@ -348,10 +321,10 @@ class ProotService extends ChangeNotifier {
             ? '/system/bin/linker'
             : null;
 
-    final bbPath = '${await _appDir}/bin/busybox';
+    final bbPath = '$rootfs/bin/busybox';
     final hasBb = await File(bbPath).exists() && await File(bbPath).length() > 0;
-    final hasSh = await File('$rootfs/bin/sh').exists()
-                  && await File('$rootfs/bin/sh').length() > 0;
+    final shPath = '$rootfs/bin/sh';
+    final hasSh = await File(shPath).exists() && await File(shPath).length() > 0;
 
     try {
       // 1: PROOT
@@ -397,11 +370,11 @@ class ProotService extends ChangeNotifier {
         } catch (e) { _lastOutput = 'Linker+bb falló: $e\n'; }
       }
 
-      // 3: linker + rootfs/bin/sh
+      // 3: Linker + sh directo
       if (linker != null && hasSh) {
         try {
           final result = await Process.run(
-            linker, ['$rootfs/bin/sh', '-c', command],
+            linker, [shPath, '-c', command],
             environment: {
               'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
                       '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin'
@@ -417,7 +390,7 @@ class ProotService extends ChangeNotifier {
         } catch (e) { _lastOutput = 'Linker+sh falló: $e\n'; }
       }
 
-      // 4: /system/bin/sh
+      // 4: /system/bin/sh + PATH rootfs
       if (await File('/system/bin/sh').exists()) {
         final result = await Process.run(
           '/system/bin/sh', ['-c', command],
@@ -446,7 +419,6 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ─── Descarga ───
   Future<void> _downloadFile(String url, String path, double sw, double ew) async {
     final client = HttpClient();
     try {
