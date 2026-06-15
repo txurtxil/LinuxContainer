@@ -35,35 +35,37 @@ jobs:
 
     - name: Build Bionic Tools
       run: |
-        # Download Termux package index
+        # Descargar Packages.gz
         curl -sL "https://packages.termux.org/apt/termux-main/dists/stable/main/binary-aarch64/Packages.gz" -o /tmp/Packages.gz
-        gunzip -c /tmp/Packages.gz > /tmp/Packages
-        mkdir -p /tmp/bionic-build
-
-        # Function to download and extract a deb
-        for pkg in bash nano openssh libandroid-support libcrypt openssl zlib ca-certificates; do
-          echo "=== $pkg ==="
-          filename=$(grep -A 30 "^Package: $pkg\$" /tmp/Packages | grep "^Filename:" | awk '{print $2}')
-          if [ -z "$filename" ]; then
-            echo "  -> no encontrado"
-            continue
-          fi
-          url="https://packages.termux.org/apt/termux-main/$filename"
-          debname=$(basename "$filename")
-          curl -sL -o "/tmp/$debname" "$url" || { echo "  -> download fail"; continue; }
-          dpkg-deb -x "/tmp/$debname" /tmp/bionic-build/ 2>/dev/null && echo "  -> OK" || echo "  -> dpkg-deb fail"
+        
+        # Extraer paquetes
+        rm -rf /tmp/bionic_build && mkdir -p /tmp/bionic_build
+        
+        for p in bash nano openssh libandroid-support libcrypt openssl zlib ca-certificates; do
+          python3 scripts/extract-bionic.py "$p" /tmp/bionic_build /tmp/Packages.gz
         done
-
-        # Create tarball
-        cd /tmp/bionic-build
+        
+        echo "=== Archivos extraidos ==="
+        find /tmp/bionic_build -type f -name "*.so*" -o -type f -executable 2>/dev/null | head -20
+        
+        # Crear tarball desde el prefijo Termux
+        cd /tmp/bionic_build
+        PREFIX="data/data/com.termux/files/usr"
+        if [ -d "$PREFIX" ]; then
+          cd "$PREFIX"
+          echo "Usando prefijo Termux"
+        fi
+        pwd
+        ls -la bin/ 2>/dev/null || echo "No bin/"
+        
         tar -czf $GITHUB_WORKSPACE/bionic-tools.tar.gz \
           --exclude='share/doc' --exclude='share/man' --exclude='share/info' \
-          --exclude='share/locale' --exclude='include' --exclude='var' --exclude='tmp' \
-          bin/ lib/ libexec/ etc/ 2>/dev/null || true
-
+          --exclude='share/locale' --exclude='include' --exclude='var' \
+          bin/ lib/ libexec/ etc/ share/ 2>/dev/null || true
+        
         echo "=== Tarball ==="
         ls -lh $GITHUB_WORKSPACE/bionic-tools.tar.gz
-        tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | head -20
+        tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | head -30
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
