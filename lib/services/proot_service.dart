@@ -717,7 +717,7 @@ class ProotService extends ChangeNotifier {
     }
 
     try {
-      // ───       // ───       // ─── ESTRATEGIA 1: PROOT-rs (opcional, falla con seccomp en Android 15+) ───
+      // ─── ESTRATEGIA 1: PROOT-rs (opcional, falla con seccomp en Android 15+) ───
       final prootPath = '$appDir/proot';
       if (linker != null && await File(prootPath).exists() && await File(prootPath).length() > 0) {
         try {
@@ -747,7 +747,7 @@ class ProotService extends ChangeNotifier {
         }
       }
 
-      // ───       // ─── ESTRATEGIA 2: Linker + ejecucion directa del binario ───
+      // ─── ESTRATEGIA 2: Linker + ejecucion directa del binario ───
       if (linker != null) {
         // Intentar ejecutar el comando directamente via linker64
         // Esto funciona para binarios como apk, ls, cat (no execve)
@@ -806,7 +806,9 @@ class ProotService extends ChangeNotifier {
         } catch (e) {
           _lastOutput = 'linker+shell fallo: $e\n';
         }
-      }ESTRATEGIA 3: Shell del sistema + PATH al rootfs ───
+      }
+
+      // ─── ESTRATEGIA 3: Shell del sistema + PATH al rootfs ───
       if (await File('/system/bin/sh').exists()) {
         final result = await Process.run(
           '/system/bin/sh', ['-c', command],
