@@ -724,7 +724,7 @@ class ProotService extends ChangeNotifier {
           _logMsg('Ejecutando via proot-rs: ' + command);
           final result = await Process.run(
             linker,
-            [prootPath, '-r', rootfs, '/bin/sh', '-c', command],
+            [prootPath, '-r', rootfs, '--', '/bin/sh', '-c', command],
             environment: {
               'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
               'HOME': '/root',
