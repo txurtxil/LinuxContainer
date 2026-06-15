@@ -13,12 +13,12 @@ class TerminalLine {
 
 class TerminalService extends ChangeNotifier {
   final List<TerminalLine> _lines = [
-    TerminalLine('Linux Container v9.5 - Terminal'),
-    TerminalLine('Escribe comandos. Icono para cambiar modo Linux/Shell.'),
+    TerminalLine('Linux Container v9.5f - Terminal'),
+    TerminalLine('Icono para cambiar modo Linux/Shell.'),
     TerminalLine(''),
   ];
   bool _running = false;
-  bool _linuxMode = false;
+  bool _linuxMode = true;
 
   List<TerminalLine> get lines => _lines;
   bool get running => _running;
@@ -45,13 +45,9 @@ class TerminalService extends ChangeNotifier {
     String output;
 
     try {
-      // SIEMPRE usar el mismo code path que setup: proot_service.runCommand
-      // Esto unifica la ejecucion y evita inconsistencias
       if (proot.initialized || proot.hasBionic) {
-        // Usar runCommand que ya maneja linker64 + workingDirectory correctamente
         output = await proot.runCommand(command, timeout: const Duration(seconds: 30));
       } else {
-        // Antes de setup: ejecucion minima sin rootfs
         output = await _runFallback(command);
       }
     } catch (e) {
@@ -60,10 +56,16 @@ class TerminalService extends ChangeNotifier {
 
     if (output.trim().isNotEmpty) {
       for (final line in output.split('\n')) {
-        _lines.add(TerminalLine(line, isInput: false, isError: line.contains('rror') || line.contains('denied')));
+        _lines.add(TerminalLine(
+          line,
+          isInput: false,
+          isError: line.toLowerCase().contains('error') || 
+                   line.toLowerCase().contains('denied') ||
+                   line.toLowerCase().contains('not found'),
+        ));
       }
     } else {
-      _lines.add(TerminalLine('[Comando ejecutado sin output]'));
+      _lines.add(TerminalLine(''));
     }
 
     _running = false;
@@ -74,7 +76,11 @@ class TerminalService extends ChangeNotifier {
   Future<String> _runFallback(String command) async {
     try {
       final r = await Process.run('/system/bin/sh', ['-c', command],
-        environment: {'PATH': '/system/bin:/system/xbin', 'HOME': '/data/local/tmp', 'TERM': 'xterm'},
+        environment: {
+          'PATH': '/system/bin:/system/xbin',
+          'HOME': '/data/local/tmp',
+          'TERM': 'xterm',
+        },
         workingDirectory: '/data/local/tmp',
       ).timeout(const Duration(seconds: 15));
       final out = (r.stdout as String).trim();
@@ -87,6 +93,8 @@ class TerminalService extends ChangeNotifier {
 
   void clear() {
     _lines.clear();
+    _lines.add(TerminalLine('Linux Container v9.5f - Terminal'));
+    _lines.add(TerminalLine(''));
     notifyListeners();
   }
 }

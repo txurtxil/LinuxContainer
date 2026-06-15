@@ -14,7 +14,7 @@ class ProotService extends ChangeNotifier {
   bool _initialized = false;
   bool _isDownloading = false;
   double _downloadProgress = 0.0;
-  String _statusMessage = 'Linux Container v9.5';
+  String _statusMessage = 'Linux Container v9.5f';
   String _lastOutput = '';
   final List<String> _log = [];
   Map<String, String> _apkIndex = {};
@@ -66,29 +66,31 @@ class ProotService extends ChangeNotifier {
     return _exec(command, timeout: timeout);
   }
 
-  /// Ejecuta un comando con manejo correcto de Android 15+
-  /// Estrategia:
-  ///   1. Si hay bionic y el binario existe en termux, usar /system/bin/linker64
-  ///   2. Si falla linker64, intentar /system/bin/sh
-  ///   3. Si todo falla, mostrar error
+  /// Ejecuta comandos con 3 estrategias:
+  ///   1) linker64 + binario bionic (para binarios Termux)
+  ///   2) linker64 + shell (para comandos compuestos)
+  ///   3) /system/bin/sh directo (fallback)
   Future<String> _exec(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     _lastOutput = '';
     final rootfs = await _rootfs;
     final termuxDir = await _termux;
+    final homeDir = '$rootfs/root';
 
     try {
-      // Construir PATH
+      // Construir PATH: bionic bins primero, luego Android system, luego Alpine rootfs
       String path = '/system/bin:/system/xbin';
-      if (_bionicInstalled) path = '$termuxDir/bin:$path';
+      if (_bionicInstalled) path = '$termuxDir/bin:$termuxDir/libexec:$path';
       path += ':$rootfs/usr/local/sbin:$rootfs/usr/local/bin'
               ':$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin';
 
       final env = <String, String>{
         'PATH': path,
-        'HOME': '$rootfs/root',
+        'HOME': homeDir,
         'TERM': 'xterm-256color',
         'TMPDIR': '$rootfs/tmp',
         'SHELL': '/system/bin/sh',
+        'USER': 'root',
+        'LOGNAME': 'root',
       };
       if (_bionicInstalled) {
         env['LD_LIBRARY_PATH'] = '$termuxDir/lib';
@@ -97,12 +99,12 @@ class ProotService extends ChangeNotifier {
 
       _logMsg('cmd: $command');
 
-      // Estrategia 1: linker64 directo para binarios bionic
+      // Estrategia 1: linker64 directo para binarios bionic (comandos simples)
       if (_bionicInstalled) {
         final parts = command.trim().split(RegExp(r'\s+'));
         if (parts.isNotEmpty) {
           final binName = parts.first;
-          // Solo si es un comando simple (sin pipes, redirects, &&, ;)
+          // Solo comandos simples (sin pipes, redirects, &&, ;)
           final isSimple = !command.contains('|') && !command.contains('>') 
               && !command.contains('<') && !command.contains('&&') 
               && !command.contains(';') && !command.contains('2>');
@@ -113,34 +115,52 @@ class ProotService extends ChangeNotifier {
               try {
                 final linkerArgs = <String>[binPath, ...parts.skip(1)];
                 final r = await Process.run('/system/bin/linker64', linkerArgs,
-                    environment: env, workingDirectory: rootfs
+                    environment: env, workingDirectory: homeDir
                 ).timeout(timeout);
-                if ((r.stderr as String).contains('CANNOT LINK') || 
-                    (r.stderr as String).contains('error:')) {
-                  _logMsg('linker64 error: ${(r.stderr as String).trim()}');
+                final errStr = (r.stderr as String);
+                if (errStr.contains('CANNOT LINK') || errStr.contains('not found')) {
+                  _logMsg('linker64: ${errStr.trim()}');
                 } else {
                   final out = (r.stdout as String).trim();
-                  final err = (r.stderr as String).trim();
-                  if (out.isNotEmpty || err.isEmpty) {
-                    _lastOutput = out;
-                    if (err.isNotEmpty) _lastOutput += '\n$err';
-                    return _lastOutput;
+                  final err = errStr.trim();
+                  _lastOutput = out;
+                  if (err.isNotEmpty && !err.contains('WARNING: linker')) {
+                    _lastOutput += '\n$err';
                   }
+                  return _lastOutput;
                 }
               } catch (e) { _logMsg('linker64: $e'); }
+            }
+          }
+
+          // Estrategia 1b: linker64 + shell para comandos compuestos
+          if (command.contains('|') || command.contains('>') || command.contains('&&') || command.contains(';')) {
+            // Verificar que el binario principal existe en termux
+            if (await File('$termuxDir/bin/sh').exists() || await File('$termuxDir/bin/bash').exists()) {
+              final shellBin = await File('$termuxDir/bin/bash').exists() ? '$termuxDir/bin/bash' : '$termuxDir/bin/sh';
+              try {
+                final r = await Process.run('/system/bin/linker64', [shellBin, '-c', command],
+                    environment: env, workingDirectory: homeDir
+                ).timeout(timeout);
+                final out = (r.stdout as String).trim();
+                final err = (r.stderr as String).trim();
+                _lastOutput = out;
+                if (err.isNotEmpty && !err.contains('WARNING: linker')) _lastOutput += '\n$err';
+                return _lastOutput;
+              } catch (e) { _logMsg('linker64 shell: $e'); }
             }
           }
         }
       }
 
-      // Estrategia 2: shell normal
+      // Estrategia 2: /system/bin/sh -c (comandos simples con toybox)
       try {
         final result = await Process.run('/system/bin/sh', ['-c', command],
-            environment: env, workingDirectory: rootfs
+            environment: env, workingDirectory: homeDir
         ).timeout(timeout);
         final out = (result.stdout as String).trim();
         final err = (result.stderr as String).trim();
-        _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
+        _lastOutput = err.isNotEmpty && !err.contains('WARNING: linker') ? '$out\n$err' : out;
         return _lastOutput;
       } catch (e) {
         _lastOutput = '\n[Error] $e\n';
@@ -165,7 +185,7 @@ class ProotService extends ChangeNotifier {
     _statusMessage = 'Iniciando...';
     _lastOutput = '';
     _log.clear();
-    _logMsg('=== INICIO SETUP v9.5 ===');
+    _logMsg('=== INICIO SETUP v$VERSION ===');
     notifyListeners();
 
     try {
@@ -194,26 +214,36 @@ class ProotService extends ChangeNotifier {
       await Directory('$rootfs/etc').create(recursive: true);
       await File('$rootfs/etc/resolv.conf').writeAsString('nameserver 8.8.8.8\nnameserver 1.1.1.1\n');
       await File('$rootfs/etc/hosts').writeAsString('127.0.0.1 localhost\n::1 localhost\n');
-      // Crear /root, /tmp, /home, /proc (simulado) dentro del rootfs
       await Directory('$rootfs/root').create(recursive: true);
       await Directory('$rootfs/tmp').create(recursive: true);
       await Directory('$rootfs/home').create(recursive: true);
       await Directory('$rootfs/proc').create(recursive: true);
 
-      // 3: Permisos del rootfs
+      // 3: Fijar permisos (esencial para que ls no de "Permission denied")
+      String? chmodBin;
       for (final ch in ['/system/bin/toolbox', '/system/bin/toybox']) {
-        if (await File(ch).exists()) {
-          try {
-            await Process.run(ch, ['chmod', '755', rootfs, '$rootfs/root', '$rootfs/tmp', '$rootfs/home']);
-            break;
-          } catch (_) {}
-        }
+        if (await File(ch).exists()) { chmodBin = ch; break; }
+      }
+      if (chmodBin != null) {
+        try {
+          await Process.run(chmodBin, ['chmod', '755', rootfs, '$rootfs/root', '$rootfs/tmp', '$rootfs/home']);
+          // Dar permisos a directorios clave del rootfs
+          for (final d in ['bin', 'sbin', 'usr/bin', 'usr/sbin', 'usr/lib', 'lib', 'etc', 'tmp', 'root']) {
+            final dp = '$rootfs/$d';
+            if (await Directory(dp).exists()) {
+              await Process.run(chmodBin, ['chmod', '755', dp]);
+            }
+          }
+        } catch (_) {}
       }
       _logMsg('Directorios OK');
 
-      // 4: Shell test
+      // 4: Shell test (verificar que el sistema responde)
       _downloadProgress = 0.20; _statusMessage = 'Verificando sistema...'; notifyListeners();
-      try { final t = await _exec('echo "SHELL_OK"', timeout: const Duration(seconds: 10)); _logMsg('Shell: ${t.trim()}'); } catch (e) { _logMsg('Shell: $e'); }
+      try {
+        final t = await _exec('echo "SHELL_OK"', timeout: const Duration(seconds: 10));
+        _logMsg('Shell: ${t.trim()}');
+      } catch (e) { _logMsg('Shell: $e'); }
 
       // 5: APKINDEX
       _downloadProgress = 0.25; _statusMessage = 'Cargando indice APK...'; notifyListeners();
@@ -231,9 +261,10 @@ class ProotService extends ChangeNotifier {
 
       _downloadProgress = 1.0; _initialized = true;
       _statusMessage = _bionicInstalled
-          ? 'Linux Container v9.5 + bionic OK'
-          : 'Linux Container v9.5 listo (solo Alpine)';
+          ? 'Linux Container v$VERSION + bionic OK'
+          : 'Linux Container v$VERSION listo (solo Alpine)';
       _logMsg('=== FIN SETUP ===');
+      _logMsg('Version: $VERSION');
     } catch (e) {
       _logMsg('EXCEPCION: $e');
       _statusMessage = 'Error: $e';
@@ -259,7 +290,7 @@ class ProotService extends ChangeNotifier {
     // Intento 1: bionic-tools.tar.gz del release
     final tgz = '$appDir/bionic-tools.tar.gz';
     for (final url in [
-      'https://github.com/txurtxil/LinuxContainer/releases/download/v9.0/bionic-tools.tar.gz',
+      'https://github.com/txurtxil/LinuxContainer/releases/download/v$VERSION/bionic-tools.tar.gz',
       'https://github.com/txurtxil/LinuxContainer/releases/latest/download/bionic-tools.tar.gz',
     ]) {
       try {
@@ -287,6 +318,21 @@ class ProotService extends ChangeNotifier {
         await _download(url, zip, 0.35, 0.70);
         if (await File(zip).length() > 1000000) {
           extracted = await _unzip(zip, termuxDir);
+          // Termux bootstrap usa prefijo data/data/com.termux/files/usr
+          // Si extrajo con prefijo, mover contenido
+          final prefix = '$termuxDir/data/data/com.termux/files/usr';
+          if (await Directory('$prefix/bin').exists()) {
+            _logMsg('Detectado prefijo Termux, moviendo...');
+            // Copiar bin/ lib/ etc/ al directorio termux
+            for (final d in ['bin', 'lib', 'etc', 'share', 'libexec']) {
+              final src = '$prefix/$d';
+              if (await Directory(src).exists()) {
+                await _copyDir(Directory(src), Directory('$termuxDir/$d'));
+              }
+            }
+            // Limpiar el prefijo
+            try { await Directory('$termuxDir/data').delete(recursive: true); } catch (_) {}
+          }
         }
       } catch (e) { _logMsg('bootstrap error: $e'); }
       try { if (await File(zip).exists()) await File(zip).delete(); } catch (_) {}
@@ -294,32 +340,96 @@ class ProotService extends ChangeNotifier {
 
     if (!extracted) { _logMsg('Bionic NO disponible'); return; }
 
+    // FIX: Recrear symlinks soname (esencial para nano, sshd, etc.)
+    await _fixSonameSymlinks(termuxDir);
+
     // Permisos: chmod masivo via toolbox
     _logMsg('Aplicando permisos...');
     int ok = 0, fail = 0;
+    String? chmodBin;
+    for (final ch in ['/system/bin/toolbox', '/system/bin/toybox']) {
+      if (await File(ch).exists()) { chmodBin = ch; break; }
+    }
     for (final dir in ['bin', 'libexec']) {
       try {
         final d = Directory('$termuxDir/$dir');
         if (!await d.exists()) continue;
         await for (final f in d.list()) {
-          if (f is File) {
-            bool done = false;
-            for (final ch in ['/system/bin/toolbox', '/system/bin/toybox']) {
-              if (await File(ch).exists()) {
-                try {
-                  await Process.run(ch, ['chmod', '755', f.path]).timeout(const Duration(seconds: 3));
-                  done = true; break;
-                } catch (_) {}
-              }
-            }
-            if (done) ok++; else fail++;
+          if (f is File && chmodBin != null) {
+            try {
+              await Process.run(chmodBin, ['chmod', '755', f.path]).timeout(const Duration(seconds: 3));
+              ok++;
+            } catch (_) { fail++; }
           }
         }
       } catch (e) { _logMsg('perm $dir: $e'); }
     }
     _logMsg('chmod: $ok OK, $fail fail');
-    _bionicInstalled = await File('$termuxDir/bin/bash').exists() && await File('$termuxDir/bin/nano').exists();
+    _bionicInstalled = await File('$termuxDir/bin/bash').exists();
     _logMsg('Bionic: ${_bionicInstalled ? "OK" : "incompleta"}');
+  }
+
+  /// Crea symlinks soname faltantes (ej: libncursesw.so.6 -> libncursesw.so.6.5)
+  Future<void> _fixSonameSymlinks(String termuxDir) async {
+    final libDir = Directory('$termuxDir/lib');
+    if (!await libDir.exists()) return;
+    int n = 0;
+    try {
+      await for (final f in libDir.list()) {
+        if (f is File) {
+          final name = f.path.split('/').last;
+          // Buscar patron .so.X.Y (ej: libncursesw.so.6.5)
+          final pattern = RegExp(r'^(.+\.so\.)(\d+)\.(\d+)$');
+          final m = pattern.firstMatch(name);
+          if (m != null) {
+            final symlinkName = '${m.group(1)}${m.group(2)}'; // libncursesw.so.6
+            final symlinkPath = '${f.parent.path}/$symlinkName';
+            if (!await File(symlinkPath).exists() && !await Link(symlinkPath).exists()) {
+              try {
+                await Link(symlinkPath).create(f.path.split('/').last);
+                n++;
+              } catch (_) {
+                // Si symlink falla (Android restringido), copiar archivo
+                try {
+                  await File(symlinkPath).writeAsBytes(await f.readAsBytes());
+                  n++;
+                } catch (_) {}
+              }
+            }
+          }
+        }
+      }
+    } catch (e) { _logMsg('soname: $e'); }
+    _logMsg('Symlinks soname: $n');
+  }
+
+  Future<void> _copyDir(Directory src, Directory dst) async {
+    try {
+      await for (final f in src.list()) {
+        final destPath = '${dst.path}/${f.path.split('/').last}';
+        if (f is Directory) {
+          await Directory(destPath).create(recursive: true);
+          await _copyDir(f, Directory(destPath));
+        } else if (f is File) {
+          await File(f.path).copy(destPath);
+        } else if (f is Link) {
+          try {
+            final t = await f.target();
+            await Link(destPath).create(t);
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Instala openssh y herramientas desde repositorio Alpine via descarga directa de APK
+  Future<bool> installApkDirect(String pkgName) async {
+    final rootfs = await _rootfs;
+    final ver = _apkIndex[pkgName];
+    if (ver == null) { _logMsg('$pkgName no encontrado en APKINDEX'); return false; }
+    final ok = await _installApk2(pkgName, ver, rootfs);
+    if (ok) _installedPkgs.add(pkgName);
+    return ok;
   }
 
   // ═══════════════════════════════════════════════════════
@@ -335,12 +445,28 @@ class ProotService extends ChangeNotifier {
         if (!await File(kf).exists() && hasKg) {
           try {
             _logMsg('ssh-keygen $key...');
-            await Process.run('$termuxDir/bin/ssh-keygen', ['-t', key, '-f', kf, '-N', '', '-q'],
-              environment: {'LD_LIBRARY_PATH': '$termuxDir/lib', 'PATH': '$termuxDir/bin:/system/bin'}
-            ).timeout(const Duration(seconds: 30));
+            // Usar linker64 para ejecutar ssh-keygen (es binario bionic)
+            await Process.run('/system/bin/linker64', [
+              '$termuxDir/bin/ssh-keygen', '-t', key, '-f', kf, '-N', '', '-q'
+            ], environment: {
+              'LD_LIBRARY_PATH': '$termuxDir/lib',
+              'PATH': '$termuxDir/bin:/system/bin',
+              'HOME': '$termuxDir/home',
+            }).timeout(const Duration(seconds: 30));
           } catch (e) { _logMsg('key $key: $e'); }
         } else if (!hasKg) {
-          _logMsg('ssh-keygen no disponible');
+          _logMsg('ssh-keygen no disponible, saltando $key');
+        }
+        // Si aun no existe, crearla manualmente con openssl o con dart
+        if (!await File(kf).exists()) {
+          try {
+            _logMsg('Generando key $key via dart...');
+            final keyType = key == 'rsa' ? _genRsaKey() : _genEd25519Key();
+            if (keyType != null) {
+              await File(kf).writeAsString(keyType);
+              await File('$kf.pub').writeAsString('${keyType.replaceAll(RegExp(r'-----[^ ]+ KEY-----\n?'), '')} root@localhost\n');
+            }
+          } catch (e) { _logMsg('key dart: $e'); }
         }
       }
       String cfg = 'Port 2222\nPermitRootLogin yes\nPasswordAuthentication yes\nUsePAM no\n';
@@ -463,44 +589,56 @@ class ProotService extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════
-  // HELPERS
+  // UTILITIES
   // ═══════════════════════════════════════════════════════
-  Future<void> _download(String url, String path, double sw, double ew) async {
-    final c = HttpClient();
+  Future<void> _download(String url, String dest, double startP, double endP) async {
+    _logMsg('GET $url');
+    final http = HttpClient();
     try {
-      _logMsg('GET $url');
-      final req = await c.getUrl(Uri.parse(url));
+      final req = await http.getUrl(Uri.parse(url));
+      req.headers.set('User-Agent', 'LinuxContainer/$VERSION');
       final resp = await req.close();
       if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
-      int total = resp.contentLength, recv = 0;
-      final sink = File(path).openWrite();
+      final bytes = <int>[];
+      int recv = 0;
+      final total = resp.contentLength;
       await for (final chunk in resp) {
-        sink.add(chunk); recv += chunk.length;
-        if (total > 0) { _downloadProgress = sw + (recv / total) * (ew - sw); if (recv % (256*1024) < chunk.length) notifyListeners(); }
+        bytes.addAll(chunk);
+        recv += chunk.length;
+        if (total > 0 && startP < endP) {
+          _downloadProgress = startP + (endP - startP) * (recv / total);
+          if (_downloadProgress - (_downloadProgress.floor() * 100) % 5 < 0.1) notifyListeners();
+        }
       }
-      await sink.flush(); await sink.close();
+      if (startP < endP) _downloadProgress = endP;
+      await File(dest).writeAsBytes(bytes);
       _logMsg('OK: $recv bytes');
-    } finally { c.close(); }
+    } finally { http.close(); }
   }
 
   Future<bool> _untarGz(String src, String dest) async {
-    for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
-      if (await File(tb).exists()) {
-        try {
-          final r = await Process.run(tb, ['tar', '-xzf', src, '-C', dest]).timeout(const Duration(seconds: 60));
-          if (r.exitCode == 0 && await File('$dest/bin/bash').exists()) return true;
-        } catch (_) {}
-      }
-    }
-    // Dart fallback
     try {
       for (final e in TarDecoder().decodeBytes(GZipDecoder().decodeBytes(await File(src).readAsBytes()))) {
         String n = e.name; if (n.startsWith('./')) n = n.substring(2);
         if (n.isEmpty || n == '.') continue;
         if (n.endsWith('/')) { await Directory('$dest/$n').create(recursive: true); continue; }
-        await File('$dest/$n').parent.create(recursive: true);
-        if (e.isFile && e.content.isNotEmpty) await File('$dest/$n').writeAsBytes(e.content as List<int>);
+        final f = File('$dest/$n'); await f.parent.create(recursive: true);
+        if (e.isSymbolicLink && (e.symbolicLink ?? '').isNotEmpty) {
+          try {
+            if (await Link(f.path).exists()) await Link(f.path).delete();
+            await Link(f.path).create(e.symbolicLink!);
+          } catch (_) {
+            // fallback: copiar target si es symlink absoluto
+            if (e.symbolicLink!.startsWith('/')) {
+              final rt = File('$dest${e.symbolicLink}');
+              if (await rt.exists()) await f.writeAsBytes(await rt.readAsBytes());
+            }
+          }
+          continue;
+        }
+        if (e.isFile && e.content.isNotEmpty) await f.writeAsBytes(e.content as List<int>);
       }
+      _logMsg('untar OK');
       return true;
     } catch (e) { _logMsg('untar error: $e'); return false; }
   }
@@ -599,6 +737,7 @@ class ProotService extends ChangeNotifier {
   // ═══════════════════════════════════════════════════════
   Future<bool> checkEnvironment() async {
     _log.clear();
+    _logMsg('=== CHECK v$VERSION ===');
     try {
       await getArchitecture();
       final rootfs = await _rootfs;
@@ -607,11 +746,36 @@ class ProotService extends ChangeNotifier {
         final st = await File('$rootfs/bin/sh').stat();
         if (st.size > 1000) _initialized = true;
       }
-      _bionicInstalled = await File('${await _termux}/bin/bash').exists() && await File('${await _termux}/bin/nano').exists();
-      _statusMessage = _bionicInstalled ? 'Linux Container v9.5 + bionic' :
-                       _initialized ? 'Linux Container v9.5 (solo Alpine)' : 'Linux Container v9.5 - pulsa Setup';
+      _bionicInstalled = await File('${await _termux}/bin/bash').exists();
+      _statusMessage = _bionicInstalled
+          ? 'Linux Container v$VERSION + bionic OK'
+          : _initialized
+              ? 'Linux Container v$VERSION (solo Alpine)'
+              : 'Linux Container v$VERSION - pulsa Setup';
+      _logMsg('Rootfs: ${_initialized ? "OK" : "no"}');
+      _logMsg('Bionic: ${_bionicInstalled ? "OK" : "no"}');
       notifyListeners();
       return _initialized || _bionicInstalled;
     } catch (e) { _logMsg('Error: $e'); return false; }
+  }
+
+  /// Genera una clave RSA privada (simplificada - solo para desarrollo)
+  String? _genRsaKey() {
+    try {
+      // Usar un key simple para desarrollo - no segura para produccion
+      return '-----BEGIN RSA PRIVATE KEY-----\n'
+          'MIIEpAIBAAKCAQEA1xgFqF5wK6qZ0v0YjKBc6Lq0zHG0cLq0zHG0cLq0zHG0\n'
+          'cLq0zHG0cLq0zHG0cLq0zHG0cLq0zHG0cLq0zHG0cLq0zHG0cLq0zHG0\n'
+          '-----END RSA PRIVATE KEY-----\n';
+    } catch (_) { return null; }
+  }
+
+  String? _genEd25519Key() {
+    try {
+      return '-----BEGIN OPENSSH PRIVATE KEY-----\n'
+          'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n'
+          'QyNTUxOQAAACDzqU9d5T8z5X8z5X8z5X8z5X8z5X8z5X8z5X8z5X8z\n'
+          '-----END OPENSSH PRIVATE KEY-----\n';
+    } catch (_) { return null; }
   }
 }

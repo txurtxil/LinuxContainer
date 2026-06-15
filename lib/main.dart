@@ -20,7 +20,7 @@ class LinuxContainerApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => TerminalService()),
       ],
       child: MaterialApp(
-        title: "Linux Container v9.5",
+        title: "Linux Container v9.5f",
         debugShowCheckedModeBanner: false,
         theme: _buildTheme(Brightness.dark),
         darkTheme: _buildTheme(Brightness.dark),
@@ -32,7 +32,6 @@ class LinuxContainerApp extends StatelessWidget {
 
   ThemeData _buildTheme(Brightness brightness) {
     final isDark = brightness == Brightness.dark;
-
     return ThemeData(
       useMaterial3: true,
       brightness: brightness,

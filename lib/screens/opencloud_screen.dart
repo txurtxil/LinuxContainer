@@ -5,37 +5,29 @@ import '../services/proot_service.dart';
 
 class OpenCloudScreen extends StatefulWidget {
   const OpenCloudScreen({super.key});
-
   @override
   State<OpenCloudScreen> createState() => _OpenCloudScreenState();
 }
 
 class _OpenCloudScreenState extends State<OpenCloudScreen> {
   final OpenCloudService _cloudService = OpenCloudService();
+  bool _loading = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final proot = context.watch<ProotService>();
 
-    if (!proot.initialized) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('OpenCloud')),
-        body: const Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.info_outline, size: 48, color: Colors.grey),
-              SizedBox(height: 16),
-              Text('Inicializa Linux Container primero'),
-            ],
-          ),
-        ),
-      );
-    }
-
     return Scaffold(
-      appBar: AppBar(title: const Text('OpenCloud - Nextcloud')),
+      appBar: AppBar(
+        title: const Text('OpenCloud'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () => setState(() {}),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -70,7 +62,7 @@ class _OpenCloudScreenState extends State<OpenCloudScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Proximamente - Nube privada Nextcloud',
+                  'Servidor HTTP nativo en Dart',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.8),
                   ),
@@ -83,32 +75,39 @@ class _OpenCloudScreenState extends State<OpenCloudScreen> {
           // Status
           Card(
             elevation: 0,
-            color: theme.colorScheme.surfaceContainerHighest,
+            color: _cloudService.running
+                ? Colors.green.withValues(alpha: 0.1)
+                : theme.colorScheme.surfaceContainerHighest,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  Icon(Icons.info_outline, color: Colors.blue),
+                  Icon(
+                    _cloudService.running ? Icons.check_circle : Icons.info_outline,
+                    color: _cloudService.running ? Colors.green : Colors.blue,
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'OpenCloud requiere servidores web y base de datos',
+                          _cloudService.status,
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Apache, PHP, MariaDB - binarios musl no ejecutables en Android 15+',
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 11,
-                            color: Colors.grey,
+                        if (_cloudService.running) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'http://${_cloudService.localIp}:${_cloudService.port}',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              color: Colors.greenAccent,
+                            ),
                           ),
-                        ),
+                        ],
                       ],
                     ),
                   ),
@@ -118,49 +117,7 @@ class _OpenCloudScreenState extends State<OpenCloudScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Explanation card
-          Card(
-            elevation: 0,
-            color: Colors.amber.withValues(alpha: 0.1),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.warning_amber, size: 20, color: Colors.amber.shade700),
-                      const SizedBox(width: 8),
-                      Text(
-                        'En desarrollo',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.amber.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'OpenCloud/Nextcloud requiere un servidor web (Apache/Nginx), '
-                    'PHP y MariaDB. Todos estos son binarios compilados con musl '
-                    'que no pueden ejecutarse en Android 15+ debido a cambios en '
-                    'el kernel que afectan al startup code de musl.\n\n'
-                    'Soluciones planificadas:\n'
-                    '  - Compilar servidores para bionic\n'
-                    '  - Usar Termux como backend\n'
-                    '  - Servidor web nativo en Dart\n\n'
-                    'Mientras tanto, puedes usar el servidor TCP (en SSH) para '
-                    'ejecutar comandos de forma remota.',
-                    style: theme.textTheme.bodySmall?.copyWith(height: 1.5),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Info card
+          // Info cards
           Card(
             elevation: 0,
             color: Colors.blue.withValues(alpha: 0.05),
@@ -174,7 +131,7 @@ class _OpenCloudScreenState extends State<OpenCloudScreen> {
                       Icon(Icons.lightbulb_outline, size: 20, color: Colors.blue),
                       const SizedBox(width: 8),
                       Text(
-                        'Alternativas disponibles',
+                        'OpenCloud nativo en Dart',
                         style: theme.textTheme.titleSmall?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
@@ -183,22 +140,56 @@ class _OpenCloudScreenState extends State<OpenCloudScreen> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    '- Usa el servidor TCP (menu SSH) para acceso remoto\n'
-                    '- La Terminal Linux con toybox funciona correctamente\n'
-                    '- El gestor de paquetes Alpine via Dart permite explorar e '
-                    'instalar paquetes (datos/config)\n'
-                    '- Proximamente: OpenCloud nativo en Dart',
+                    'OpenCloud ahora es un servidor HTTP escrito completamente en Dart.\n\n'
+                    'Caracteristicas:\n'
+                    '  - No necesita Apache/PHP/MariaDB\n'
+                    '  - Funciona en cualquier dispositivo Android\n'
+                    '  - API REST integrada\n'
+                    '  - Explorador de archivos via API\n'
+                    '  - Totalmente compatible con Android 15+',
                     style: theme.textTheme.bodySmall?.copyWith(height: 1.5),
                   ),
                 ],
               ),
             ),
           ),
+          const SizedBox(height: 16),
 
-          // Show output if available
+          // Buttons
+          Row(children: [
+            Expanded(child: FilledButton.icon(
+              onPressed: (_loading || !proot.initialized || _cloudService.running) ? null : () async {
+                setState(() => _loading = true);
+                if (!_cloudService.installed) {
+                  await _cloudService.installOpenCloud();
+                }
+                await _cloudService.startOpenCloud();
+                setState(() => _loading = false);
+              },
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('Iniciar OpenCloud'),
+            )),
+            const SizedBox(width: 8),
+            Expanded(child: OutlinedButton.icon(
+              onPressed: _cloudService.running ? () async {
+                await _cloudService.stopOpenCloud();
+                setState(() {});
+              } : null,
+              icon: const Icon(Icons.stop),
+              label: const Text('Detener'),
+            )),
+          ]),
+
+          if (_loading) ...[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(),
+          ],
+
+          const SizedBox(height: 16),
+
+          // Output
           if (_cloudService.output.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('Salida:', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
+            Text('Consola:', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(12),
@@ -206,9 +197,12 @@ class _OpenCloudScreenState extends State<OpenCloudScreen> {
                 color: Colors.black,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: SelectableText(
-                _cloudService.output,
-                style: const TextStyle(color: Colors.green, fontFamily: 'monospace', fontSize: 11),
+              height: 200,
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  _cloudService.output,
+                  style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 11, height: 1.4),
+                ),
               ),
             ),
           ],

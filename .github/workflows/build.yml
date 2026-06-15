@@ -35,7 +35,7 @@ jobs:
         echo "=== Construyendo bionic-tools.tar.gz ==="
         mkdir -p /tmp/bionic_build
         
-        # Descargar y extraer Termux bootstrap directamente (metodo mas robusto)
+        # Descargar y extraer Termux bootstrap
         BOOTSTRAP_URL="https://github.com/termux/termux-packages/releases/download/bootstrap-2026.06.14-r1%2Bapt.android-7/bootstrap-aarch64.zip"
         echo "Descargando bootstrap..."
         curl -sL "$BOOTSTRAP_URL" -o /tmp/bootstrap.zip
@@ -44,7 +44,7 @@ jobs:
         unzip -q /tmp/bootstrap.zip -d /tmp/bionic_build/
         echo "Extraido: $(find /tmp/bionic_build -type f | wc -l) archivos"
         
-        # Verificar binarios clave
+        # Termux bootstrap usa prefijo data/data/com.termux/files/usr
         BOOTSTRAP_PREFIX="data/data/com.termux/files/usr"
         if [ -d "/tmp/bionic_build/$BOOTSTRAP_PREFIX" ]; then
           cd "/tmp/bionic_build/$BOOTSTRAP_PREFIX"
@@ -53,8 +53,33 @@ jobs:
           cd /tmp/bionic_build
         fi
         
-        # Verificar que tenemos los binarios
-        for bin in bin/bash bin/sshd bin/nano bin/ping bin/curl; do
+        echo "=== Fijando symlinks soname ==="
+        # Recrear symlinks soname que el ZIP no preserva correctamente
+        cd lib
+        for libfile in *.so.*.*; do
+          [ -f "$libfile" ] || continue
+          basever="${libfile%.*}"  # libfoo.so.X.Y -> libfoo.so.X
+          if [ ! -e "$basever" ] && [ -f "$libfile" ]; then
+            ln -sf "$libfile" "$basever"
+            echo "  SYMLINK: $basever -> $libfile"
+          fi
+          # Tambien crear .so (sin version) para binarios que la necesitan
+          soname="${basever%.*}"  # libfoo.so.X -> libfoo.so
+          if [ ! -e "$soname" ] && [ -f "$libfile" ]; then
+            ln -sf "$libfile" "$soname"
+            echo "  SYMLINK: $soname -> $libfile"
+          fi
+        done
+        cd ..
+        
+        echo "=== Verificando symlinks ==="
+        find lib/ -type l | while read l; do
+          echo "  symlink: $l -> $(readlink "$l")"
+        done
+        
+        # Verificar que tenemos los binarios clave
+        echo "=== Binarios ==="
+        for bin in bin/bash bin/sshd bin/nano bin/ping bin/curl bin/ssh-keygen bin/netstat bin/dig bin/traceroute; do
           if [ -f "$bin" ]; then
             echo "  OK: $bin ($(ls -lh "$bin" | awk '{print $5}'))"
           else
@@ -63,6 +88,7 @@ jobs:
         done
         
         # Crear tarball (excluyendo docs pesados)
+        echo "=== Creando tarball ==="
         tar -czf $GITHUB_WORKSPACE/bionic-tools.tar.gz \
           --exclude='share/doc' \
           --exclude='share/man' \
@@ -70,13 +96,20 @@ jobs:
           --exclude='share/locale' \
           --exclude='include' \
           --exclude='var' \
+          --exclude='data' \
           bin/ lib/ libexec/ etc/ share/ 2>/dev/null || true
         
         echo "=== Tarball ==="
         ls -lh $GITHUB_WORKSPACE/bionic-tools.tar.gz
-        echo "Contenido:"
+        echo "Contenido (primeros 30):"
         tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | head -30
-        echo "... ($(tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | wc -l) entries total)"
+        echo "... ($(tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | wc -l) entradas total)"
+        echo "Symlinks en tarball:"
+        tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | while read f; do
+          if [ -L "$f" ] 2>/dev/null; then
+            echo "  $f -> $(readlink "$f")"
+          fi
+        done || true
 
     - name: Build APK
       run: flutter build apk --release
