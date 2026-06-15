@@ -193,7 +193,7 @@ class ProotService extends ChangeNotifier {
       final archive = TarDecoder().decodeBytes(gzBytes);
 
       _logMsg('Extrayendo ${archive.length} entradas…');
-      int count = 0;
+      
       int dirs = 0, files = 0, symlinks = 0;
 
       for (final entry in archive) {
@@ -207,7 +207,7 @@ class ProotService extends ChangeNotifier {
         if (name.endsWith('/')) {
           await Directory(outPath).create(recursive: true);
           dirs++;
-          count++;
+          
           _pulse(count, dirs + files + symlinks + 1);
           continue;
         }
@@ -226,7 +226,7 @@ class ProotService extends ChangeNotifier {
             }
           }
           symlinks++;
-          count++;
+          
           _pulse(count, archive.length);
           continue;
         }
@@ -241,12 +241,12 @@ class ProotService extends ChangeNotifier {
             // Hardlink (0 bytes) → se repara después
             await File(outPath).writeAsString('');
           }
-          count++;
+          
           _pulse(count, archive.length);
           continue;
         }
 
-        count++;
+        
       }
 
       _logMsg('Extraídos: $dirs directorios, $files archivos, $symlinks symlinks');
@@ -270,7 +270,7 @@ class ProotService extends ChangeNotifier {
   void _pulse(int count, int total) {
     if (total > 0 && count % 100 == 0) {
       _downloadProgress = 0.50 + (count / total) * 0.30;
-      _statusMessage = 'Extrayendo ${(count * 100 / total).toInt()}%';
+      _statusMessage = 'Extrayendo ${(count * 100 ~/ total)}%';
       notifyListeners();
     }
   }
@@ -282,7 +282,7 @@ class ProotService extends ChangeNotifier {
     final bbLen = await bbFile.length();
     if (bbLen == 0) { _logMsg('busybox tamaño 0'); return; }
 
-    _logMsg('busybox: ${bbLen} bytes, reparando hardlinks…');
+    _logMsg('busybox: $bbLen bytes, reparando hardlinks…');
     final bbData = await bbFile.readAsBytes();
     int fixed = 0;
 
@@ -368,7 +368,7 @@ class ProotService extends ChangeNotifier {
       final gz = GZipDecoder().decodeBytes(bytes);
       final archive = TarDecoder().decodeBytes(gz);
 
-      int count = 0;
+      
       for (final entry in archive) {
         String name = entry.name;
         if (name.startsWith('./')) { name = name.substring(2); }
@@ -378,7 +378,7 @@ class ProotService extends ChangeNotifier {
 
         if (name.endsWith('/')) {
           await Directory(outPath).create(recursive: true);
-          count++; continue;
+          continue;
         }
 
         await Directory(outPath).parent.create(recursive: true);
@@ -393,7 +393,7 @@ class ProotService extends ChangeNotifier {
               try { await File(resolved).copy(outPath); } catch (_) {}
             }
           }
-          count++; continue;
+          continue;
         }
 
         if (entry.isFile) {
@@ -403,9 +403,9 @@ class ProotService extends ChangeNotifier {
           } else {
             await File(outPath).writeAsString('');
           }
-          count++; continue;
+          continue;
         }
-        count++;
+        
       }
       return true;
     } catch (e) {
