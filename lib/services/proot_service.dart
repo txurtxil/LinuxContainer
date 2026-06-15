@@ -717,13 +717,14 @@ class ProotService extends ChangeNotifier {
     }
 
     try {
-      // ─── ESTRATEGIA 1: PROOT-rs (la mejor opción) ───
+      // ───       // ─── ESTRATEGIA 1: PROOT-rs (la mejor opcion) ───
       final prootPath = '$appDir/proot';
       if (linker != null && await File(prootPath).exists() && await File(prootPath).length() > 0) {
         try {
+          _logMsg('Ejecutando via proot-rs: ' + command);
           final result = await Process.run(
             linker,
-            [prootPath, '--rootfs', rootfs, '--', '/bin/sh', '-c', command],
+            [prootPath, '-r', rootfs, '/bin/sh', '-c', command],
             environment: {
               'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
               'HOME': '/root',
@@ -733,20 +734,24 @@ class ProotService extends ChangeNotifier {
           ).timeout(timeout);
           final out = result.stdout as String;
           final err = result.stderr as String;
-          if (err.isNotEmpty && out.isEmpty) {
+          if (result.exitCode != 0) {
+            _logMsg('proot-rs exit code: ' + result.exitCode.toString());
+          }
+          if (err.isNotEmpty) {
             _lastOutput = err;
-          } else if (err.isNotEmpty) {
-            _lastOutput = '$out\n$err';
+            if (out.isNotEmpty) _lastOutput += '\n' + out;
+            _logMsg('proot-rs stderr: ' + err);
           } else {
             _lastOutput = out;
           }
           return _lastOutput;
         } catch (e) {
-          _lastOutput = 'proot-rs fallo: $e\n';
+          _lastOutput = 'proot-rs fallo: ' + e.toString() + '\n';
+          _logMsg('proot-rs catch: ' + e.toString());
         }
       }
 
-      // ─── ESTRATEGIA 2: Linker del sistema + shell rootfs ───
+      // ─── ESTRATEGIA 2: Linker del sistema + shellESTRATEGIA 2: Linker del sistema + shell rootfs ───
       if (linker != null) {
         try {
           final result = await Process.run(
