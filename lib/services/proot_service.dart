@@ -226,17 +226,34 @@ class ProotService extends ChangeNotifier {
     final tgzPath = '$appDir/bionic-tools.tar.gz';
     bool downloaded = false;
 
-    // Intentar URLs del release
-    for (final url in [
+    // Intentar URLs del release (con validacion de tamano)
+    final urls = [
+      'https://github.com/txurtxil/LinuxContainer/releases/download/v8.3/bionic-tools.tar.gz',
       'https://github.com/txurtxil/LinuxContainer/releases/latest/download/bionic-tools.tar.gz',
-    ]) {
+    ];
+    for (final url in urls) {
       try {
-        _logMsg('Descargando bionic-tools...');
+        _logMsg('Descargando bionic-tools: $url');
         await _downloadFile(url, tgzPath, 0.60, 0.70);
+        final size = await File(tgzPath).length();
+        _logMsg('bionic-tools tamano: $size bytes');
+        if (size < 1000) {
+          _logMsg('Muy pequeno (no es un tar.gz valido), reintentando...');
+          try { await File(tgzPath).delete(); } catch (_) {}
+          continue;
+        }
+        // Verificar magic bytes gzip
+        final data = await File(tgzPath).readAsBytes();
+        if (data.length < 2 || data[0] != 0x1F || data[1] != 0x8B) {
+          _logMsg('No es gzip valido, reintentando...');
+          try { await File(tgzPath).delete(); } catch (_) {}
+          continue;
+        }
         downloaded = true;
+        _logMsg('bionic-tools descargado correctamente');
         break;
       } catch (e) {
-        _logMsg('URL1 fallo: $e');
+        _logMsg('URL fallo: $e');
       }
     }
 
