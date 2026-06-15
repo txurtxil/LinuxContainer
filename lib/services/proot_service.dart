@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
+// ignore_for_file: curly_braces_in_flow_control_structures
 
 class ProotService extends ChangeNotifier {
   static final ProotService _instance = ProotService._internal();
@@ -230,7 +231,7 @@ class ProotService extends ChangeNotifier {
 
       // Extraer con toybox
       for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
-        if (await File(tb).exists()) {
+        if (await File(tb).exists()) { {
           await Process.run(tb, ['tar', '-xf', tempFile.path, '-C', rootfs])
               .timeout(const Duration(seconds: 120));
           if (await File('$rootfs/bin/sh').exists() &&
@@ -244,7 +245,7 @@ class ProotService extends ChangeNotifier {
       // Extraer con linker64 + busybox del asset (si Alpine)
       if (hasAlpine) {
         final linker = await _linker;
-        if (linker != null) {
+        if (linker != null) { {
           // Extraer busybox primero
           _logMsg('Usando linker para extraer busybox');
           // No podemos extraer un solo archivo sin tar... usar Dart
@@ -272,11 +273,7 @@ class ProotService extends ChangeNotifier {
 
   Future<void> _extractAssetBusybox(String tarPath, String rootfs) async {
     // Extraer solo busybox del tar.gz usando Dart
-    try {
-      final bytes = await File(tarPath).readAsBytes();
-      // Buscar el header de bin/busybox y extraerlo
-      // Esto es complejo sin archive package, así que confiamos en toybox
-    } catch (_) {}
+    // No implementado - confiamos en toybox del sistema
   }
 
   // ───── MÉTODO 1: apk.static (con linker64 para saltar noexec) ─────
@@ -372,7 +369,7 @@ class ProotService extends ChangeNotifier {
       if ((result.stderr as String).isNotEmpty)
         _logMsg('apk stderr: ${result.stderr}');
 
-      if (result.exitCode != 0) return false;
+      if (result.exitCode != 0) { return false; }
 
       // Verificar sh
       if (await File('$rootfs/bin/sh').exists() &&
@@ -440,7 +437,7 @@ class ProotService extends ChangeNotifier {
 
     // Extraer con toybox (soporta .tar.xz si tiene xz)
     for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
-      if (await File(tb).exists()) {
+      if (await File(tb).exists()) { {
         try {
           await Process.run(tb, ['tar', '-xf', xzPath, '-C', rootfs])
               .timeout(const Duration(seconds: 180));
@@ -473,7 +470,7 @@ class ProotService extends ChangeNotifier {
   Future<bool> _extractTar(String tarPath, String rootfs) async {
     // toybox
     for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
-      if (await File(tb).exists()) {
+      if (await File(tb).exists()) { {
         try {
           _logMsg('Extrayendo con $tb');
           await Process.run(tb, ['tar', '-xf', tarPath, '-C', rootfs])
@@ -487,7 +484,7 @@ class ProotService extends ChangeNotifier {
     // linker + busybox del directorio de la app
     final appDir = await _appDir;
     final linker = await _linker;
-    if (linker != null) {
+    if (linker != null) { {
       final bb = File('$appDir/bin/busybox');
       if (!await bb.exists()) {
         // Descargar busybox estático alternativo
@@ -582,7 +579,7 @@ class ProotService extends ChangeNotifier {
     if (shellPath == null) return 'Error: No hay shell disponible.\n';
 
     try {
-      if (linker != null) {
+      if (linker != null) { {
         final result = await Process.run(
           linker, [shellPath, '-c', command],
           environment: {
