@@ -643,7 +643,7 @@ class ProotService extends ChangeNotifier {
         }
       } catch (_) {}
     }
-    _logMsg('Symlinks absolutos reparados: \$fixed');
+    _logMsg('Symlinks absolutos reparados: $fixed');
   }
 
   // ────────── PROOT-rs ──────────  // ────────── PROOT-rs ──────────
