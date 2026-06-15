@@ -134,15 +134,13 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         ),
-                        // Botón Ver Log si hay log disponible
-                        if (proot.logText.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          TextButton.icon(
-                            onPressed: () => _showLogDialog(proot),
-                            icon: const Icon(Icons.terminal, size: 16),
-                            label: const Text('Ver Log'),
-                          ),
-                        ],
+                        // Botón Ver Log (siempre visible)
+                        const SizedBox(height: 8),
+                        TextButton.icon(
+                          onPressed: () => _showLogDialog(proot),
+                          icon: const Icon(Icons.terminal, size: 16),
+                          label: const Text('Ver Log'),
+                        ),
                       ],
                       if (proot.isDownloading) ...[
                         const SizedBox(height: 16),
@@ -253,17 +251,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
 
-                if (!proot.initialized && !proot.isDownloading && proot.logText.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  OutlinedButton.icon(
-                    onPressed: () => _showLogDialog(proot),
-                    icon: const Icon(Icons.terminal),
-                    label: const Text('Ver Log Completo'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () => _showLogDialog(proot),
+                  icon: const Icon(Icons.terminal),
+                  label: const Text('Ver Log Completo'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
-                ],
+                ),
               ],
             ),
           );

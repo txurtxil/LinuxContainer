@@ -713,8 +713,7 @@ class ProotService extends ChangeNotifier {
         try {
           final result = await Process.run(
             linker,
-            [prootPath, '-r', rootfs, '-0', '-w', '/root',
-             '/bin/sh', '-c', command],
+            [prootPath, '--rootfs', rootfs, '--', '/bin/sh', '-c', command],
             environment: {
               'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
               'HOME': '/root',
