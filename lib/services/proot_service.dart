@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
 class ProotService extends ChangeNotifier {
@@ -14,7 +15,6 @@ class ProotService extends ChangeNotifier {
   String _statusMessage = 'No iniciado';
   String _lastOutput = '';
 
-  // ─── LOG ───
   final List<String> _log = [];
   List<String> get log => List.unmodifiable(_log);
   String get logText => _log.join('\n');
@@ -31,6 +31,7 @@ class ProotService extends ChangeNotifier {
 
   String? _rootfsPath;
 
+  // Constantes
   static const String _apkUrl =
       'https://gitlab.alpinelinux.org/api/v4/projects/5/packages/generic/v2.14.10/aarch64/apk.static';
   static const String _prootUrl =
@@ -39,6 +40,15 @@ class ProotService extends ChangeNotifier {
   static const String _alpineBranch = 'v3.21';
   static const String _minirootfsUrl =
       'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz';
+  static const String _debianRootfsUrl =
+      'https://cloud.debian.org/images/cloud/bookworm/20250331-1966/debian-12-arm64-20250331-1966.tar.xz';
+
+  // Linker del sistema Android (para saltar noexec)
+  Future<String?> get _linker async {
+    if (await File('/system/bin/linker64').exists()) return '/system/bin/linker64';
+    if (await File('/system/bin/linker').exists()) return '/system/bin/linker';
+    return null;
+  }
 
   Future<String> get _appDir async {
     final dir = await getApplicationDocumentsDirectory();
@@ -59,17 +69,11 @@ class ProotService extends ChangeNotifier {
           if (st.size > 0 && st.mode & 0x40 != 0) {
             _initialized = true;
             _statusMessage = 'Linux listo';
-            _logMsg('Rootfs OK, /bin/sh existe (${st.size} bytes, ejecutable)');
+            _logMsg('Rootfs OK, /bin/sh existe (${st.size} bytes)');
             notifyListeners();
             return true;
-          } else {
-            _logMsg('/bin/sh existe pero tamaño 0 o no ejecutable (mode: ${st.mode})');
           }
-        } else {
-          _logMsg('Directorio rootfs existe pero /bin/sh no');
         }
-      } else {
-        _logMsg('Directorio rootfs no existe');
       }
       _statusMessage = 'Linux no instalado – pulsa Setup';
       notifyListeners();
@@ -97,94 +101,102 @@ class ProotService extends ChangeNotifier {
       final appDir = await _appDir;
       final rootfs = '$appDir/rootfs';
       _rootfsPath = rootfs;
-      _logMsg('App dir: $appDir');
-      _logMsg('Rootfs: $rootfs');
 
       await Directory(appDir).create(recursive: true);
+      await Directory(rootfs).create(recursive: true);
 
-      // Intentar método 1: apk.static
-      bool ok = await _setupWithApkStatic(appDir, rootfs);
+      // Probar métodos en orden
+      bool ok = false;
 
+      // 1: Asset embeeded (si existe)
+      ok = await _setupFromAsset(rootfs);
+      if (ok) _logMsg('✓ Rootfs desde asset');
+
+      // 2: apk.static
       if (!ok) {
-        _logMsg('MÉTODO 1 FALLÓ -> Probando método 2: minirootfs');
+        ok = await _setupWithApkStatic(appDir, rootfs);
+        if (ok) _logMsg('✓ Rootfs con apk.static');
+      }
+
+      // 3: Minirootfs tar.gz
+      if (!ok) {
         ok = await _setupWithMinirootfs(appDir, rootfs);
+        if (ok) _logMsg('✓ Rootfs desde minirootfs');
+      }
+
+      // 4: Debian rootfs
+      if (!ok) {
+        ok = await _setupWithDebianRootfs(appDir, rootfs);
+        if (ok) _logMsg('✓ Rootfs Debian');
       }
 
       if (!ok) {
-        _logMsg('MÉTODO 2 FALLÓ -> No hay más métodos');
-        throw Exception('No se pudo crear el rootfs');
+        throw Exception('No se pudo crear el rootfs (probados: asset, apk.static, minirootfs, Debian)');
       }
-
-      _logMsg('Rootfs creado correctamente');
 
       // Configuración común
-      _downloadProgress = 0.75;
+      _downloadProgress = 0.80;
       _statusMessage = 'Configurando red…';
       notifyListeners();
 
       await Directory('$rootfs/etc').create(recursive: true);
       await File('$rootfs/etc/resolv.conf').writeAsString(
         'nameserver 8.8.8.8\nnameserver 1.1.1.1\n');
-      _logMsg('DNS configurado');
       await File('$rootfs/etc/hosts').writeAsString(
         '127.0.0.1 localhost\n::1 localhost\n');
 
+      // Para Debian: configurar apt
+      if (await File('$rootfs/etc/apt').exists()) {
+        _logMsg('Rootfs Debian detectado, configurando apt sources');
+        final aptDir = Directory('$rootfs/etc/apt');
+        await aptDir.create(recursive: true);
+        if (!await File('$rootfs/etc/apt/sources.list').exists()) {
+          await File('$rootfs/etc/apt/sources.list').writeAsString(
+            'deb http://deb.debian.org/debian bookworm main contrib non-free\n'
+            'deb http://deb.debian.org/debian-security bookworm-security main contrib non-free\n'
+            'deb http://deb.debian.org/debian bookworm-updates main contrib non-free\n');
+        }
+      }
+
       await _chmodBins(rootfs);
-      _logMsg('Permisos aplicados');
 
       // PROOT
-      _downloadProgress = 0.85;
+      _downloadProgress = 0.88;
       _statusMessage = 'Descargando PROOT…';
       notifyListeners();
-
-      final prootPath = '$appDir/proot';
-      if (!await File(prootPath).exists()) {
-        try {
-          _logMsg('Descargando PROOT desde $_prootUrl');
-          await _downloadFile(_prootUrl, prootPath, 0.85, 0.95);
-          await Process.run('chmod', ['755', prootPath]);
-          _logMsg('PROOT descargado OK');
-        } catch (e) {
-          _logMsg('PROOT no disponible: $e (no es crítico)');
-        }
-      }
+      await _downloadProot(appDir);
 
       // Verificación final
-      final shOk = await File('$rootfs/bin/sh').exists() &&
-                   await File('$rootfs/bin/sh').length() > 0;
-      _logMsg('Verificación final /bin/sh: ${shOk ? "OK" : "NO ENCONTRADO"}');
+      bool shOk = await File('$rootfs/bin/sh').exists() &&
+                  await File('$rootfs/bin/sh').length() > 0;
 
-      if (shOk) {
-        final st = await File('$rootfs/bin/sh').stat();
-        _logMsg('/bin/sh: ${st.size} bytes, mode: ${st.mode}');
-      }
-
-      // Si sh falló pero busybox existe, copiar
-      if (!shOk) {
-        final bb = File('$rootfs/bin/busybox');
-        if (await bb.exists() && await bb.length() > 0) {
+      if (!shOk && await File('$rootfs/bin/busybox').exists()) {
+        final bb = await File('$rootfs/bin/busybox').length();
+        if (bb > 0) {
           _logMsg('Copiando busybox como /bin/sh');
-          await bb.copy('$rootfs/bin/sh');
-          await Process.run('chmod', ['755', '$rootfs/bin/sh']);
+          await File('$rootfs/bin/busybox').copy('$rootfs/bin/sh');
+          await _runViaLinker(['chmod', '755', '$rootfs/bin/sh']);
+          shOk = true;
         }
       }
 
-      // Re-verificar
-      final shFinal = await File('$rootfs/bin/sh').exists() &&
-                      await File('$rootfs/bin/sh').length() > 0;
+      // Para Debian: /bin/dash es el sh
+      if (!shOk && await File('$rootfs/bin/dash').exists()) {
+        _logMsg('Usando /bin/dash (Debian)');
+        await File('$rootfs/bin/dash').copy('$rootfs/bin/sh');
+        shOk = true;
+      }
 
       _downloadProgress = 1.0;
-      _initialized = shFinal;
-      _statusMessage = shFinal
-          ? 'Alpine Linux listo'
+      _initialized = shOk;
+      _statusMessage = shOk
+          ? 'Linux listo'
           : 'Error: /bin/sh no encontrado en rootfs';
       _logMsg(_statusMessage);
       _logMsg('=== FIN SETUP ===');
     } catch (e) {
-      _logMsg('EXCEPCIÓN GENERAL: $e');
-      _logMsg('Stack: ${StackTrace.current}');
+      _logMsg('EXCEPCIÓN: $e');
       _statusMessage = 'Error: $e';
-      _lastOutput = logText;
       _initialized = false;
     } finally {
       _isDownloading = false;
@@ -193,9 +205,89 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ───── MÉTODO 1: apk.static ─────
+  // ───── MÉTODO 0: Asset embeeded ─────
+  Future<bool> _setupFromAsset(String rootfs) async {
+    _logMsg('--- Probando assets embeedidos ---');
+    try {
+      final manifest = await rootBundle.loadString('AssetManifest.json');
+      _logMsg('AssetManifest cargado');
+
+      // Buscar archivos de rootfs
+      final hasAlpine = manifest.contains('assets/rootfs.tar.gz');
+      final hasDebian = manifest.contains('assets/debian-rootfs.tar.xz');
+
+      if (!hasAlpine && !hasDebian) {
+        _logMsg('No hay assets de rootfs embeedidos');
+        return false;
+      }
+
+      final assetName = hasAlpine ? 'assets/rootfs.tar.gz' : 'assets/debian-rootfs.tar.xz';
+      _logMsg('Extrayendo desde asset: $assetName');
+
+      final data = await rootBundle.load(assetName);
+      final tempFile = File('${rootfs}_asset');
+      await tempFile.writeAsBytes(data.buffer.asUint8List());
+
+      // Extraer con toybox
+      for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
+        if (await File(tb).exists()) {
+          await Process.run(tb, ['tar', '-xf', tempFile.path, '-C', rootfs])
+              .timeout(const Duration(seconds: 120));
+          if (await File('$rootfs/bin/sh').exists() &&
+              await File('$rootfs/bin/sh').length() > 0) {
+            await tempFile.delete();
+            return true;
+          }
+        }
+      }
+
+      // Extraer con linker64 + busybox del asset (si Alpine)
+      if (hasAlpine) {
+        final linker = await _linker;
+        if (linker != null) {
+          // Extraer busybox primero
+          await _logMsg('Usando linker para extraer busybox');
+          // No podemos extraer un solo archivo sin tar... usar Dart
+          await _extractAssetBusybox(tempFile.path, rootfs);
+          final bb = File('$rootfs/bin/busybox');
+          if (await bb.exists() && await bb.length() > 0) {
+            await _runViaLinker([bb.path, 'tar', '-xf', tempFile.path, '-C', rootfs]);
+            await bb.copy('$rootfs/bin/sh');
+            if (await File('$rootfs/bin/sh').exists() &&
+                await File('$rootfs/bin/sh').length() > 0) {
+              await tempFile.delete();
+              return true;
+            }
+          }
+        }
+      }
+
+      await tempFile.delete();
+      return false;
+    } catch (e) {
+      _logMsg('Asset falló: $e');
+      return false;
+    }
+  }
+
+  Future<void> _extractAssetBusybox(String tarPath, String rootfs) async {
+    // Extraer solo busybox del tar.gz usando Dart
+    try {
+      final bytes = await File(tarPath).readAsBytes();
+      // Buscar el header de bin/busybox y extraerlo
+      // Esto es complejo sin archive package, así que confiamos en toybox
+    } catch (_) {}
+  }
+
+  // ───── MÉTODO 1: apk.static (con linker64 para saltar noexec) ─────
   Future<bool> _setupWithApkStatic(String appDir, String rootfs) async {
-    _logMsg('--- MÉTODO 1: apk.static ---');
+    _logMsg('--- MÉTODO: apk.static ---');
+    final linker = await _linker;
+    if (linker == null) {
+      _logMsg('No hay linker64 disponible en el sistema');
+      return false;
+    }
+    _logMsg('Linker: $linker');
 
     _statusMessage = 'Descargando apk-tools…';
     notifyListeners();
@@ -203,33 +295,28 @@ class ProotService extends ChangeNotifier {
     final apkBin = '$appDir/apk';
     if (!await File(apkBin).exists()) {
       try {
-        _logMsg('Descargando apk.static desde $_apkUrl');
         await _downloadFile(_apkUrl, apkBin, 0.05, 0.20);
-        await Process.run('chmod', ['755', apkBin]);
-        final st = await File(apkBin).stat();
-        _logMsg('apk.static descargado: ${st.size} bytes');
+        _logMsg('apk.static descargado');
       } catch (e) {
-        _logMsg('ERROR descargando apk.static: $e');
+        _logMsg('ERROR descarga apk.static: $e');
         return false;
       }
-    } else {
-      _logMsg('apk.static ya existe');
     }
 
-    // Verificar que apk funciona
+    // Verificar con linker (no directo, por noexec)
     try {
-      final versionResult = await Process.run(apkBin, ['--version']);
-      _logMsg('apk version: ${versionResult.stdout}');
+      final v = await Process.run(linker, [apkBin, '--version']);
+      _logMsg('apk version: ${v.stdout}');
     } catch (e) {
-      _logMsg('ERROR: apk.static no ejecutable: $e');
+      _logMsg('ERROR: apk no ejecutable via linker: $e');
       return false;
     }
 
     _downloadProgress = 0.20;
-    _statusMessage = 'Configurando repositorios Alpine…';
+    _statusMessage = 'Configurando repositorios…';
     notifyListeners();
 
-    // keys
+    // Claves RSA
     await Directory('$rootfs/etc/apk/keys').create(recursive: true);
     final keys = <String, String>{
       'alpine-devel@lists.alpinelinux.org-4a6a0840.rsa.pub':
@@ -251,30 +338,23 @@ class ProotService extends ChangeNotifier {
     };
     for (final entry in keys.entries) {
       await File('$rootfs/etc/apk/keys/${entry.key}').writeAsString(
-        '-----BEGIN PUBLIC KEY-----\n'
-        '${entry.value}\n'
-        '-----END PUBLIC KEY-----\n',
-      );
+        '-----BEGIN PUBLIC KEY-----\n${entry.value}\n-----END PUBLIC KEY-----\n');
     }
-    _logMsg('Claves RSA Alpine escritas');
 
-    // repositories
     await File('$rootfs/etc/apk/repositories').writeAsString(
       '$_alpineMirror/$_alpineBranch/main\n'
-      '$_alpineMirror/$_alpineBranch/community\n',
-    );
-    _logMsg('Repositorios configurados:\n$_alpineMirror/$_alpineBranch/main');
+      '$_alpineMirror/$_alpineBranch/community\n');
 
-    // ─── apk --initdb add ───
+    // ─── apk --initdb add via linker ───
     _downloadProgress = 0.25;
     _statusMessage = 'Instalando paquetes base…';
     notifyListeners();
 
     try {
-      _logMsg('Ejecutando: apk --root $rootfs --arch aarch64 --initdb --no-progress add alpine-baselayout busybox musl-utils alpine-release apk-tools');
-
+      _logMsg('Ejecutando apk via linker...');
       final result = await Process.run(
-        apkBin, [
+        linker, [
+          apkBin,
           '--root', rootfs,
           '--arch', 'aarch64',
           '--initdb',
@@ -288,93 +368,164 @@ class ProotService extends ChangeNotifier {
         ],
       ).timeout(const Duration(seconds: 180));
 
-      _logMsg('apk exit code: ${result.exitCode}');
-      final stderr = result.stderr as String;
-      final stdout = result.stdout as String;
-      if (stdout.isNotEmpty) _logMsg('apk stdout: $stdout');
-      if (stderr.isNotEmpty) _logMsg('apk stderr: $stderr');
+      _logMsg('apk exit: ${result.exitCode}');
+      if ((result.stderr as String).isNotEmpty)
+        _logMsg('apk stderr: ${result.stderr}');
 
-      if (result.exitCode != 0) {
-        _logMsg('apk.static falló con exit code ${result.exitCode}');
-        return false;
-      }
+      if (result.exitCode != 0) return false;
 
-      _logMsg('apk completado exitosamente');
+      // Verificar sh
+      if (await File('$rootfs/bin/sh').exists() &&
+          await File('$rootfs/bin/sh').length() > 0) return true;
 
-      // Verificar bin/sh
-      final shFile = File('$rootfs/bin/sh');
-      if (await shFile.exists() && await shFile.length() > 0) {
-        _logMsg('/bin/sh OK');
+      // Si busybox existe pero sh no, copiar
+      if (await File('$rootfs/bin/busybox').exists() &&
+          await File('$rootfs/bin/busybox').length() > 0) {
+        await File('$rootfs/bin/busybox').copy('$rootfs/bin/sh');
+        await _runViaLinker(['chmod', '755', '$rootfs/bin/sh']);
         return true;
       }
 
-      // Si sh no existe pero busybox sí, copiar
-      final bbFile = File('$rootfs/bin/busybox');
-      if (await bbFile.exists() && await bbFile.length() > 0) {
-        _logMsg('/bin/sh no encontrado, copiando desde busybox');
-        await bbFile.copy('$rootfs/bin/sh');
-        await Process.run('chmod', ['755', '$rootfs/bin/sh']);
-        return true;
-      }
-
-      _logMsg('Ni /bin/sh ni /bin/busybox existen después de apk');
       return false;
     } catch (e) {
-      _logMsg('EXCEPCIÓN en apk.static: $e');
+      _logMsg('EXCEPCIÓN apk: $e');
       return false;
     }
   }
 
-  // ───── MÉTODO 2: Minirootfs (fallback) ─────
+  // ───── MÉTODO 2: Minirootfs tar.gz ─────
   Future<bool> _setupWithMinirootfs(String appDir, String rootfs) async {
-    _logMsg('--- MÉTODO 2: Minirootfs ---');
+    _logMsg('--- MÉTODO: Minirootfs tar.gz ---');
 
-    _statusMessage = 'Descargando minirootfs Alpine…';
+    _statusMessage = 'Descargando minirootfs…';
     notifyListeners();
 
     final tgzPath = '$appDir/rootfs.tar.gz';
     if (!await File(tgzPath).exists()) {
       try {
-        _logMsg('Descargando minirootfs desde $_minirootfsUrl');
-        await _downloadFile(_minirootfsUrl, tgzPath, 0.25, 0.50);
-        final st = await File(tgzPath).stat();
-        _logMsg('Minirootfs descargado: ${st.size} bytes');
+        await _downloadFile(_minirootfsUrl, tgzPath, 0.30, 0.55);
       } catch (e) {
-        _logMsg('ERROR descargando minirootfs: $e');
+        _logMsg('ERROR descarga minirootfs: $e');
         return false;
       }
     }
 
-    _downloadProgress = 0.50;
-    _statusMessage = 'Extrayendo minirootfs…';
+    _downloadProgress = 0.55;
+    _statusMessage = 'Extrayendo…';
     notifyListeners();
 
-    for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
-      if (await File(tb).exists()) {
-        _logMsg('Probando extractor: $tb');
-        try {
-          final result = await Process.run(
-            tb, ['tar', '-xf', tgzPath, '-C', rootfs],
-          ).timeout(const Duration(seconds: 120));
-          _logMsg('$tb exit: ${result.exitCode}');
+    return _extractTar(tgzPath, rootfs);
+  }
 
-          if (await File('$rootfs/bin/sh').exists() &&
-              await File('$rootfs/bin/sh').length() > 0) {
-            _logMsg('Extraído con $tb, /bin/sh OK');
-            return true;
-          } else {
-            _logMsg('$tb extrajo pero /bin/sh no encontrado');
-          }
-        } catch (e) {
-          _logMsg('$tb falló: $e');
-        }
-      } else {
-        _logMsg('$tb no existe en el sistema');
+  // ───── MÉTODO 3: Debian rootfs ─────
+  Future<bool> _setupWithDebianRootfs(String appDir, String rootfs) async {
+    _logMsg('--- MÉTODO: Debian rootfs ---');
+
+    _statusMessage = 'Descargando Debian rootfs…';
+    notifyListeners();
+
+    final xzPath = '$appDir/debian-rootfs.tar.xz';
+    if (!await File(xzPath).exists()) {
+      try {
+        await _downloadFile(_debianRootfsUrl, xzPath, 0.30, 0.55);
+      } catch (e) {
+        _logMsg('ERROR descarga Debian: $e');
+        return false;
       }
     }
 
-    _logMsg('NO HAY TAR DISPONIBLE en el sistema Android');
+    _downloadProgress = 0.55;
+    _statusMessage = 'Extrayendo Debian…';
+    notifyListeners();
+
+    // Extraer con toybox (soporta .tar.xz si tiene xz)
+    for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
+      if (await File(tb).exists()) {
+        try {
+          await Process.run(tb, ['tar', '-xf', xzPath, '-C', rootfs])
+              .timeout(const Duration(seconds: 180));
+          if (await File('$rootfs/bin/sh').exists() &&
+              await File('$rootfs/bin/sh').length() > 0) {
+            _logMsg('Debian extraído con $tb');
+            return true;
+          }
+        } catch (e) { _logMsg('$tb falló: $e'); }
+      }
+    }
+
+    // Fallback: extraer con linker64 + busybox si tenemos
+    // Buscar busybox en appDir
+    final bb = File('$appDir/bin/busybox');
+    final linker = await _linker;
+    if (linker != null && await bb.exists() && await bb.length() > 0) {
+      try {
+        await Process.run(linker, [bb.path, 'tar', '-xf', xzPath, '-C', rootfs])
+            .timeout(const Duration(seconds: 180));
+        if (await File('$rootfs/bin/sh').exists() &&
+            await File('$rootfs/bin/sh').length() > 0) return true;
+      } catch (e) { _logMsg('linker+bb falló: $e'); }
+    }
+
     return false;
+  }
+
+  // ─── Extraer tar con toybox o linker+busybox ───
+  Future<bool> _extractTar(String tarPath, String rootfs) async {
+    // toybox
+    for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
+      if (await File(tb).exists()) {
+        try {
+          _logMsg('Extrayendo con $tb');
+          await Process.run(tb, ['tar', '-xf', tarPath, '-C', rootfs])
+              .timeout(const Duration(seconds: 120));
+          if (await File('$rootfs/bin/sh').exists() &&
+              await File('$rootfs/bin/sh').length() > 0) return true;
+        } catch (e) { _logMsg('$tb falló: $e'); }
+      }
+    }
+
+    // linker + busybox del directorio de la app
+    final appDir = await _appDir;
+    final linker = await _linker;
+    if (linker != null) {
+      final bb = File('$appDir/bin/busybox');
+      if (!await bb.exists()) {
+        // Descargar busybox estático alternativo
+        // (por ahora no, no tenemos URL fiable)
+      } else if (await bb.length() > 0) {
+        try {
+          _logMsg('Extrayendo con linker+busybox');
+          await Process.run(linker, [bb.path, 'tar', '-xf', tarPath, '-C', rootfs])
+              .timeout(const Duration(seconds: 120));
+          if (await File('$rootfs/bin/sh').exists() &&
+              await File('$rootfs/bin/sh').length() > 0) return true;
+        } catch (e) { _logMsg('linker+bb falló: $e'); }
+      }
+    }
+
+    return false;
+  }
+
+  // ─── Ejecutar comando via linker (salta noexec) ───
+  Future<ProcessResult> _runViaLinker(List<String> args, {Duration? timeout}) async {
+    final linker = await _linker;
+    if (linker == null) throw Exception('No linker disponible');
+    return Process.run(linker, args).timeout(timeout ?? const Duration(seconds: 30));
+  }
+
+  // ─── PROOT ───
+  Future<void> _downloadProot(String appDir) async {
+    final prootPath = '$appDir/proot';
+    if (await File(prootPath).exists()) return;
+
+    try {
+      _logMsg('Descargando PROOT');
+      await _downloadFile(_prootUrl, prootPath, 0.85, 0.95);
+      await _runViaLinker(['chmod', '755', prootPath]);
+      _logMsg('PROOT OK');
+    } catch (e) {
+      _logMsg('PROOT no disponible: $e');
+    }
   }
 
   // ─── Chmod ───
@@ -385,7 +536,7 @@ class ProotService extends ChangeNotifier {
         try {
           await for (final entity in d.list()) {
             if (entity is File) {
-              try { await Process.run('chmod', ['755', entity.path]); } catch (_) {}
+              try { await _runViaLinker(['chmod', '755', entity.path]); } catch (_) {}
             }
           }
         } catch (_) {}
@@ -393,32 +544,22 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ─── Ejecutar comandos ───
+  // ─── Ejecutar comandos en el entorno Linux ───
   Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     if (!_initialized || _rootfsPath == null) {
       return 'Error: Linux no inicializado.\nPulsa "Setup Linux" primero.\n';
     }
 
     final rootfs = _rootfsPath!;
-    final linker = (await File('/system/bin/linker64').exists())
-        ? '/system/bin/linker64'
-        : (await File('/system/bin/linker').exists())
-            ? '/system/bin/linker'
-            : null;
+    final linker = await _linker;
 
-    final candidates = [
-      '$rootfs/bin/sh',
-      '$rootfs/bin/busybox',
-    ];
-
+    // Buscar shell
     String? shellPath;
-    for (final p in candidates) {
-      if (await File(p).exists() && await File(p).length() > 0) {
-        shellPath = p;
-        break;
-      }
+    for (final p in ['$rootfs/bin/sh', '$rootfs/bin/busybox', '$rootfs/bin/dash']) {
+      if (await File(p).exists() && await File(p).length() > 0) { shellPath = p; break; }
     }
 
+    // Si no hay shell en rootfs, usar system sh
     if (shellPath == null && await File('/system/bin/sh').exists()) {
       try {
         final result = await Process.run(
@@ -435,14 +576,10 @@ class ProotService extends ChangeNotifier {
         _lastOutput = (result.stderr as String).isNotEmpty
             ? '${result.stdout}\n${result.stderr}' : result.stdout as String;
         return _lastOutput;
-      } catch (e) {
-        _lastOutput = 'system sh falló: $e\n';
-      }
+      } catch (e) { _lastOutput = 'system sh falló: $e\n'; }
     }
 
-    if (shellPath == null) {
-      return 'Error: No hay shell disponible.\n';
-    }
+    if (shellPath == null) return 'Error: No hay shell disponible.\n';
 
     try {
       if (linker != null) {
@@ -482,15 +619,12 @@ class ProotService extends ChangeNotifier {
   Future<void> _downloadFile(String url, String path, double sw, double ew) async {
     final client = HttpClient();
     try {
-      _logMsg('Download iniciado: $url');
+      _logMsg('Download: $url');
       final request = await client.getUrl(Uri.parse(url));
       final response = await request.close();
-      _logMsg('HTTP status: ${response.statusCode}');
-      if (response.statusCode != 200) {
-        throw Exception('HTTP ${response.statusCode} en $url');
-      }
+      _logMsg('HTTP ${response.statusCode}');
+      if (response.statusCode != 200) throw Exception('HTTP ${response.statusCode}');
       final total = response.contentLength;
-      _logMsg('Tamaño total: $total bytes');
       int recv = 0;
       final sink = File(path).openWrite();
       await for (final chunk in response) {
@@ -498,15 +632,12 @@ class ProotService extends ChangeNotifier {
         recv += chunk.length;
         if (total > 0) {
           _downloadProgress = sw + (recv / total) * (ew - sw);
-          if (recv % (1024 * 512) < chunk.length) {
-            _statusMessage = 'Descargando ${(recv * 100 / total).toInt()}%';
-            notifyListeners();
-          }
+          if (recv % (1024 * 512) < chunk.length) notifyListeners();
         }
       }
       await sink.flush();
       await sink.close();
-      _logMsg('Download completado: $recv bytes en $path');
+      _logMsg('OK: $recv bytes');
     } finally { client.close(); }
   }
 

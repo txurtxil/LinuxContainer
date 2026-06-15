@@ -21,3 +21,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # Para embeber rootfs Alpine/Debian directamente en el APK
+  # Descomenta y pon los archivos en assets/:
+  # assets:
+  #   - assets/rootfs.tar.gz
+  #   - assets/debian-rootfs.tar.xz
+
