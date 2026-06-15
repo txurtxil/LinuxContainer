@@ -30,7 +30,6 @@ class ProotService extends ChangeNotifier {
   String get statusMessage => _statusMessage;
   String get lastOutput => _lastOutput;
   String? get rootfsPath => _rootfsPath;
-
   String? _rootfsPath;
 
   static const String _minirootfsUrl =
@@ -47,6 +46,18 @@ class ProotService extends ChangeNotifier {
   Future<String> get _appDir async {
     final dir = await getApplicationDocumentsDirectory();
     return '${dir.path}/linux_container';
+  }
+
+  /// Obtiene la ruta al loader musl
+  Future<String?> _getMuslLoader(String rootfs) async {
+    for (final candidate in [
+      '$rootfs/lib/ld-musl-aarch64.so.1',
+      '$rootfs/lib/libc.musl-aarch64.so.1',
+    ]) {
+      final f = File(candidate);
+      if (await f.exists() && await f.length() > 100000) return candidate;
+    }
+    return null;
   }
 
   Future<bool> checkEnvironment() async {
@@ -80,7 +91,9 @@ class ProotService extends ChangeNotifier {
   }
 
   // ════════════════════════════════════════════════════════════════
-  // runCommand: linker64 + binario directo (NO proot-rs, NO execve)
+  // runCommand: linker64 + ld-musl + binario (triple loader chain)
+  // linker64 carga ld-musl (loader musl statico)
+  // ld-musl carga el binario y sus dependencias (libc.musl, libz, etc.)
   // ════════════════════════════════════════════════════════════════
   Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     _lastOutput = '';
@@ -92,11 +105,11 @@ class ProotService extends ChangeNotifier {
       return _lastOutput;
     }
 
-    // Limpiar shell syntax del comando
+    // Limpiar shell syntax
     String cleanCmd = command
         .replaceAll(RegExp(r'\s*2>&1\s*'), ' ')
         .replaceAll(RegExp(r'\s*2>/dev/null\s*'), ' ')
-        .replaceAll(RegExp(r'\s*>/dev/null\s*'), ' ')
+        .replaceAll(RegExp(r'\s*>\s*/dev/null\s*'), ' ')
         .replaceAll(RegExp(r'\s*\|\|\s*true\s*'), ' ')
         .replaceAll(RegExp(r'\s*\|\|\s*false\s*'), ' ')
         .replaceAll(RegExp(r'\s*\|.*$'), '')
@@ -125,7 +138,6 @@ class ProotService extends ChangeNotifier {
     }
 
     try {
-      final ProcessResult result;
       final Map<String, String> env = {
         'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
                 '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin'
@@ -135,28 +147,72 @@ class ProotService extends ChangeNotifier {
         'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
       };
 
+      String output;
+      int exitCode = -1;
+
       if (binPath != null) {
-        _logMsg('linker64: $binName $args');
-        result = await Process.run(
-          linker, [binPath, ...args],
-          environment: env,
-          workingDirectory: rootfs,
-        ).timeout(timeout);
-      } else {
-        _logMsg('system: $command');
-        result = await Process.run(
-          '/system/bin/sh', ['-c', command],
-          environment: {
-            'PATH': '/system/bin:/system/xbin',
-            'TERM': 'xterm-256color',
-          },
-        ).timeout(timeout);
+        final muslLoader = await _getMuslLoader(rootfs);
+
+        // ESTRATEGIA A: linker64 -> ld-musl -> binario
+        // ld-musl es el dynamic linker nativo de Alpine. linker64 lo carga
+        // como PIE, y ld-musl se encarga de cargar el binario musl-linked.
+        if (muslLoader != null) {
+          try {
+            _logMsg('ld-musl: $binName $args');
+            final result = await Process.run(
+              linker, [muslLoader, binPath, ...args],
+              environment: env,
+              workingDirectory: rootfs,
+            ).timeout(timeout);
+            exitCode = result.exitCode;
+            final out = result.stdout as String;
+            final err = result.stderr as String;
+            output = err.isNotEmpty ? '$out\n$err' : out;
+            
+            if (exitCode != 0 && output.contains('CANNOT LINK')) {
+              _logMsg('ld-musl fallo (CANNOT LINK), intentando linker64 directo');
+            } else {
+              _lastOutput = output;
+              return output;
+            }
+          } catch (e) {
+            _logMsg('ld-musl error: $e, intentando linker64 directo');
+          }
+        }
+
+        // ESTRATEGIA B: linker64 -> binario directo
+        // Funciona para binarios estaticos (sin libc.musl) como proot-rs
+        try {
+          _logMsg('linker64: $binName $args');
+          final result = await Process.run(
+            linker, [binPath, ...args],
+            environment: env,
+            workingDirectory: rootfs,
+          ).timeout(timeout);
+          final out = result.stdout as String;
+          final err = result.stderr as String;
+          output = err.isNotEmpty ? '$out\n$err' : out;
+          _lastOutput = output;
+          return output;
+        } catch (e) {
+          _logMsg('linker64 directo fallo: $e');
+        }
       }
 
+      // ESTRATEGIA C: sistema (para comandos nativos como uname, echo)
+      _logMsg('system: $command');
+      final result = await Process.run(
+        '/system/bin/sh', ['-c', command],
+        environment: {
+          'PATH': '/system/bin:/system/xbin',
+          'TERM': 'xterm-256color',
+        },
+      ).timeout(timeout);
       final out = result.stdout as String;
       final err = result.stderr as String;
-      _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
-      return _lastOutput;
+      output = err.isNotEmpty ? '$out\n$err' : out;
+      _lastOutput = output;
+      return output;
     } on TimeoutException {
       _lastOutput = '\n[Timeout] ${timeout.inSeconds}s excedido\n';
       return _lastOutput;
@@ -169,15 +225,17 @@ class ProotService extends ChangeNotifier {
   }
 
   // ════════════════════════════════════════════════════════════════
-  // runShell: Shell interactiva via linker64 + busybox + wrappers
+  // runShell: Shell interactiva via linker64 + ld-musl + busybox + wrappers
   // ════════════════════════════════════════════════════════════════
   Future<String> runShell(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     final rootfs = _rootfsPath ?? '${await _appDir}/rootfs';
     final linker = await _linker;
     if (linker == null) return '[Error] linker64 no encontrado';
 
+    final muslLoader = await _getMuslLoader(rootfs);
     final busyboxPath = '$rootfs/bin/busybox';
-    if (!await File(busyboxPath).exists() || await File(busyboxPath).length() < 100) {
+    
+    if (muslLoader == null || !await File(busyboxPath).exists() || await File(busyboxPath).length() < 100) {
       return runCommand(command);
     }
 
@@ -188,7 +246,8 @@ class ProotService extends ChangeNotifier {
       wrappers.writeln('export HOME=/root');
       wrappers.writeln('export TERM=xterm-256color');
 
-      // Generar wrapper functions para cada binario del rootfs
+      // Wrapper functions: linker64 -> ld-musl -> binario
+      // Esto permite que el shell busybox ejecute comandos musl-linked
       for (final dir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/usr/local/bin']) {
         final d = Directory('$rootfs$dir');
         if (!await d.exists()) continue;
@@ -199,7 +258,8 @@ class ProotService extends ChangeNotifier {
               if (size > 1000) {
                 final name = entry.uri.pathSegments.last;
                 if (name == 'busybox' || name == 'sh') continue;
-                wrappers.writeln("$name() { $linker '${entry.path}' \"\$@\"; }");
+                // Usar ld-musl como loader para binarios musl
+                wrappers.writeln("$name() { $linker '$muslLoader' '${entry.path}' \"\$@\"; }");
               }
             }
           }
@@ -210,7 +270,7 @@ class ProotService extends ChangeNotifier {
 
       final result = await Process.run(
         linker,
-        [busyboxPath, 'sh', '-c', wrappers.toString()],
+        [muslLoader, busyboxPath, 'sh', '-c', wrappers.toString()],
         environment: {
           'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
           'HOME': '/root',
@@ -250,26 +310,27 @@ class ProotService extends ChangeNotifier {
       await Directory(rootfs).create(recursive: true);
 
       bool ok = false;
-
-      // 1: Asset embebido
       ok = await _setupFromAsset(rootfs);
       if (ok) _logMsg('✓ Rootfs desde asset');
-
-      // 2: Minirootfs descargado
       if (!ok) {
         ok = await _setupWithMinirootfs(appDir, rootfs);
         if (ok) _logMsg('✓ Rootfs desde minirootfs');
       }
-
       if (!ok) throw Exception('No se pudo crear el rootfs');
 
-      // Reparar hardlinks
       _logMsg('Reparando hardlinks...');
       await _fixHardlinks(rootfs);
 
-      // Asegurar libreria musl
       _logMsg('Verificando libreria musl...');
       await _ensureMuslLib(rootfs);
+
+      // Verificar que ld-musl existe (necesario como loader)
+      final muslLoader = await _getMuslLoader(rootfs);
+      if (muslLoader != null) {
+        _logMsg('Loader musl: $muslLoader (${await File(muslLoader).length()} bytes)');
+      } else {
+        _logMsg('WARNING: No se encontro ld-musl, los comandos musl no funcionaran');
+      }
 
       // DNS
       _downloadProgress = 0.80;
@@ -309,8 +370,6 @@ class ProotService extends ChangeNotifier {
           }
         } catch (_) { continue; }
       }
-
-      // Ultimo recurso
       if (!shOk) {
         outer:
         for (final dir in ['/bin', '/sbin', '/usr/bin']) {
@@ -336,17 +395,16 @@ class ProotService extends ChangeNotifier {
         _logMsg(_statusMessage);
         notifyListeners();
 
-        // Probar comando basico para verificar linker64
+        // Test basico: listar bin del rootfs usando ld-musl
         try {
-          final testResult = await runCommand('busybox ls /bin',
+          final testResult = await runCommand('ls /bin',
               timeout: const Duration(seconds: 10));
-          _logMsg('Test linker64: ${testResult.length > 100 ? testResult.substring(0, 100) + "..." : testResult}');
+          _logMsg('Test ld-musl ls: ${testResult.length > 100 ? testResult.substring(0, 100) + "..." : (testResult.isEmpty ? "(vacio)" : testResult)}');
         } catch (e) {
-          _logMsg('Test linker64 fallo: $e');
+          _logMsg('Test ld-musl fallo: $e');
         }
 
         await installEssentials();
-
         _statusMessage = 'Linux listo - Todo instalado';
         _logMsg(_statusMessage);
       } else {
@@ -381,7 +439,6 @@ class ProotService extends ChangeNotifier {
 
     if (muslOk) return;
 
-    // Descargar musl desde Alpine
     _logMsg('musl libc no encontrada, descargando...');
     _statusMessage = 'Descargando musl libc...';
     notifyListeners();
@@ -398,7 +455,6 @@ class ProotService extends ChangeNotifier {
           await sink.close();
           _logMsg('musl.apk descargado');
 
-          // Extraer .so del .apk (formato tar.gz)
           final bytes = await File(apkPath).readAsBytes();
           try {
             final gz = GZipDecoder().decodeBytes(bytes);
@@ -475,7 +531,6 @@ class ProotService extends ChangeNotifier {
           } catch (e) { _logMsg('system tar fallo: $e'); }
         }
       }
-
       _logMsg('Fallback archive package Dart');
       return _extractTarDart(tarPath, rootfs);
     } catch (e) {
@@ -490,15 +545,13 @@ class ProotService extends ChangeNotifier {
       final bytes = await File(tgzPath).readAsBytes();
       final gz = GZipDecoder().decodeBytes(bytes);
       final arch = TarDecoder().decodeBytes(gz);
-
       for (final entry in arch) {
         String name = entry.name;
         if (name.startsWith('./')) name = name.substring(2);
         if (name.isEmpty || name == '.') continue;
         final outPath = '$rootfs/$name';
         if (name.endsWith('/')) {
-          await Directory(outPath).create(recursive: true);
-          continue;
+          await Directory(outPath).create(recursive: true); continue;
         }
         await Directory(outPath).parent.create(recursive: true);
         if (entry.isSymbolicLink) {
@@ -574,7 +627,6 @@ class ProotService extends ChangeNotifier {
     if (await File(bbPath).exists() && await File(bbPath).length() > 0) {
       bbData = await File(bbPath).readAsBytes();
     }
-
     List<int>? muslData;
     for (final lib in ['ld-musl-aarch64.so.1', 'libc.musl-aarch64.so.1']) {
       final f = File('$rootfs/lib/$lib');
@@ -583,7 +635,6 @@ class ProotService extends ChangeNotifier {
         break;
       }
     }
-
     int fixed = 0;
     for (final dir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/lib', '/usr/lib']) {
       final d = Directory('$rootfs$dir');
@@ -606,7 +657,6 @@ class ProotService extends ChangeNotifier {
         }
       } catch (_) {}
     }
-
     if (bbData != null) {
       final shFile = File('$rootfs/bin/sh');
       if (!await shFile.exists() || await shFile.length() == 0) {
@@ -633,8 +683,7 @@ class ProotService extends ChangeNotifier {
                 final rf = File(resolved);
                 if (await rf.exists() && await rf.length() > 0) {
                   try { await entity.delete(); } catch (_) {}
-                  await File(entity.path).writeAsBytes(await rf.readAsBytes());
-                  fixed++;
+                  await File(entity.path).writeAsBytes(await rf.readAsBytes()); fixed++;
                 }
               }
             } catch (_) {}
@@ -714,7 +763,7 @@ class ProotService extends ChangeNotifier {
       _logMsg('openssh fallo: $e');
     }
 
-    _logMsg('Instalando herramientas de red...');
+    _logMsg('Instalando utilidades...');
     _statusMessage = 'Instalando utilidades...';
     notifyListeners();
     try {
