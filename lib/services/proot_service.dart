@@ -20,6 +20,7 @@ class ProotService extends ChangeNotifier {
   Map<String, String> _apkIndex = {};
   final Set<String> _installedPkgs = {};
   String _arch = '';
+  bool _bionicInstalled = false;
 
   List<String> get log => List.unmodifiable(_log);
   String get logText => _log.join('\n');
@@ -36,6 +37,7 @@ class ProotService extends ChangeNotifier {
   String? get rootfsPath => _rootfsPath;
   Map<String, String> get apkIndex => Map.unmodifiable(_apkIndex);
   Set<String> get installedPackages => Set.unmodifiable(_installedPkgs);
+  bool get hasBionic => _bionicInstalled;
 
   String? _rootfsPath;
   String _alpineMirror = 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main';
@@ -56,32 +58,51 @@ class ProotService extends ChangeNotifier {
       else if (arch.startsWith('armv')) _arch = 'armv7';
       else _arch = arch;
     } catch (e) {
-      _arch = 'aarch64'; // default
+      _arch = 'aarch64';
     }
     _alpineMirror = 'https://dl-cdn.alpinelinux.org/alpine/$_alpineVersion/main/$_arch';
     _logMsg('Arquitectura: $_arch');
     return _arch;
   }
 
+  Future<String> get _termuxArch async {
+    final a = await getArchitecture();
+    if (a == 'aarch64') return 'aarch64';
+    if (a == 'armv7') return 'arm';
+    if (a == 'x86_64') return 'x86_64';
+    return 'aarch64';
+  }
+
   // ═══════════════════════════════════════════════════════
-  // runCommand: system shell (toybox) con PATH rootfs
-  // Usa /system/bin/sh que permite execve desde /system/bin
+  // runCommand: system shell (toybox) con PATH rootfs + bionic
   // ═══════════════════════════════════════════════════════
   Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     _lastOutput = '';
     final rootfs = _rootfsPath ?? '${await _appDir}/rootfs';
+    final termuxDir = '${await _appDir}/termux';
 
     try {
+      String path = '/system/bin:/system/xbin';
+      if (_bionicInstalled) {
+        path += ':$termuxDir/bin';
+      }
+      path += ':$rootfs/usr/local/sbin:$rootfs/usr/local/bin'
+              ':$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin';
+
+      final env = <String, String>{
+        'PATH': path,
+        'HOME': '/root',
+        'TERM': 'xterm-256color',
+      };
+      if (_bionicInstalled) {
+        env['LD_LIBRARY_PATH'] = '$termuxDir/lib';
+        env['PREFIX'] = termuxDir;
+      }
+
       _logMsg('cmd: $command');
       final result = await Process.run(
         '/system/bin/sh', ['-c', command],
-        environment: {
-          'PATH': '/system/bin:/system/xbin:' +
-                  '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:' +
-                  '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin',
-          'HOME': '/root',
-          'TERM': 'xterm-256color',
-        },
+        environment: env,
         workingDirectory: rootfs,
       ).timeout(timeout);
       final out = result.stdout as String;
@@ -92,9 +113,6 @@ class ProotService extends ChangeNotifier {
       catch (e) { _lastOutput = '\n[Error] $e\n'; return _lastOutput; }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // runShell: interactiva
-  // ═══════════════════════════════════════════════════════
   Future<String> runShell(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     return runCommand(command, timeout: timeout);
   }
@@ -108,19 +126,34 @@ class ProotService extends ChangeNotifier {
       await getArchitecture();
       final rootfs = '${await _appDir}/rootfs';
       _rootfsPath = rootfs;
+
+      // Check Alpine rootfs
       if (await Directory(rootfs).exists() && await File('$rootfs/bin/sh').exists()) {
         final st = await File('$rootfs/bin/sh').stat();
         if (st.size > 1000) {
           _initialized = true;
           _statusMessage = 'Linux listo';
-          _logMsg('Rootfs OK, system shell disponible');
-          notifyListeners();
-          return true;
+          _logMsg('Rootfs OK');
         }
       }
-      _statusMessage = 'Linux no instalado - pulsa Setup';
+
+      // Check bionic binaries
+      final termuxDir = '${await _appDir}/termux';
+      _bionicInstalled = await File('$termuxDir/bin/sshd').exists() &&
+                         await File('$termuxDir/bin/bash').exists();
+
+      if (_bionicInstalled) {
+        _logMsg('Bionic binaries OK (sshd, bash)');
+        if (_statusMessage == 'Linux listo') {
+          _statusMessage = 'Linux listo + bionic';
+        }
+      }
+
+      if (!_initialized && !_bionicInstalled) {
+        _statusMessage = 'Linux no instalado - pulsa Setup';
+      }
       notifyListeners();
-      return false;
+      return _initialized;
     } catch (e) { _logMsg('Error: $e'); return false; }
   }
 
@@ -145,19 +178,17 @@ class ProotService extends ChangeNotifier {
       await Directory(appDir).create(recursive: true);
       await Directory(rootfs).create(recursive: true);
 
-      // 1: Alpine rootfs desde asset
+      // Etapa 1: Alpine rootfs
       _statusMessage = 'Extrayendo rootfs Alpine...';
       notifyListeners();
       bool ok = await _setupFromAsset(rootfs);
       if (!ok) ok = await _setupWithMinirootfs(appDir, rootfs);
-      if (!ok) throw Exception('No se pudo extraer rootfs');
+      if (!ok) throw Exception('No se pudo extraer rootfs Alpine');
       _logMsg('Rootfs Alpine OK');
 
-      // 2: Reparar hardlinks y symlinks
       await _fixHardlinks(rootfs);
       await _fixAbsoluteSymlinks(rootfs);
 
-      // 3: Configurar red
       _downloadProgress = 0.50;
       _statusMessage = 'Configurando red...';
       notifyListeners();
@@ -167,31 +198,44 @@ class ProotService extends ChangeNotifier {
       await File('$rootfs/etc/hosts').writeAsString(
         '127.0.0.1 localhost\n::1 localhost\n');
 
-      // 4: Verificar shell
-      _downloadProgress = 0.70;
+      // Verificar shell
+      _downloadProgress = 0.60;
       _statusMessage = 'Verificando sistema...';
       notifyListeners();
       try {
-        final test = await runCommand('echo "SHELL_OK"',
-            timeout: const Duration(seconds: 10));
+        final test = await runCommand('echo "SHELL_OK"', timeout: const Duration(seconds: 10));
         _logMsg('Shell: ${test.trim()}');
       } catch (e) { _logMsg('Shell: $e'); }
 
-      // 5: Cargar indice APK
-      _downloadProgress = 0.80;
-      _statusMessage = 'Cargando indice de paquetes...';
+      // Etapa 2: Bionic binaries (TERMUX bootstrap)
+      _downloadProgress = 0.65;
+      _statusMessage = 'Instalando binarios bionic (sshd, bash)...';
       notifyListeners();
-      await _refreshApkIndex(rootfs);
+      await _installBionicBinaries(appDir);
 
-      // 6: Instalar paquetes esenciales via Dart
+      // Etapa 3: Cargar indice APK
+      if (!_bionicInstalled) {
+        _downloadProgress = 0.80;
+        _statusMessage = 'Cargando indice de paquetes...';
+        notifyListeners();
+        await _refreshApkIndex(rootfs);
+      }
+
+      // Etapa 4: Paquetes esenciales
       _downloadProgress = 0.85;
       _statusMessage = 'Instalando paquetes esenciales...';
       notifyListeners();
-      await _installEssentials(rootfs);
+      if (!_bionicInstalled) {
+        await _installEssentials(rootfs);
+      }
 
       _downloadProgress = 1.0;
       _initialized = true;
-      _statusMessage = 'Linux listo - Todo instalado';
+      if (_bionicInstalled) {
+        _statusMessage = 'Linux listo + bionic (sshd, bash OK)';
+      } else {
+        _statusMessage = 'Linux listo (sin bionic)';
+      }
       _logMsg('=== FIN SETUP ===');
     } catch (e) {
       _logMsg('EXCEPCION: $e');
@@ -205,10 +249,161 @@ class ProotService extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════
+  // BIONIC BINARIES (Termux bootstrap)
+  // ═══════════════════════════════════════════════════════
+  Future<void> _installBionicBinaries(String appDir) async {
+    final termuxDir = '$appDir/termux';
+
+    // Check if already installed
+    if (await File('$termuxDir/bin/sshd').exists() &&
+        await File('$termuxDir/bin/bash').exists()) {
+      _bionicInstalled = true;
+      _logMsg('Bionic bins: OK (cached)');
+      return;
+    }
+
+    final tArch = await _termuxArch;
+    final zipUrl = 'https://github.com/termux/termux-packages/releases/download/'
+                   'bootstrap-archives/bootstrap-$tArch.zip';
+    final zipPath = '$appDir/bootstrap.zip';
+
+    _logMsg('Descargando bootstrap Termux ($tArch)...');
+    try {
+      await _downloadFile(zipUrl, zipPath, 0.65, 0.75);
+    } catch (e) {
+      _logMsg('Error descargando bootstrap: $e');
+      _statusMessage = 'Bootstrap no disponible, continuando sin bionic';
+      notifyListeners();
+      return;
+    }
+
+    _statusMessage = 'Extrayendo bootstrap Termux...';
+    notifyListeners();
+    _logMsg('Extrayendo bootstrap...');
+
+    try {
+      await Directory(termuxDir).create(recursive: true);
+
+      // Intentar con toybox unzip
+      bool extracted = false;
+      for (final tool in ['/system/bin/toybox', '/system/bin/busybox']) {
+        if (await File(tool).exists()) {
+          try {
+            final r = await Process.run(
+              tool, ['unzip', '-o', zipPath, '-d', termuxDir],
+            ).timeout(const Duration(seconds: 120));
+            if (r.exitCode == 0) { extracted = true; break; }
+          } catch (_) {}
+        }
+      }
+
+      // Fallback: Dart ZipDecoder
+      if (!extracted) {
+        _logMsg('Usando ZipDecoder Dart...');
+        final data = await File(zipPath).readAsBytes();
+        final archive = ZipDecoder().decodeBytes(data);
+        for (final entry in archive) {
+          final name = entry.name;
+          if (name.endsWith('/')) {
+            await Directory('$termuxDir/$name').create(recursive: true);
+          } else if (entry.isFile) {
+            final f = File('$termuxDir/$name');
+            await f.parent.create(recursive: true);
+            await f.writeAsBytes(entry.content as List<int>);
+          }
+        }
+        extracted = true;
+      }
+
+      if (!extracted) {
+        _logMsg('No se pudo extraer bootstrap');
+        return;
+      }
+
+      // Verificar archivos esenciales
+      _bionicInstalled = await File('$termuxDir/bin/sshd').exists() &&
+                        await File('$termuxDir/bin/bash').exists() &&
+                        await File('$termuxDir/bin/ssh-keygen').exists();
+
+      if (_bionicInstalled) {
+        _logMsg('OK: sshd, ssh-keygen, bash disponibles');
+        // Configurar SSH
+        await _setupBionicSsh(appDir, termuxDir);
+      } else {
+        _logMsg('Algunos binarios faltan en bootstrap');
+        // Listar lo que hay
+        for (final d in ['/bin', '/lib']) {
+          try {
+            final files = await Directory('$termuxDir$d').list().toList();
+            _logMsg('$d: ${files.length} archivos');
+          } catch (_) {}
+        }
+      }
+
+      // Limpiar zip
+      try { await File(zipPath).delete(); } catch (_) {}
+    } catch (e) {
+      _logMsg('Error extrayendo bootstrap: $e');
+    }
+  }
+
+  Future<void> _setupBionicSsh(String appDir, String termuxDir) async {
+    _logMsg('Configurando SSH bionic...');
+
+    // Crear directorio de configuracion SSH
+    await Directory('$termuxDir/etc/ssh').create(recursive: true);
+
+    // Crear sshd_config
+    final sshdConfig = '''# Generado por Linux Container App
+Port 2222
+PermitRootLogin yes
+PasswordAuthentication yes
+PubkeyAuthentication yes
+ChallengeResponseAuthentication no
+UsePAM no
+Subsystem sftp $termuxDir/libexec/sftp-server
+HostKey $termuxDir/etc/ssh/ssh_host_rsa_key
+HostKey $termuxDir/etc/ssh/ssh_host_ecdsa_key
+HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
+''';
+    try {
+      await File('$termuxDir/etc/ssh/sshd_config').writeAsString(sshdConfig);
+    } catch (e) {
+      _logMsg('Error config: $e');
+    }
+
+    // Generar host keys si no existen
+    for (final key in ['ssh_host_rsa_key', 'ssh_host_ecdsa_key', 'ssh_host_ed25519_key']) {
+      if (!await File('$termuxDir/etc/ssh/$key').exists()) {
+        try {
+          _logMsg('Generando $key...');
+          await Process.run('/system/bin/sh', ['-c'],
+            environment: {
+              'PATH': '$termuxDir/bin:/system/bin',
+              'LD_LIBRARY_PATH': '$termuxDir/lib',
+              'HOME': '/root',
+            },
+          );
+          await Process.run(
+            '$termuxDir/bin/ssh-keygen', ['-t', key.contains('rsa') ? 'rsa' :
+                key.contains('ecdsa') ? 'ecdsa' : 'ed25519',
+                '-f', '$termuxDir/etc/ssh/$key', '-N', '', '-q'],
+            environment: {
+              'LD_LIBRARY_PATH': '$termuxDir/lib',
+              'HOME': '/data/data/com.micloj.linux_container_app/files',
+            },
+          ).timeout(const Duration(seconds: 30));
+        } catch (e) {
+          _logMsg('Error generando $key');
+        }
+      }
+    }
+    _logMsg('SSH bionic configurado');
+  }
+
+  // ═══════════════════════════════════════════════════════
   // PUBLIC APK MANAGEMENT API
   // ═══════════════════════════════════════════════════════
-
-  /// Refresca el indice APKINDEX desde el mirror Alpine
   Future<void> refreshApkIndex() async {
     final rootfs = _rootfsPath ?? '${await _appDir}/rootfs';
     await _refreshApkIndex(rootfs);
@@ -220,7 +415,6 @@ class ProotService extends ChangeNotifier {
     _logMsg('APKINDEX: ${_apkIndex.length} paquetes');
   }
 
-  /// Busca paquetes por nombre
   List<Map<String, String>> searchPackages(String query, {int limit = 50}) {
     final results = <Map<String, String>>[];
     final q = query.toLowerCase();
@@ -233,7 +427,6 @@ class ProotService extends ChangeNotifier {
     return results;
   }
 
-  /// Instala un paquete Alpine via Dart (extrae .apk al rootfs)
   Future<bool> installApk(String pkgName) async {
     final rootfs = _rootfsPath ?? '${await _appDir}/rootfs';
     final ver = _apkIndex[pkgName];
@@ -243,17 +436,12 @@ class ProotService extends ChangeNotifier {
     return ok;
   }
 
-  /// Elimina un paquete instalado
   Future<bool> removeApk(String pkgName) async {
-    final rootfs = _rootfsPath ?? '${await _appDir}/rootfs';
-    // Intentar eliminar archivos conocidos (no tenemos DB de archivos)
-    // Por ahora solo marcamos como no instalado
     _installedPkgs.remove(pkgName);
     _logMsg('$pkgName: marcado como eliminado');
     return true;
   }
 
-  /// Lista paquetes instalados
   List<Map<String, String>> listInstalledPackages() {
     return _installedPkgs.map((name) => {
       'name': name,
@@ -261,7 +449,6 @@ class ProotService extends ChangeNotifier {
     }).toList();
   }
 
-  /// Obtiene informacion de un paquete
   String getPackageInfo(String pkgName) {
     final ver = _apkIndex[pkgName];
     if (ver == null) return 'Paquete no encontrado: $pkgName';
@@ -270,10 +457,8 @@ class ProotService extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════
-  // PROOT ALTERNATIVE: Direct command execution
+  // TCP Server (SSH alternative)
   // ═══════════════════════════════════════════════════════
-  /// Inicia un servidor TCP simple para acceso remoto (alternativa a SSH)
-  /// Usa Dart's HttpServer para crear un endpoint de comandos
   Future<bool> startTcpCommandServer(int port) async {
     try {
       final server = await HttpServer.bind('0.0.0.0', port);
@@ -301,8 +486,6 @@ class ProotService extends ChangeNotifier {
   // ═══════════════════════════════════════════════════════
   // PRIVATE: Alpine APK Management
   // ═══════════════════════════════════════════════════════
-
-  /// Parsea APKINDEX.tar.gz y devuelve {nombre: version}
   Future<Map<String, String>> _getApkVersions(String rootfs) async {
     await getArchitecture();
     final idxUrl = '$_alpineMirror/APKINDEX.tar.gz';
@@ -340,7 +523,6 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  /// Extrae un archivo de datos tar raw
   String? _extractFileFromTar(List<int> tarData, String fileName) {
     int pos = 0;
     while (pos + 512 <= tarData.length) {
@@ -362,7 +544,6 @@ class ProotService extends ChangeNotifier {
     return null;
   }
 
-  /// Descarga e instala un .apk (gzip+tar) al rootfs
   Future<bool> _installApk(String pkg, String ver, String rootfs) async {
     await getArchitecture();
     final url = '$_alpineMirror/$pkg-$ver.apk';
@@ -387,7 +568,6 @@ class ProotService extends ChangeNotifier {
           await Directory('$rootfs/$name').create(recursive: true);
           files++; continue;
         }
-        // Saltar scripts de instalacion
         if (name.contains('.pre-install') || name.contains('.post-install') ||
             name.contains('.trigger')) continue;
 
@@ -405,21 +585,14 @@ class ProotService extends ChangeNotifier {
                 files++;
               } catch (_) {}
             }
-          } else {
-            try {
-              if (await Link(target.path).exists()) await Link(target.path).delete();
-              await target.writeAsBytes(utf8.encode(linkTarget));
-              files++;
-            } catch (_) {}
           }
           continue;
         }
 
         if (entry.isFile && entry.content.isNotEmpty) {
           await target.writeAsBytes(entry.content as List<int>);
-          // Aplicar permisos de ejecucion si corresponde
           final mode = entry.mode;
-          if (mode != null && (mode & 0x49) != 0) { // any exec bit
+          if (mode != null && (mode & 0x49) != 0) {
             try { await Process.run('chmod', ['+x', target.path]); } catch (_) {}
           }
           files++;
@@ -434,7 +607,6 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  /// Instala paquetes esenciales
   Future<void> _installEssentials(String rootfs) async {
     _logMsg('=== Instalando paquetes esenciales (Dart) ===');
     if (_apkIndex.isEmpty) {
@@ -520,7 +692,6 @@ class ProotService extends ChangeNotifier {
         if (n.isEmpty || n == '.') continue;
         if (n.endsWith('/')) { await Directory('$rootfs/$n').create(recursive: true); continue; }
         await Directory('$rootfs/$n').parent.create(recursive: true);
-        // Symlink absolutos: copiar contenido
         if (entry.isSymbolicLink && (entry.symbolicLink ?? '').startsWith('/')) {
           try {
             final r = File('$rootfs${entry.symbolicLink}');
@@ -611,6 +782,7 @@ class ProotService extends ChangeNotifier {
     try { await Directory(d).delete(recursive: true); } catch (_) {}
     _initialized = false; _rootfsPath = null;
     _apkIndex = {}; _installedPkgs.clear();
+    _bionicInstalled = false;
     _statusMessage = 'Reiniciado'; _log.clear(); _logMsg('Reiniciado');
     notifyListeners();
   }
