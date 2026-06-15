@@ -43,11 +43,12 @@ class ProotService extends ChangeNotifier {
   String _alpineMirror = 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main';
   static const String _alpineVersion = 'v3.24';
 
+  static const String _termuxMirror = 'https://packages.termux.org/apt/termux-main';
+
   Future<String> get _appDir async {
     return '${(await getApplicationDocumentsDirectory()).path}/linux_container';
   }
 
-  /// Detect device architecture
   Future<String> getArchitecture() async {
     if (_arch.isNotEmpty) return _arch;
     try {
@@ -65,16 +66,8 @@ class ProotService extends ChangeNotifier {
     return _arch;
   }
 
-  Future<String> get _termuxArch async {
-    final a = await getArchitecture();
-    if (a == 'aarch64') return 'aarch64';
-    if (a == 'armv7') return 'arm';
-    if (a == 'x86_64') return 'x86_64';
-    return 'aarch64';
-  }
-
   // ═══════════════════════════════════════════════════════
-  // runCommand: system shell (toybox) con PATH rootfs + bionic
+  // runCommand
   // ═══════════════════════════════════════════════════════
   Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     _lastOutput = '';
@@ -83,9 +76,7 @@ class ProotService extends ChangeNotifier {
 
     try {
       String path = '/system/bin:/system/xbin';
-      if (_bionicInstalled) {
-        path += ':$termuxDir/bin';
-      }
+      if (_bionicInstalled) path += ':$termuxDir/bin';
       path += ':$rootfs/usr/local/sbin:$rootfs/usr/local/bin'
               ':$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin';
 
@@ -127,7 +118,6 @@ class ProotService extends ChangeNotifier {
       final rootfs = '${await _appDir}/rootfs';
       _rootfsPath = rootfs;
 
-      // Check Alpine rootfs
       if (await Directory(rootfs).exists() && await File('$rootfs/bin/sh').exists()) {
         final st = await File('$rootfs/bin/sh').stat();
         if (st.size > 1000) {
@@ -137,16 +127,13 @@ class ProotService extends ChangeNotifier {
         }
       }
 
-      // Check bionic binaries
       final termuxDir = '${await _appDir}/termux';
       _bionicInstalled = await File('$termuxDir/bin/sshd').exists() &&
                          await File('$termuxDir/bin/bash').exists();
 
       if (_bionicInstalled) {
-        _logMsg('Bionic binaries OK (sshd, bash)');
-        if (_statusMessage == 'Linux listo') {
-          _statusMessage = 'Linux listo + bionic';
-        }
+        _logMsg('Bionic OK (sshd, bash)');
+        if (_initialized) _statusMessage = 'Linux listo + bionic';
       }
 
       if (!_initialized && !_bionicInstalled) {
@@ -189,7 +176,7 @@ class ProotService extends ChangeNotifier {
       await _fixHardlinks(rootfs);
       await _fixAbsoluteSymlinks(rootfs);
 
-      _downloadProgress = 0.50;
+      _downloadProgress = 0.40;
       _statusMessage = 'Configurando red...';
       notifyListeners();
       await Directory('$rootfs/etc').create(recursive: true);
@@ -198,8 +185,7 @@ class ProotService extends ChangeNotifier {
       await File('$rootfs/etc/hosts').writeAsString(
         '127.0.0.1 localhost\n::1 localhost\n');
 
-      // Verificar shell
-      _downloadProgress = 0.60;
+      _downloadProgress = 0.50;
       _statusMessage = 'Verificando sistema...';
       notifyListeners();
       try {
@@ -207,34 +193,32 @@ class ProotService extends ChangeNotifier {
         _logMsg('Shell: ${test.trim()}');
       } catch (e) { _logMsg('Shell: $e'); }
 
-      // Etapa 2: Bionic binaries (TERMUX bootstrap)
-      _downloadProgress = 0.65;
-      _statusMessage = 'Instalando binarios bionic (sshd, bash)...';
+      // Etapa 2: APKINDEX
+      _downloadProgress = 0.55;
+      _statusMessage = 'Cargando indice de paquetes...';
       notifyListeners();
-      await _installBionicBinaries(appDir);
+      await _refreshApkIndex(rootfs);
 
-      // Etapa 3: Cargar indice APK
+      // Etapa 3: Bionic binaries via Termux .deb
+      _downloadProgress = 0.60;
+      _statusMessage = 'Instalando binarios nativos (sshd, bash, nano)...';
+      notifyListeners();
+      await _installBionicPackages(appDir);
+
+      // Etapa 4: Alpine APK essentials (if no bionic)
       if (!_bionicInstalled) {
-        _downloadProgress = 0.80;
-        _statusMessage = 'Cargando indice de paquetes...';
+        _downloadProgress = 0.85;
+        _statusMessage = 'Instalando paquetes Alpine (fallback)...';
         notifyListeners();
-        await _refreshApkIndex(rootfs);
-      }
-
-      // Etapa 4: Paquetes esenciales
-      _downloadProgress = 0.85;
-      _statusMessage = 'Instalando paquetes esenciales...';
-      notifyListeners();
-      if (!_bionicInstalled) {
         await _installEssentials(rootfs);
       }
 
       _downloadProgress = 1.0;
       _initialized = true;
       if (_bionicInstalled) {
-        _statusMessage = 'Linux listo + bionic (sshd, bash OK)';
+        _statusMessage = 'Linux listo + bionic (nano, sshd, bash OK)';
       } else {
-        _statusMessage = 'Linux listo (sin bionic)';
+        _statusMessage = 'Linux listo (solo toybox)';
       }
       _logMsg('=== FIN SETUP ===');
     } catch (e) {
@@ -249,160 +233,304 @@ class ProotService extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════
-  // BIONIC BINARIES (Termux bootstrap)
+  // BIONIC PACKAGES via Termux .deb
   // ═══════════════════════════════════════════════════════
-  Future<void> _installBionicBinaries(String appDir) async {
+  Future<void> _installBionicPackages(String appDir) async {
     final termuxDir = '$appDir/termux';
 
-    // Check if already installed
-    if (await File('$termuxDir/bin/sshd').exists() &&
+    // Si ya instalado, verificar
+    if (await File('$termuxDir/bin/nano').exists() &&
+        await File('$termuxDir/bin/sshd').exists() &&
         await File('$termuxDir/bin/bash').exists()) {
       _bionicInstalled = true;
-      _logMsg('Bionic bins: OK (cached)');
+      _logMsg('Bionic bins OK (cached)');
       return;
     }
 
-    final tArch = await _termuxArch;
-    final zipUrl = 'https://github.com/termux/termux-packages/releases/download/'
-                   'bootstrap-archives/bootstrap-$tArch.zip';
-    final zipPath = '$appDir/bootstrap.zip';
+    final termuxArch = await _termuxArch;
 
-    _logMsg('Descargando bootstrap Termux ($tArch)...');
-    try {
-      await _downloadFile(zipUrl, zipPath, 0.65, 0.75);
-    } catch (e) {
-      _logMsg('Error descargando bootstrap: $e');
-      _statusMessage = 'Bootstrap no disponible, continuando sin bionic';
-      notifyListeners();
-      return;
-    }
-
-    _statusMessage = 'Extrayendo bootstrap Termux...';
+    // 1. Descargar Packages.gz
+    _statusMessage = 'Obteniendo indice de paquetes Termux...';
     notifyListeners();
-    _logMsg('Extrayendo bootstrap...');
+    final index = await _fetchTermuxPackageIndex(termuxArch);
+    if (index.isEmpty) {
+      _logMsg('No se pudo obtener indice Termux');
+      return;
+    }
+    _logMsg('Termux index: ${index.length} paquetes');
 
-    try {
-      await Directory(termuxDir).create(recursive: true);
+    // 2. Instalar paquetes necesarios (orden: dependencias primero)
+    final needed = [
+      'bash', 'nano', 'openssh', 'openssh-keygen', 'ca-certificates',
+      'libandroid-support', 'libcrypt', 'libopenssl', 'zlib',
+    ];
 
-      // Intentar con toybox unzip
-      bool extracted = false;
-      for (final tool in ['/system/bin/toybox', '/system/bin/busybox']) {
-        if (await File(tool).exists()) {
-          try {
-            final r = await Process.run(
-              tool, ['unzip', '-o', zipPath, '-d', termuxDir],
-            ).timeout(const Duration(seconds: 120));
-            if (r.exitCode == 0) { extracted = true; break; }
-          } catch (_) {}
+    await Directory(termuxDir).create(recursive: true);
+    for (final pkg in needed) {
+      if (!index.containsKey(pkg)) {
+        _logMsg('$pkg: no encontrado en repositorio Termux');
+        continue;
+      }
+      final info = index[pkg]!;
+      final filename = info['Filename'] ?? '';
+      if (filename.isEmpty) continue;
+
+      final debUrl = '$_termuxMirror/$filename';
+      final debName = filename.split('/').last;
+      final debPath = '$appDir/$debName';
+
+      try {
+        if (!await File(debPath).exists()) {
+          _statusMessage = 'Descargando $pkg...';
+          notifyListeners();
+          await _downloadFile(debUrl, debPath, 0.60, 0.75);
         }
+
+        _statusMessage = 'Extrayendo $pkg...';
+        notifyListeners();
+
+        // Parsear .deb (ar) y extraer data.tar.xz
+        await _extractDebPackage(debPath, termuxDir);
+
+        // Limpiar
+        try { await File(debPath).delete(); } catch (_) {}
+        _logMsg('$pkg: OK');
+      } catch (e) {
+        _logMsg('$pkg: Error: $e');
       }
+    }
 
-      // Fallback: Dart ZipDecoder
-      if (!extracted) {
-        _logMsg('Usando ZipDecoder Dart...');
-        final data = await File(zipPath).readAsBytes();
-        final archive = ZipDecoder().decodeBytes(data);
-        for (final entry in archive) {
-          final name = entry.name;
-          if (name.endsWith('/')) {
-            await Directory('$termuxDir/$name').create(recursive: true);
-          } else if (entry.isFile) {
-            final f = File('$termuxDir/$name');
-            await f.parent.create(recursive: true);
-            await f.writeAsBytes(entry.content as List<int>);
-          }
-        }
-        extracted = true;
-      }
-
-      if (!extracted) {
-        _logMsg('No se pudo extraer bootstrap');
-        return;
-      }
-
-      // Verificar archivos esenciales
-      _bionicInstalled = await File('$termuxDir/bin/sshd').exists() &&
-                        await File('$termuxDir/bin/bash').exists() &&
-                        await File('$termuxDir/bin/ssh-keygen').exists();
-
-      if (_bionicInstalled) {
-        _logMsg('OK: sshd, ssh-keygen, bash disponibles');
-        // Configurar SSH
-        await _setupBionicSsh(appDir, termuxDir);
-      } else {
-        _logMsg('Algunos binarios faltan en bootstrap');
-        // Listar lo que hay
-        for (final d in ['/bin', '/lib']) {
-          try {
-            final files = await Directory('$termuxDir$d').list().toList();
-            _logMsg('$d: ${files.length} archivos');
-          } catch (_) {}
-        }
-      }
-
-      // Limpiar zip
-      try { await File(zipPath).delete(); } catch (_) {}
-    } catch (e) {
-      _logMsg('Error extrayendo bootstrap: $e');
+    // Verificar
+    _bionicInstalled = await File('$termuxDir/bin/nano').exists() &&
+                       await File('$termuxDir/bin/bash').exists();
+    if (_bionicInstalled) {
+      _logMsg('Bionic bins: OK');
+      // Configurar SSH
+      await _setupBionicSsh(termuxDir);
+      // Arreglar permisos
+      await _fixBionicPermissions(termuxDir);
+    } else {
+      _logMsg('Bionic bins: incompleta');
+      final b = await Directory('$termuxDir/bin').list().toList();
+      _logMsg('bin/ tiene ${b.length} archivos');
     }
   }
 
-  Future<void> _setupBionicSsh(String appDir, String termuxDir) async {
+  Future<Map<String, Map<String, String>>> _fetchTermuxPackageIndex(String arch) async {
+    final url = '$_termuxMirror/dists/stable/main/binary-$arch/Packages.gz';
+    final idxPath = '${await _appDir}/termux-packages.gz';
+    try {
+      await _downloadFile(url, idxPath, 0.55, 0.60);
+      final data = await File(idxPath).readAsBytes();
+      final decoded = GZipDecoder().decodeBytes(data);
+      final content = utf8.decode(decoded);
+
+      final result = <String, Map<String, String>>{};
+      Map<String, String> current = {};
+      for (final line in content.split('\n')) {
+        if (line.trim().isEmpty) {
+          if (current.containsKey('Package')) {
+            result[current['Package']!] = Map.from(current);
+          }
+          current = {};
+          continue;
+        }
+        final colon = line.indexOf(':');
+        if (colon > 0) {
+          current[line.substring(0, colon).trim()] =
+              line.substring(colon + 1).trim();
+        }
+      }
+      if (current.containsKey('Package')) {
+        result[current['Package']!] = Map.from(current);
+      }
+      try { await File(idxPath).delete(); } catch (_) {}
+      return result;
+    } catch (e) {
+      _logMsg('Error index Termux: $e');
+      return {};
+    }
+  }
+
+  Future<void> _extractDebPackage(String debPath, String targetDir) async {
+    final data = await File(debPath).readAsBytes();
+
+    // Parsear ar format para extraer data.tar.xz
+    final tarXzData = _extractFromAr(data, 'data.tar.xz');
+    if (tarXzData == null) {
+      // Intentar data.tar.gz
+      final tarGzData = _extractFromAr(data, 'data.tar.gz');
+      if (tarGzData == null) throw Exception('No se encontro data.tar.* en .deb');
+      // Extraer tar.gz con Dart
+      final tarDecoded = GZipDecoder().decodeBytes(tarGzData);
+      await _extractTarToDir(tarDecoded, targetDir);
+      return;
+    }
+
+    // Tenemos data.tar.xz - extraer con toybox
+    final xzPath = '$debPath.tar.xz';
+    await File(xzPath).writeAsBytes(tarXzData!);
+
+    // Intentar varios metodos de extraccion
+    bool extracted = false;
+
+    // Metodo 1: toybox tar -xJf
+    for (final tool in ['/system/bin/toybox', '/system/bin/busybox']) {
+      if (await File(tool).exists()) {
+        try {
+          final r = await Process.run(
+            tool, ['tar', '-xJf', xzPath, '-C', targetDir],
+          ).timeout(const Duration(seconds: 30));
+          if (r.exitCode == 0) { extracted = true; break; }
+        } catch (_) {}
+      }
+    }
+
+    // Metodo 2: toybox xzcat | tar -x
+    if (!extracted && await File('/system/bin/toybox').exists()) {
+      try {
+        final r = await Process.run(
+          '/system/bin/sh', ['-c', r'toybox xzcat "$1" | toybox tar -x -C "$2"', '_', xzPath, targetDir],
+        ).timeout(const Duration(seconds: 30));
+        if (r.exitCode == 0) extracted = true;
+      } catch (_) {}
+    }
+
+    // Metodo 3: toybox xz -d | tar -x (pipe directo)
+    if (!extracted && await File('/system/bin/toybox').exists()) {
+      try {
+        final xzOut = await Process.run(
+          '/system/bin/toybox', ['xzcat', xzPath],
+        ).timeout(const Duration(seconds: 30));
+        if (xzOut.exitCode == 0) {
+          final tarProc2 = await Process.run(
+            '/system/bin/toybox', ['tar', '-x', '-C', targetDir],
+          ).timeout(const Duration(seconds: 30));
+          if (tarProc2.exitCode == 0) extracted = true;
+        }
+      } catch (_) {}
+    }
+
+    try { await File(xzPath).delete(); } catch (_) {}
+
+    if (!extracted) throw Exception('No se pudo extraer data.tar.xz');
+  }
+
+  Future<void> _extractTarToDir(List<int> tarData, String targetDir) async {
+    final tar = TarDecoder().decodeBytes(tarData);
+    for (final entry in tar) {
+      String name = entry.name;
+      if (name.startsWith('./')) name = name.substring(2);
+      if (name.isEmpty || name == '.') continue;
+      if (name.endsWith('/')) {
+        await Directory('$targetDir/$name').create(recursive: true);
+        continue;
+      }
+      final f = File('$targetDir/$name');
+      await f.parent.create(recursive: true);
+      if (entry.isFile && entry.content.isNotEmpty) {
+        await f.writeAsBytes(entry.content as List<int>);
+        final mode = entry.mode;
+        if (mode != null && (mode & 0x49) != 0) {
+          try { await Process.run('chmod', ['+x', f.path]); } catch (_) {}
+        }
+      }
+    }
+  }
+
+  /// Extrae un archivo de un ar archive (.deb)
+  List<int>? _extractFromAr(List<int> arData, String fileName) {
+    if (arData.length < 8) return null;
+    final magic = String.fromCharCodes(arData.sublist(0, 8));
+    if (magic != '!<arch>\n') return null;
+
+    int pos = 8;
+    while (pos + 60 <= arData.length) {
+      // Nombre: 16 bytes
+      final nameBytes = arData.sublist(pos, pos + 16);
+      final name = String.fromCharCodes(nameBytes).split('\x00')[0].trim();
+
+      // Tamaño: 10 bytes (decimal)
+      final sizeStr = String.fromCharCodes(arData.sublist(pos + 48, pos + 58)).trim();
+      final size = int.tryParse(sizeStr) ?? 0;
+
+      // Saltar tabla de simbolos GNU (//)
+      if (name == '//') {
+        pos += 60 + size + (size % 2);
+        continue;
+      }
+
+      if (name == fileName) {
+        return arData.sublist(pos + 60, pos + 60 + size);
+      }
+
+      pos += 60 + size + (size % 2);
+    }
+    return null;
+  }
+
+  Future<void> _setupBionicSsh(String termuxDir) async {
     _logMsg('Configurando SSH bionic...');
 
-    // Crear directorio de configuracion SSH
-    await Directory('$termuxDir/etc/ssh').create(recursive: true);
+    try {
+      await Directory('$termuxDir/etc/ssh').create(recursive: true);
 
-    // Crear sshd_config
-    final sshdConfig = '''# Generado por Linux Container App
+      // sshd_config
+      final config = '''# Linux Container App
 Port 2222
 PermitRootLogin yes
 PasswordAuthentication yes
 PubkeyAuthentication yes
-ChallengeResponseAuthentication no
 UsePAM no
 Subsystem sftp $termuxDir/libexec/sftp-server
 HostKey $termuxDir/etc/ssh/ssh_host_rsa_key
 HostKey $termuxDir/etc/ssh/ssh_host_ecdsa_key
 HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
 ''';
-    try {
-      await File('$termuxDir/etc/ssh/sshd_config').writeAsString(sshdConfig);
-    } catch (e) {
-      _logMsg('Error config: $e');
-    }
+      await File('$termuxDir/etc/ssh/sshd_config').writeAsString(config);
 
-    // Generar host keys si no existen
-    for (final key in ['ssh_host_rsa_key', 'ssh_host_ecdsa_key', 'ssh_host_ed25519_key']) {
-      if (!await File('$termuxDir/etc/ssh/$key').exists()) {
-        try {
-          _logMsg('Generando $key...');
-          await Process.run('/system/bin/sh', ['-c'],
-            environment: {
-              'PATH': '$termuxDir/bin:/system/bin',
-              'LD_LIBRARY_PATH': '$termuxDir/lib',
-              'HOME': '/root',
-            },
-          );
-          await Process.run(
-            '$termuxDir/bin/ssh-keygen', ['-t', key.contains('rsa') ? 'rsa' :
-                key.contains('ecdsa') ? 'ecdsa' : 'ed25519',
-                '-f', '$termuxDir/etc/ssh/$key', '-N', '', '-q'],
-            environment: {
-              'LD_LIBRARY_PATH': '$termuxDir/lib',
-              'HOME': '/data/data/com.micloj.linux_container_app/files',
-            },
-          ).timeout(const Duration(seconds: 30));
-        } catch (e) {
-          _logMsg('Error generando $key');
+      // Generar host keys
+      for (final key in ['rsa', 'ecdsa', 'ed25519']) {
+        final keyFile = '$termuxDir/etc/ssh/ssh_host_${key}_key';
+        if (!await File(keyFile).exists()) {
+          _logMsg('Generando host key $key...');
+          try {
+            await Process.run(
+              '$termuxDir/bin/ssh-keygen', ['-t', key, '-f', keyFile, '-N', '', '-q'],
+              environment: {'LD_LIBRARY_PATH': '$termuxDir/lib'},
+            ).timeout(const Duration(seconds: 30));
+          } catch (e) {
+            _logMsg('Error key $key: $e');
+          }
         }
       }
+      _logMsg('SSH configurado (puerto 2222)');
+    } catch (e) {
+      _logMsg('Error config SSH: $e');
     }
-    _logMsg('SSH bionic configurado');
+  }
+
+  Future<void> _fixBionicPermissions(String termuxDir) async {
+    // Asegurar permisos de ejecucion en bin/
+    try {
+      await for (final f in Directory('$termuxDir/bin').list()) {
+        if (f is File) {
+          try { await Process.run('chmod', ['+x', f.path]); } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<String> get _termuxArch async {
+    final a = await getArchitecture();
+    if (a == 'aarch64') return 'aarch64';
+    if (a == 'armv7') return 'arm';
+    if (a == 'x86_64') return 'x86_64';
+    return 'aarch64';
   }
 
   // ═══════════════════════════════════════════════════════
-  // PUBLIC APK MANAGEMENT API
+  // PUBLIC APK API
   // ═══════════════════════════════════════════════════════
   Future<void> refreshApkIndex() async {
     final rootfs = _rootfsPath ?? '${await _appDir}/rootfs';
@@ -457,12 +585,12 @@ HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
   }
 
   // ═══════════════════════════════════════════════════════
-  // TCP Server (SSH alternative)
+  // TCP Server (SSH fallback)
   // ═══════════════════════════════════════════════════════
   Future<bool> startTcpCommandServer(int port) async {
     try {
       final server = await HttpServer.bind('0.0.0.0', port);
-      _logMsg('TCP Server escuchando en puerto $port');
+      _logMsg('TCP Server en puerto $port');
       server.listen((request) async {
         if (request.method == 'POST' && request.uri.path == '/exec') {
           final body = await utf8.decodeStream(request);
@@ -477,50 +605,35 @@ HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
         }
       });
       return true;
-    } catch (e) {
-      _logMsg('TCP Server error: $e');
-      return false;
-    }
+    } catch (e) { _logMsg('TCP Server error: $e'); return false; }
   }
 
   // ═══════════════════════════════════════════════════════
-  // PRIVATE: Alpine APK Management
+  // PRIVATE: Alpine APK
   // ═══════════════════════════════════════════════════════
   Future<Map<String, String>> _getApkVersions(String rootfs) async {
     await getArchitecture();
     final idxUrl = '$_alpineMirror/APKINDEX.tar.gz';
     final idxPath = '$rootfs/../APKINDEX.tar.gz';
-
     if (!await File(idxPath).exists()) {
-      try {
-        await _downloadFile(idxUrl, idxPath, 0.80, 0.82);
-      } catch (e) {
-        _logMsg('Error APKINDEX: $e');
-        return {};
-      }
+      try { await _downloadFile(idxUrl, idxPath, 0.80, 0.82); } catch (e) { _logMsg('Error APKINDEX: $e'); return {}; }
     }
-
     try {
       final data = await File(idxPath).readAsBytes();
       final tarData = GZipDecoder().decodeBytes(data);
       final idxContent = _extractFileFromTar(tarData, 'APKINDEX');
-      if (idxContent == null) { _logMsg('APKINDEX no encontrado en tar'); return {}; }
-
+      if (idxContent == null) return {};
       final result = <String, String>{};
       String cn = '', cv = '';
       for (final line in idxContent.split('\n')) {
         if (line.startsWith('P:')) cn = line.substring(2).trim();
         else if (line.startsWith('V:')) cv = line.substring(2).trim();
         else if (line.isEmpty && cn.isNotEmpty) {
-          result[cn] = cv;
-          cn = ''; cv = '';
+          result[cn] = cv; cn = ''; cv = '';
         }
       }
       return result;
-    } catch (e) {
-      _logMsg('Parse APKINDEX: $e');
-      return {};
-    }
+    } catch (e) { _logMsg('Parse APKINDEX: $e'); return {}; }
   }
 
   String? _extractFileFromTar(List<int> tarData, String fileName) {
@@ -531,13 +644,11 @@ HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
       if (nameEnd < 0 || nameEnd - pos > 100) break;
       final name = String.fromCharCodes(tarData.sublist(pos, nameEnd));
       if (name == fileName) {
-        final szStr = String.fromCharCodes(tarData.sublist(pos + 124, pos + 136))
-            .split('\x00')[0].trim();
+        final szStr = String.fromCharCodes(tarData.sublist(pos + 124, pos + 136)).split('\x00')[0].trim();
         final sz = int.tryParse(szStr, radix: 8) ?? 0;
         return String.fromCharCodes(tarData.sublist(pos + 512, pos + 512 + sz));
       }
-      final szStr = String.fromCharCodes(tarData.sublist(pos + 124, pos + 136))
-          .split('\x00')[0].trim();
+      final szStr = String.fromCharCodes(tarData.sublist(pos + 124, pos + 136)).split('\x00')[0].trim();
       final padded = ((int.tryParse(szStr, radix: 8) ?? 0) + 511) ~/ 512 * 512;
       pos += 512 + padded;
     }
@@ -548,47 +659,33 @@ HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
     await getArchitecture();
     final url = '$_alpineMirror/$pkg-$ver.apk';
     final apkPath = '$rootfs/../$pkg-$ver.apk';
-
     try {
       if (!await File(apkPath).exists()) {
         _logMsg('Descargando: $pkg-$ver');
         await _downloadFile(url, apkPath, 0.82, 0.90);
       }
-
       final data = await File(apkPath).readAsBytes();
       final tarData = GZipDecoder().decodeBytes(data);
       final tar = TarDecoder().decodeBytes(tarData);
-
       int files = 0;
       for (final entry in tar) {
         String name = entry.name;
         if (name.startsWith('./')) name = name.substring(2);
         if (name.isEmpty || name == '.' || name.startsWith('.')) continue;
-        if (name.endsWith('/')) {
-          await Directory('$rootfs/$name').create(recursive: true);
-          files++; continue;
-        }
-        if (name.contains('.pre-install') || name.contains('.post-install') ||
-            name.contains('.trigger')) continue;
-
+        if (name.endsWith('/')) { await Directory('$rootfs/$name').create(recursive: true); files++; continue; }
+        if (name.contains('.pre-install') || name.contains('.post-install') || name.contains('.trigger')) continue;
         final target = File('$rootfs/$name');
         await target.parent.create(recursive: true);
-
         if (entry.isSymbolicLink && (entry.symbolicLink ?? '').isNotEmpty) {
-          final linkTarget = entry.symbolicLink!;
-          if (linkTarget.startsWith('/')) {
-            final realTarget = File('$rootfs$linkTarget');
-            if (await realTarget.exists() && await realTarget.length() > 0) {
-              try {
-                if (await Link(target.path).exists()) await Link(target.path).delete();
-                await target.writeAsBytes(await realTarget.readAsBytes());
-                files++;
-              } catch (_) {}
+          final lt = entry.symbolicLink!;
+          if (lt.startsWith('/')) {
+            final rt = File('$rootfs$lt');
+            if (await rt.exists() && await rt.length() > 0) {
+              try { if (await Link(target.path).exists()) await Link(target.path).delete(); await target.writeAsBytes(await rt.readAsBytes()); files++; } catch (_) {}
             }
           }
           continue;
         }
-
         if (entry.isFile && entry.content.isNotEmpty) {
           await target.writeAsBytes(entry.content as List<int>);
           final mode = entry.mode;
@@ -598,45 +695,25 @@ HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
           files++;
         }
       }
-      _logMsg('$pkg-$ver: $files archivos extraidos');
+      _logMsg('$pkg-$ver: $files archivos');
       try { await File(apkPath).delete(); } catch (_) {}
       return true;
-    } catch (e) {
-      _logMsg('Error $pkg: $e');
-      return false;
-    }
+    } catch (e) { _logMsg('Error $pkg: $e'); return false; }
   }
 
   Future<void> _installEssentials(String rootfs) async {
-    _logMsg('=== Instalando paquetes esenciales (Dart) ===');
-    if (_apkIndex.isEmpty) {
-      _apkIndex = await _getApkVersions(rootfs);
-    }
-
-    final packages = [
-      'openssh-server', 'openssh-keygen', 'openssh-sftp-server',
-      'curl', 'wget', 'bash', 'ca-certificates', 'sudo', 'nano'
-    ];
-
-    int installed = 0, failed = 0;
+    _logMsg('=== Paquetes esenciales (fallback) ===');
+    if (_apkIndex.isEmpty) _apkIndex = await _getApkVersions(rootfs);
+    final packages = ['openssh-server', 'openssh-keygen', 'bash', 'nano'];
     for (final pkg in packages) {
       final ver = _apkIndex[pkg];
-      if (ver == null) { _logMsg('$pkg: no encontrado en repositorio'); continue; }
-      _statusMessage = 'Instalando $pkg...';
-      notifyListeners();
-      if (await _installApk(pkg, ver, rootfs)) {
-        _installedPkgs.add(pkg);
-        installed++;
-      } else { failed++; }
+      if (ver == null) continue;
+      if (await _installApk(pkg, ver, rootfs)) _installedPkgs.add(pkg);
     }
-
-    _logMsg('Paquetes: $installed instalados, $failed fallos');
-    _statusMessage = 'Paquetes esenciales instalados';
-    notifyListeners();
   }
 
   // ═══════════════════════════════════════════════════════
-  // Funciones auxiliares
+  // Helper functions
   // ═══════════════════════════════════════════════════════
   Future<void> _downloadFile(String url, String path, double sw, double ew) async {
     final c = HttpClient();
@@ -663,19 +740,14 @@ HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
 
   Future<bool> _setupFromAsset(String rootfs) async {
     try {
-      if (!(await rootBundle.loadString('AssetManifest.json'))
-          .contains('assets/rootfs.tar.gz')) return false;
+      if (!(await rootBundle.loadString('AssetManifest.json')).contains('assets/rootfs.tar.gz')) return false;
       final data = await rootBundle.load('assets/rootfs.tar.gz');
-      await File('${await _appDir}/cached_rootfs.tar.gz')
-          .writeAsBytes(data.buffer.asUint8List());
+      await File('${await _appDir}/cached_rootfs.tar.gz').writeAsBytes(data.buffer.asUint8List());
       for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
         if (await File(tb).exists()) {
           try {
-            final r = await Process.run(
-              tb, ['tar', '-xzf', '${await _appDir}/cached_rootfs.tar.gz', '-C', rootfs])
-                .timeout(const Duration(seconds: 180));
-            if (r.exitCode == 0 && await File('$rootfs/bin/sh').exists() &&
-                await File('$rootfs/bin/sh').length() > 0) return true;
+            final r = await Process.run(tb, ['tar', '-xzf', '${await _appDir}/cached_rootfs.tar.gz', '-C', rootfs]).timeout(const Duration(seconds: 180));
+            if (r.exitCode == 0 && await File('$rootfs/bin/sh').exists() && await File('$rootfs/bin/sh').length() > 0) return true;
           } catch (e) {}
         }
       }
@@ -685,8 +757,7 @@ HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
 
   Future<bool> _extractTarDart(String tgz, String rootfs) async {
     try {
-      for (final entry in TarDecoder().decodeBytes(
-          GZipDecoder().decodeBytes(await File(tgz).readAsBytes()))) {
+      for (final entry in TarDecoder().decodeBytes(GZipDecoder().decodeBytes(await File(tgz).readAsBytes()))) {
         String n = entry.name;
         if (n.startsWith('./')) n = n.substring(2);
         if (n.isEmpty || n == '.') continue;
@@ -716,11 +787,8 @@ HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
     for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
       if (await File(tb).exists()) {
         try {
-          final r = await Process.run(
-            tb, ['tar', '-xzf', tgz, '-C', rootfs])
-              .timeout(const Duration(seconds: 180));
-          if (r.exitCode == 0 && await File('$rootfs/bin/sh').exists() &&
-              await File('$rootfs/bin/sh').length() > 0) return true;
+          final r = await Process.run(tb, ['tar', '-xzf', tgz, '-C', rootfs]).timeout(const Duration(seconds: 180));
+          if (r.exitCode == 0 && await File('$rootfs/bin/sh').exists() && await File('$rootfs/bin/sh').length() > 0) return true;
         } catch (e) {}
       }
     }
@@ -737,17 +805,13 @@ HostKey $termuxDir/etc/ssh/ssh_host_ed25519_key
         final dd = Directory('$rootfs$dir');
         if (!await dd.exists()) continue;
         await for (final e in dd.list(followLinks: false)) {
-          if (e is File && await e.length() == 0 && d != null) {
-            await e.writeAsBytes(d); n++;
-          }
+          if (e is File && await e.length() == 0 && d != null) { await e.writeAsBytes(d); n++; }
         }
       } catch (_) {}
     }
     if (d != null) {
       final sh = File('$rootfs/bin/sh');
-      if (!await sh.exists() || await sh.length() == 0) {
-        try { await sh.writeAsBytes(d); n++; } catch (_) {}
-      }
+      if (!await sh.exists() || await sh.length() == 0) { try { await sh.writeAsBytes(d); n++; } catch (_) {} }
     }
     _logMsg('Hardlinks: $n');
   }
