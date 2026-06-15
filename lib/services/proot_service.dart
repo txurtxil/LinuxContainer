@@ -185,7 +185,7 @@ class ProotService extends ChangeNotifier {
     _statusMessage = 'Iniciando...';
     _lastOutput = '';
     _log.clear();
-    _logMsg('=== INICIO SETUP v$VERSION ===');
+    _logMsg('=== INICIO SETUP v9.5f ===');
     notifyListeners();
 
     try {
@@ -261,10 +261,10 @@ class ProotService extends ChangeNotifier {
 
       _downloadProgress = 1.0; _initialized = true;
       _statusMessage = _bionicInstalled
-          ? 'Linux Container v$VERSION + bionic OK'
-          : 'Linux Container v$VERSION listo (solo Alpine)';
+          ? 'Linux Container v9.5f + bionic OK'
+          : 'Linux Container v9.5f listo (solo Alpine)';
       _logMsg('=== FIN SETUP ===');
-      _logMsg('Version: $VERSION');
+      _logMsg('Version: 9.5f');
     } catch (e) {
       _logMsg('EXCEPCION: $e');
       _statusMessage = 'Error: $e';
@@ -290,7 +290,7 @@ class ProotService extends ChangeNotifier {
     // Intento 1: bionic-tools.tar.gz del release
     final tgz = '$appDir/bionic-tools.tar.gz';
     for (final url in [
-      'https://github.com/txurtxil/LinuxContainer/releases/download/v$VERSION/bionic-tools.tar.gz',
+      'https://github.com/txurtxil/LinuxContainer/releases/download/v9.5f/bionic-tools.tar.gz',
       'https://github.com/txurtxil/LinuxContainer/releases/latest/download/bionic-tools.tar.gz',
     ]) {
       try {
@@ -596,7 +596,7 @@ class ProotService extends ChangeNotifier {
     final http = HttpClient();
     try {
       final req = await http.getUrl(Uri.parse(url));
-      req.headers.set('User-Agent', 'LinuxContainer/$VERSION');
+      req.headers.set('User-Agent', 'LinuxContainer/9.5f');
       final resp = await req.close();
       if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
       final bytes = <int>[];
@@ -737,7 +737,7 @@ class ProotService extends ChangeNotifier {
   // ═══════════════════════════════════════════════════════
   Future<bool> checkEnvironment() async {
     _log.clear();
-    _logMsg('=== CHECK v$VERSION ===');
+    _logMsg('=== CHECK v9.5f ===');
     try {
       await getArchitecture();
       final rootfs = await _rootfs;
@@ -748,10 +748,10 @@ class ProotService extends ChangeNotifier {
       }
       _bionicInstalled = await File('${await _termux}/bin/bash').exists();
       _statusMessage = _bionicInstalled
-          ? 'Linux Container v$VERSION + bionic OK'
+          ? 'Linux Container v9.5f + bionic OK'
           : _initialized
-              ? 'Linux Container v$VERSION (solo Alpine)'
-              : 'Linux Container v$VERSION - pulsa Setup';
+              ? 'Linux Container v9.5f (solo Alpine)'
+              : 'Linux Container v9.5f - pulsa Setup';
       _logMsg('Rootfs: ${_initialized ? "OK" : "no"}');
       _logMsg('Bionic: ${_bionicInstalled ? "OK" : "no"}');
       notifyListeners();
