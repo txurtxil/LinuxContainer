@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 
 class TerminalService extends ChangeNotifier {
   final List<TerminalLine> _lines = [];
@@ -35,13 +36,16 @@ class TerminalService extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // Usar directorio accesible por defecto
+      final defaultDir = workingDir ?? (await _getAppDir());
       _process = await Process.start(
         '/bin/sh',
         ['-c', command],
-        workingDirectory: workingDir,
+        workingDirectory: defaultDir,
         environment: {
-          'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          'PATH': '/system/bin:/system/xbin:/data/data/com.micloj.linux_container_app/app_flutter/linux_container/rootfs/bin:/data/data/com.micloj.linux_container_app/app_flutter/linux_container/rootfs/usr/bin:/data/data/com.micloj.linux_container_app/app_flutter/linux_container/rootfs/sbin',
           'TERM': 'xterm-256color',
+          'HOME': defaultDir,
         },
       );
 
@@ -69,6 +73,15 @@ class TerminalService extends ChangeNotifier {
         addLine('', type: TerminalLineType.output);
       }
       notifyListeners();
+    }
+  }
+
+  Future<String> _getAppDir() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      return dir.path;
+    } catch (_) {
+      return '/data/data/com.micloj.linux_container_app/app_flutter';
     }
   }
 
