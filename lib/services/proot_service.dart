@@ -280,7 +280,7 @@ class ProotService extends ChangeNotifier {
             final len = await entity.length();
             if (len == 0) {
               // Es un hardlink a busybox → copiar contenido
-              await entity.writeAsBytes(bbData!);
+              await entity.writeAsBytes(bbData);
               fixed++;
             }
           } catch (_) {}
