@@ -12,22 +12,27 @@ class SshService {
   String get status => _status;
 
   Future<void> installSsh() async {
-    _status = 'Instalando OpenSSH...';
+    _status = 'Instalando OpenSSH…';
     _output = await _proot.runCommand(
-      'apk add openssh-server openssh-keygen 2>&1 && '
+      'DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 && '
+      'DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server 2>&1 && '
+      'mkdir -p /var/run/sshd 2>&1 && '
       'ssh-keygen -A 2>&1',
-      timeout: const Duration(seconds: 60),
+      timeout: const Duration(seconds: 180),
     );
     _status = 'OpenSSH instalado';
   }
 
   Future<void> startServer({int port = 2222}) async {
-    _status = 'Iniciando SSH (puerto: $port)...';
+    _status = 'Iniciando SSH (puerto: $port)…';
     _output = await _proot.runCommand(
       'sed -i "s/#Port 22/Port $port/" /etc/ssh/sshd_config 2>/dev/null; '
       'sed -i "s/#PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config 2>/dev/null; '
-      'echo "root:linux" | chpasswd 2>/dev/null; '
-      '/usr/sbin/sshd 2>&1 || /usr/sbin/sshd -p $port 2>&1',
+      'sed -i "s/#PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config 2>/dev/null; '
+      'echo -e "root\\nroot" | passwd root 2>/dev/null; '
+      '/usr/sbin/sshd 2>&1 || '
+      '/usr/sbin/sshd -p $port 2>&1 || '
+      'echo "sshd no pudo iniciar"',
       timeout: const Duration(seconds: 15),
     );
     _serverRunning = true;
@@ -35,7 +40,9 @@ class SshService {
   }
 
   Future<void> stopServer() async {
-    await _proot.runCommand('killall sshd 2>/dev/null; true');
+    await _proot.runCommand(
+      'killall sshd 2>/dev/null; pkill -9 sshd 2>/dev/null; true',
+    );
     _serverRunning = false;
     _status = 'SSH detenido';
   }

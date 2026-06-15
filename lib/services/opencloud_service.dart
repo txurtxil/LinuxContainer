@@ -22,21 +22,27 @@ class OpenCloudService {
   String get adminPassword => _adminPassword;
 
   Future<void> installNextcloud() async {
-    _status = 'Instalando dependencias PHP/Apache...';
+    _status = 'Instalando dependencias (PHP, Apache, MariaDB)…';
     _output = await _proot.runCommand(
-      'apk add apache2 php php-mysqli php-gd php-xml php-curl '
-      'php-zip php-mbstring php-intl php-bcmath php-gmp wget unzip '
-      'mariadb mariadb-client 2>&1',
-      timeout: const Duration(seconds: 120),
+      'DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 && '
+      'DEBIAN_FRONTEND=noninteractive apt-get install -y '
+      'apache2 php php-mysqli php-gd php-xml php-curl '
+      'php-zip php-mbstring php-intl php-bcmath php-gmp '
+      'wget unzip mariadb-server mariadb-client 2>&1',
+      timeout: const Duration(seconds: 300),
     );
 
     _output += '\n--- Descargando Nextcloud ---\n';
     _output += await _proot.runCommand(
-      'cd /var/www/localhost/htdocs 2>/dev/null || cd /var/www && '
-      'wget -q https://download.nextcloud.com/server/releases/latest.zip -O nextcloud.zip 2>&1 && '
+      'rm -rf /var/www/html/* 2>/dev/null; '
+      'cd /var/www/html && '
+      'wget -q https://download.nextcloud.com/server/releases/latest.zip '
+      '-O nextcloud.zip 2>&1 && '
       'unzip -q nextcloud.zip 2>&1 && '
-      'chmod -R 755 nextcloud 2>&1 || '
-      'echo "Nextcloud download attempted"',
+      'mv nextcloud/* . 2>/dev/null; '
+      'rm -rf nextcloud nextcloud.zip 2>/dev/null; '
+      'chmod -R 755 /var/www/html 2>&1 || '
+      'echo "Nextcloud descargado con errores menores"',
       timeout: const Duration(seconds: 180),
     );
 
@@ -45,13 +51,15 @@ class OpenCloudService {
   }
 
   Future<void> startServer() async {
-    _status = 'Iniciando servidores...';
+    _status = 'Iniciando servidores…';
     _output = await _proot.runCommand(
-      'nohup /usr/bin/mysqld --user=root --datadir=/var/lib/mysql &>/dev/null & '
+      'nohup mysqld --user=root --datadir=/var/lib/mysql '
+      '--skip-grant-tables &>/dev/null & '
+      'sleep 2; '
+      'nohup apachectl start &>/dev/null & '
       'sleep 1; '
-      'nohup /usr/sbin/httpd -d /etc/apache2 &>/dev/null & '
-      'echo "Servers started"',
-      timeout: const Duration(seconds: 10),
+      'echo "Servers started" 2>&1',
+      timeout: const Duration(seconds: 15),
     );
     _running = true;
     _status = 'OpenCloud activo en $_webUrl';
@@ -59,7 +67,11 @@ class OpenCloudService {
 
   Future<void> stopServer() async {
     _output = await _proot.runCommand(
-      'killall httpd mysqld 2>/dev/null; true',
+      'apachectl stop 2>/dev/null; '
+      'killall mysqld mariadbd 2>/dev/null; '
+      'pkill -9 mysqld 2>/dev/null; '
+      'pkill -9 httpd 2>/dev/null; '
+      'true',
     );
     _running = false;
     _status = 'Servidores detenidos';
@@ -67,9 +79,9 @@ class OpenCloudService {
 
   Future<void> getVersion() async {
     final result = await _proot.runCommand(
-      'cat /var/www/localhost/htdocs/nextcloud/version.php 2>/dev/null | '
-      'grep OC_VersionString | head -1 || cat /var/www/nextcloud/version.php '
-      '2>/dev/null | grep OC_VersionString | head -1 || echo "N/A"',
+      'cat /var/www/html/version.php 2>/dev/null | '
+      'grep OC_VersionString | head -1 || '
+      'echo "N/A"',
     );
     _version = result.replaceAll(RegExp(r'[^0-9.]'), '');
   }
