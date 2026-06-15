@@ -136,60 +136,140 @@ class ProotService extends ChangeNotifier {
     int extracted = 0;
     final total = archive.length;
 
-    // Primera pasada: extraer todos los archivos
-    for (final file in archive) {
-      // Normalizar nombre (quitar ./ inicial)
-      String cleanName = file.name;
-      if (cleanName.startsWith('./')) cleanName = cleanName.substring(2);
-      if (cleanName.isEmpty || cleanName == '.') continue;
+    // PRIMERA PASADA: extraer todos los archivos y directorios
+    for (final entry in archive) {
+      String name = entry.name;
+      if (name.startsWith('./')) name = name.substring(2);
+      if (name.isEmpty || name == '.') continue;
 
-      final outPath = '$destPath/$cleanName';
+      final outPath = '$destPath/$name';
 
-      if (file.isFile) {
-        await Directory(outPath).parent.create(recursive: true);
-        await File(outPath).writeAsBytes(file.content as List<int>);
-      } else if (file.isSymbolicLink) {
-        final target = file.symbolicLink ?? '';
-        await Directory(outPath).parent.create(recursive: true);
-        try { await File(outPath).delete(); } catch (_) {}
-        try { await Link(outPath).delete(); } catch (_) {}
-        await Link(outPath).create(target);
+      // Los directorios no tienen contenido pero debemos crearlos
+      if (name.endsWith('/')) {
+        await Directory(outPath).create(recursive: true);
+        continue;
+      }
+
+      // Asegurar que el directorio padre existe
+      await Directory(outPath).parent.create(recursive: true);
+
+      if (entry.isFile) {
+        // Es un archivo real con contenido
+        final contentBytes = entry.content as List<int>;
+        // Si ya existe un symlink con este nombre, borrarlo primero
+        if (await Link(outPath).exists()) {
+          await Link(outPath).delete();
+        }
+        await File(outPath).writeAsBytes(contentBytes);
+      } else if (entry.isSymbolicLink) {
+        // Es un symlink
+        final target = entry.symbolicLink ?? '';
+        // Si ya existe un archivo o symlink, borrarlo
+        if (await File(outPath).exists()) await File(outPath).delete();
+        if (await Link(outPath).exists()) await Link(outPath).delete();
+        try { await Link(outPath).create(target); } catch (_) {}
       }
 
       extracted++;
-      if (extracted % 1000 == 0) {
+      if (extracted % 500 == 0) {
         _statusMessage = 'Extrayendo $extracted/$total archivos...';
         notifyListeners();
+      }
+    }
+
+    _statusMessage = 'Verificando librerías...';
+    notifyListeners();
+
+    // Verificar que la libc de musl existe y no es un symlink vacío
+    final muslLibs = [
+      'lib/libc.musl-aarch64.so.1',
+      'lib/ld-musl-aarch64.so.1',
+    ];
+    for (final libPath in muslLibs) {
+      final fullPath = '$destPath/$libPath';
+      if (await Link(fullPath).exists()) {
+        // Es symlink - seguir hasta encontrar el archivo real
+        String? target = await Link(fullPath).target();
+        if (target.isNotEmpty) {
+          final targetPath = await _resolvePath('$destPath/$target');
+          if (targetPath != null && await File(targetPath).exists()) {
+            final stat = await File(targetPath).stat();
+            if (stat.size == 0) {
+              _statusMessage = 'Error: $libPath -> $target tiene tamaño 0';
+              notifyListeners();
+            }
+          }
+        }
+      } else if (await File(fullPath).exists()) {
+        final stat = await File(fullPath).stat();
+        if (stat.size == 0) {
+          _statusMessage = 'Error: $libPath tiene tamaño 0';
+          notifyListeners();
+        }
       }
     }
 
     _statusMessage = 'Aplicando permisos de ejecución...';
     notifyListeners();
 
-    // Segunda pasada: marcar ejecutables en directorios bin/
+    // Segunda pasada: permisos
     final execDirs = ['bin', 'sbin', 'usr/bin', 'usr/sbin', 'usr/local/bin'];
     for (final dir in execDirs) {
       final dirPath = '$destPath/$dir';
       if (await Directory(dirPath).exists()) {
-        await _chmodRecursive(dirPath, true);
+        await _chmodRecursive(dirPath);
       }
     }
 
-    // También asegurar que /bin/sh y /bin/busybox sean ejecutables
-    for (final execPath in ['/bin/sh', '/bin/busybox', '/sbin/apk']) {
-      final fullPath = '$destPath$execPath';
-      if (await File(fullPath).exists()) {
-        await Process.run('chmod', ['755', fullPath]);
+    // Asegurar binarios clave
+    for (final execPath in ['/bin/sh', '/bin/busybox', '/sbin/apk',
+                            '/lib/libc.musl-aarch64.so.1',
+                            '/lib/ld-musl-aarch64.so.1']) {
+      // Seguir symlinks y chmod al destino real
+      String? resolved = await _resolvePath('$destPath$execPath');
+      if (await File(resolved!).exists()) {
+        try { await Process.run('chmod', ['755', resolved]); } catch (_) {}
       }
+    }
+
+    // Verificar resultado final
+    final shOk = await File('$destPath/bin/sh').exists() ||
+                 await Link('$destPath/bin/sh').exists();
+    final busyboxOk = await File('$destPath/bin/busybox').exists() ||
+                      await Link('$destPath/bin/busybox').exists();
+    if (!shOk || !busyboxOk) {
+      _statusMessage = 'Error: /bin/sh o /bin/busybox no encontrados';
+      notifyListeners();
     }
   }
 
-  Future<void> _chmodRecursive(String dirPath, bool exec) async {
+  /// Sigue una cadena de symlinks para encontrar el archivo real
+  Future<String?> _resolvePath(String path) async {
+    final visited = <String>{};
+    String current = path;
+    while (await Link(current).exists()) {
+      if (visited.contains(current)) return null; // loop detection
+      visited.add(current);
+      try {
+        final target = await Link(current).target();
+        if (target.isEmpty) return null;
+        // Resolver rutas relativas
+        final parent = Directory(current).parent.path;
+        current = '$parent/$target';
+        current = current.replaceAll(RegExp(r'/+'), '/');
+      } catch (_) {
+        return null;
+      }
+    }
+    return current;
+  }
+
+  Future<void> _chmodRecursive(String dirPath) async {
     final dir = Directory(dirPath);
     try {
       await for (final entity in dir.list(recursive: true, followLinks: false)) {
         if (entity is File) {
-          await Process.run('chmod', ['755', entity.path]);
+          try { await Process.run('chmod', ['755', entity.path]); } catch (_) {}
         }
       }
     } catch (_) {}
