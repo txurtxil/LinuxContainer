@@ -182,21 +182,21 @@ class ProotService extends ChangeNotifier {
       notifyListeners();
 
       // /etc/resolv.conf (DNS)
-      final etcDir = Directory('${_rootfsPath}/etc');
+      final etcDir = Directory('$_rootfsPath/etc');
       await etcDir.create(recursive: true);
-      await File('${_rootfsPath}/etc/resolv.conf').writeAsString(
+      await File('$_rootfsPath/etc/resolv.conf').writeAsString(
         'nameserver 8.8.8.8\nnameserver 1.1.1.1\n',
       );
 
       // /etc/hosts
-      await File('${_rootfsPath}/etc/hosts').writeAsString(
+      await File('$_rootfsPath/etc/hosts').writeAsString(
         '127.0.0.1 localhost\n::1 localhost\n',
       );
 
       // /etc/apt/sources.list si no existe
-      final aptDir = Directory('${_rootfsPath}/etc/apt');
+      final aptDir = Directory('$_rootfsPath/etc/apt');
       await aptDir.create(recursive: true);
-      final sources = File('${_rootfsPath}/etc/apt/sources.list');
+      final sources = File('$_rootfsPath/etc/apt/sources.list');
       if (!await sources.exists()) {
         await sources.writeAsString(
           'deb http://deb.debian.org/debian bookworm main contrib non-free\n'
@@ -206,17 +206,17 @@ class ProotService extends ChangeNotifier {
       }
 
       // Asegurar /bin/sh
-      if (!await File('${_rootfsPath}/bin/sh').exists()) {
+      if (!await File('$_rootfsPath/bin/sh').exists()) {
         final bb = _busyboxPath ?? '$appDir/bin/busybox';
         if (await File(bb).exists()) {
-          await File('${_rootfsPath}/bin/sh').parent.create(recursive: true);
-          await File(bb).copy('${_rootfsPath}/bin/busybox');
-          await Process.run(bb, ['--install', '-s', '${_rootfsPath}/bin']);
+          await File('$_rootfsPath/bin/sh').parent.create(recursive: true);
+          await File(bb).copy('$_rootfsPath/bin/busybox');
+          await Process.run(bb, ['--install', '-s', '$_rootfsPath/bin']);
         }
       }
 
       // Verificar que tenemos sh
-      final shExists = await File('${_rootfsPath}/bin/sh').exists();
+      final shExists = await File('$_rootfsPath/bin/sh').exists();
 
       _downloadProgress = 1.0;
       _initialized = shExists;
@@ -270,11 +270,11 @@ class ProotService extends ChangeNotifier {
             await link.createSync(recursive: false);
             // En Android no podemos crear symlinks fácilmente,
             // usamos un script que redirige a busybox
-            await link.writeAsString(
-              '#!/system/bin/sh\n"$BB" $applet "\$@"\n'
-              .replaceFirst(r'$BB', bb)
-              .replaceFirst(r'$applet', applet),
-            );
+            final script = '#!/system/bin/sh\n"{BB}" {APPLET} "{ARGS}"\n'
+              .replaceFirst('{BB}', bb)
+              .replaceFirst('{APPLET}', applet)
+              .replaceFirst('{ARGS}', r'$@');
+          await link.writeAsString(script);
             await Process.run('chmod', ['755', link.path]);
           } catch (_) {
             // ignorar errores de symlinks en Android
@@ -455,7 +455,7 @@ class ProotService extends ChangeNotifier {
       // Buscar busybox tar en varias ubicaciones
       for (final candidate in [
         _busyboxPath,
-        '${_rootfsPath}/bin/tar',
+        '$_rootfsPath/bin/tar',
         '/system/bin/tar',
       ]) {
         if (candidate != null && await File(candidate).exists()) {
@@ -481,12 +481,20 @@ class ProotService extends ChangeNotifier {
   }
 
   Future<List<int>> _gunzip(List<int> data) async {
-    // GZip simple: buscar bloques
-    final result = await Process.run(
-      _busyboxPath ?? 'gzip', ['-d'],
-      input: data,
-    );
-    return result.stdout as List<int>? ?? data;
+    try {
+      final proc = await Process.start(
+        _busyboxPath ?? 'gzip', ['-d'],
+      );
+      proc.stdin.add(data);
+      await proc.stdin.close();
+      final output = await proc.stdout.toList();
+      await proc.stderr.drain();
+      final code = await proc.exitCode;
+      if (code == 0 && output.isNotEmpty) {
+        return output.expand((x) => x).toList();
+      }
+    } catch (_) {}
+    return data;
   }
 
   Future<void> _untar(List<int> data, String destPath) async {
