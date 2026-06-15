@@ -717,11 +717,11 @@ class ProotService extends ChangeNotifier {
     }
 
     try {
-      // ───       // ─── ESTRATEGIA 1: PROOT-rs (la mejor opcion) ───
+      // ───       // ───       // ─── ESTRATEGIA 1: PROOT-rs (opcional, falla con seccomp en Android 15+) ───
       final prootPath = '$appDir/proot';
       if (linker != null && await File(prootPath).exists() && await File(prootPath).length() > 0) {
         try {
-          _logMsg('Ejecutando via proot-rs: ' + command);
+          _logMsg('Intentando proot-rs: ' + command);
           final result = await Process.run(
             linker,
             [prootPath, '-r', rootfs, '--', '/bin/sh', '-c', command],
@@ -734,26 +734,59 @@ class ProotService extends ChangeNotifier {
           ).timeout(timeout);
           final out = result.stdout as String;
           final err = result.stderr as String;
-          if (result.exitCode != 0) {
-            _logMsg('proot-rs exit code: ' + result.exitCode.toString());
+          if (result.exitCode == 0) {
+            // proot-rs FUNCIONO, devolver resultado
+            _lastOutput = out.isNotEmpty ? out : err;
+            return _lastOutput;
           }
-          if (err.isNotEmpty) {
-            _lastOutput = err;
-            if (out.isNotEmpty) _lastOutput += '\n' + out;
-            _logMsg('proot-rs stderr: ' + err);
-          } else {
-            _lastOutput = out;
-          }
-          return _lastOutput;
+          // proot-rs fallo (exit != 0) -> log pero NO retornar, seguir a estrategia 2
+          _logMsg('proot-rs exit ' + result.exitCode.toString() + ', usando linker directo');
+          if (err.isNotEmpty) _logMsg('proot-rs stderr: ' + err);
         } catch (e) {
-          _lastOutput = 'proot-rs fallo: ' + e.toString() + '\n';
-          _logMsg('proot-rs catch: ' + e.toString());
+          _logMsg('proot-rs error: ' + e.toString() + ', usando linker directo');
         }
       }
 
-      // ─── ESTRATEGIA 2: Linker del sistema + shellESTRATEGIA 2: Linker del sistema + shell rootfs ───
+      // ───       // ─── ESTRATEGIA 2: Linker + ejecucion directa del binario ───
       if (linker != null) {
+        // Intentar ejecutar el comando directamente via linker64
+        // Esto funciona para binarios como apk, ls, cat (no execve)
+        final firstWord = command.split(' ').first.trim();
+        // Extraer flags/args del comando
+        final restArgs = command.substring(firstWord.length).trim();
+        final cmdArgs = restArgs.isEmpty ? <String>[] : restArgs.split(' ');
+
+        for (final dir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/usr/local/bin']) {
+          final candidate = '$rootfs$dir/$firstWord';
+          try {
+            if (await File(candidate).exists() && await File(candidate).length() > 0) {
+              _logMsg('Ejecutando directo: ' + candidate);
+              final result = await Process.run(
+                linker,
+                [candidate, ...cmdArgs],
+                environment: {
+                  'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
+                          '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin'
+                          ':/system/bin:/system/xbin',
+                  'HOME': '/root',
+                  'TERM': 'xterm-256color',
+                  'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
+                },
+                workingDirectory: rootfs,
+              ).timeout(timeout);
+              final out = result.stdout as String;
+              final err = result.stderr as String;
+              _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
+              return _lastOutput;
+            }
+          } catch (e) {
+            continue; // Probar siguiente directorio
+          }
+        }
+
+        // Fallback: linker + shell (para comandos con pipes, redirects, etc.)
         try {
+          _logMsg('Ejecutando via linker+shell: ' + command);
           final result = await Process.run(
             linker, [shellPath, '-c', command],
             environment: {
@@ -771,11 +804,9 @@ class ProotService extends ChangeNotifier {
           _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
           return _lastOutput;
         } catch (e) {
-          _lastOutput = 'linker fallo: $e\n';
+          _lastOutput = 'linker+shell fallo: $e\n';
         }
-      }
-
-      // ─── ESTRATEGIA 3: Shell del sistema + PATH al rootfs ───
+      }ESTRATEGIA 3: Shell del sistema + PATH al rootfs ───
       if (await File('/system/bin/sh').exists()) {
         final result = await Process.run(
           '/system/bin/sh', ['-c', command],
