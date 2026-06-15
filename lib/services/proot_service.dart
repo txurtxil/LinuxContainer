@@ -49,6 +49,53 @@ class ProotService extends ChangeNotifier {
     return null;
   }
 
+  // ─── checkEnvironment ───
+  Future<bool> checkEnvironment() async {
+    _log.clear();
+    try {
+      final rootfs = '${await _appDir}/rootfs';
+      _rootfsPath = rootfs;
+      
+      // Buscar busybox.static en rootfs (extraido del .apk Alpine)
+      String? findBB() {
+        for (final d in ['/bin', '/sbin', '/usr/bin', '/usr/local/bin']) {
+          final f = File('$rootfs$d/busybox.static');
+          if (f.existsSync() && f.lengthSync() > 100000) return f.path;
+        }
+        return null;
+      }
+      
+      if (await Directory(rootfs).exists() && await File('$rootfs/bin/sh').exists()) {
+        final st = await File('$rootfs/bin/sh').stat();
+        final bbPath = findBB();
+        if (st.size > 1000 && bbPath != null) {
+          _initialized = true;
+          _staticBusyboxPath = bbPath;
+          // Buscar apk.static
+          for (final d in ['/sbin', '/bin', '/usr/bin', '/usr/local/bin']) {
+            final a = File('$rootfs$d/apk.static');
+            if (await a.exists() && await a.length() > 100000) {
+              _apkStaticPath = a.path;
+              break;
+            }
+          }
+          _statusMessage = 'Linux listo';
+          _logMsg('Rootfs OK, static binaries OK');
+          notifyListeners();
+          return true;
+        }
+      }
+      _statusMessage = 'Linux no instalado - pulsa Setup';
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _logMsg('Error checkEnvironment: $e');
+      _statusMessage = 'Error: $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
   // ─── Resolver version de paquete desde APKINDEX ───
   Future<String> _resolveVersion(String pkgName, String rootfs) async {
     final idxPath = '$rootfs/../APKINDEX.tar.gz';
