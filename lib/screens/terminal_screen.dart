@@ -58,13 +58,35 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
     try {
       String output;
-      if (_useProot && proot.initialized) {
-        // Interceptar comandos apk para usar Dart backend
-        if (cmd.startsWith('apk ')) {
-          output = await _handleApkCommand(cmd, proot);
+      // Interceptar comandos apk/apt SIEMPRE si Linux esta inicializado
+      if (cmd.startsWith('apk ') || cmd == 'apk') {
+        if (proot.initialized) {
+          output = await _handleApkCommand(cmd, proot, terminal);
         } else {
-          output = await proot.runShell(cmd,
-              timeout: const Duration(seconds: 120));
+          output = 'Linux no inicializado. Ve a Inicio y haz Setup primero.';
+        }
+      } else if (cmd.startsWith('apt ') || cmd == 'apt') {
+        output = 'Este contenedor usa Alpine Linux con apk como gestor de paquetes.\n'
+                 'Usa: apk update, apk search <paquete>, apk add <paquete>, apk del <paquete>\n'
+                 'Para buscar: apk search <termino>';
+      } else if (_useProot && proot.initialized) {
+        output = await proot.runShell(cmd, timeout: const Duration(seconds: 120));
+        // Verificar si el comando fallo por ser binario musl
+        if (output.contains('Permission denied') || output.contains('not found')) {
+          final rootfs = proot.rootfsPath ?? '';
+          if (rootfs.isNotEmpty) {
+            final binPaths = ['/usr/bin', '/usr/sbin', '/bin', '/sbin', '/usr/local/bin'];
+            for (final dir in binPaths) {
+              final f = File('$rootfs$dir/${cmd.split(' ').first}');
+              if (await f.exists()) {
+                output += '\n⚠️ El binario "${cmd.split(' ').first}" existe pero es musl (incompatible con Android 15+).\n'
+                         'Los binarios musl no pueden ejecutarse. Alternativas:\n'
+                         '  - Usa toybox: vi en lugar de nano, sh en lugar de bash\n'
+                         '  - Paquetes apk se instalan (datos/config) pero binarios no ejecutan\n';
+                break;
+              }
+            }
+          }
         }
       } else if (_useProot && !proot.initialized) {
         output = 'Linux no inicializado. Ve a Inicio y haz Setup primero.';
@@ -83,15 +105,19 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   /// Intercepta comandos apk y los redirige al backend Dart
-  Future<String> _handleApkCommand(String cmd, ProotService proot) async {
+  Future<String> _handleApkCommand(String cmd, ProotService proot, TerminalService terminal) async {
     final parts = cmd.trim().split(RegExp(r'\s+'));
-    if (parts.length < 2) return 'apk: uso: apk <comando> [args]\nComandos: update, search, add, del, info, list';
+    if (parts.length < 2 || parts[0] != 'apk') {
+      return 'apk: uso: apk <comando> [args]\n'
+             'Comandos: update, search, add, del, info, list\n'
+             'Ej: apk search nano, apk add nano, apk del nano';
+    }
 
     final subcmd = parts[1];
     switch (subcmd) {
       case 'update':
         await proot.refreshApkIndex();
-        return 'APKINDEX actualizado: ${proot.apkIndex.length} paquetes';
+        return 'APKINDEX actualizado: ${proot.apkIndex.length} paquetes disponibles';
 
       case 'search':
         if (parts.length < 3) return 'apk search: falta termino de busqueda';
@@ -103,13 +129,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
           final inst = proot.installedPackages.contains(r['name']) ? ' [instalado]' : '';
           buf.writeln('  ${r['name']} - ${r['version']}$inst');
         }
+        buf.write('\nUsa: apk add <nombre> para instalar');
         return buf.toString();
 
       case 'add':
         if (parts.length < 3) return 'apk add: falta nombre del paquete';
         final pkg = parts[2];
+        terminal.addLine('Instalando $pkg...');
         if (await proot.installApk(pkg)) {
-          return 'OK $pkg instalado correctamente';
+          return 'OK $pkg instalado correctamente\n'
+                 '⚠️ Los binarios musl no ejecutan en Android 15+';
         }
         return 'Error instalando $pkg';
 
@@ -135,7 +164,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
         return buf.toString();
 
       default:
-        return 'apk: comando desconocido: $subcmd\nComandos: update, search, add, del, info, list';
+        return 'apk: comando desconocido: $subcmd\n'
+               'Comandos: update, search, add, del, info, list';
     }
   }
 
@@ -243,6 +273,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 if (_useProot && proot.initialized)
                   Text('apk | ssh | net',
                       style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                if (!_useProot)
+                  Text('apk no disponible en este modo',
+                      style: theme.textTheme.labelSmall?.copyWith(color: Colors.orange)),
               ],
             ),
           ),
@@ -263,11 +296,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
                                 style: TextStyle(color: Colors.green.withValues(alpha: 0.7),
                                     fontSize: 16, fontFamily: 'monospace')),
                             const SizedBox(height: 8),
-                            Text(_useProot && proot.initialized
-                                ? 'Escribe un comando y presiona Enter'
-                                : 'Activa el modo Linux Container',
-                                style: TextStyle(color: Colors.grey.withValues(alpha: 0.5),
-                                    fontFamily: 'monospace', fontSize: 12)),
+                            Text(
+                              _useProot && proot.initialized
+                                  ? 'Comandos: apk, ls, ping, vi, netstat'
+                                  : 'Cambia a Linux Container para usar apk',
+                              style: TextStyle(color: Colors.grey.withValues(alpha: 0.5),
+                                  fontFamily: 'monospace', fontSize: 12)),
                           ],
                         ),
                       )
