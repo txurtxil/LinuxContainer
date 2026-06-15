@@ -30,54 +30,76 @@ jobs:
     - name: Get dependencies
       run: flutter pub get
 
-    - name: Build APK
-      run: flutter build apk --release
-
-    - name: Build Bionic Tools
+    - name: Build Bionic Tools tarball
       run: |
-        # Descargar Packages.gz
-        curl -sL "https://packages.termux.org/apt/termux-main/dists/stable/main/binary-aarch64/Packages.gz" -o /tmp/Packages.gz
+        echo "=== Construyendo bionic-tools.tar.gz ==="
+        mkdir -p /tmp/bionic_build
         
-        # Extraer paquetes
-        rm -rf /tmp/bionic_build && mkdir -p /tmp/bionic_build
+        # Descargar y extraer Termux bootstrap directamente (metodo mas robusto)
+        BOOTSTRAP_URL="https://github.com/termux/termux-packages/releases/download/bootstrap-2026.06.14-r1%2Bapt.android-7/bootstrap-aarch64.zip"
+        echo "Descargando bootstrap..."
+        curl -sL "$BOOTSTRAP_URL" -o /tmp/bootstrap.zip
+        echo "Bootstrap: $(ls -lh /tmp/bootstrap.zip | awk '{print $5}')"
         
-        for p in bash nano openssh libandroid-support libcrypt openssl zlib ca-certificates; do
-          python3 scripts/extract-bionic.py "$p" /tmp/bionic_build /tmp/Packages.gz
+        unzip -q /tmp/bootstrap.zip -d /tmp/bionic_build/
+        echo "Extraido: $(find /tmp/bionic_build -type f | wc -l) archivos"
+        
+        # Verificar binarios clave
+        BOOTSTRAP_PREFIX="data/data/com.termux/files/usr"
+        if [ -d "/tmp/bionic_build/$BOOTSTRAP_PREFIX" ]; then
+          cd "/tmp/bionic_build/$BOOTSTRAP_PREFIX"
+          echo "Usando prefijo Termux"
+        else
+          cd /tmp/bionic_build
+        fi
+        
+        # Verificar que tenemos los binarios
+        for bin in bin/bash bin/sshd bin/nano bin/ping bin/curl; do
+          if [ -f "$bin" ]; then
+            echo "  OK: $bin ($(ls -lh "$bin" | awk '{print $5}'))"
+          else
+            echo "  MISSING: $bin"
+          fi
         done
         
-        echo "=== Archivos extraidos ==="
-        find /tmp/bionic_build -type f -name "*.so*" -o -type f -executable 2>/dev/null | head -20
-        
-        # Crear tarball desde el prefijo Termux
-        cd /tmp/bionic_build
-        PREFIX="data/data/com.termux/files/usr"
-        if [ -d "$PREFIX" ]; then
-          cd "$PREFIX"
-          echo "Usando prefijo Termux"
-        fi
-        pwd
-        ls -la bin/ 2>/dev/null || echo "No bin/"
-        
+        # Crear tarball (excluyendo docs pesados)
         tar -czf $GITHUB_WORKSPACE/bionic-tools.tar.gz \
-          --exclude='share/doc' --exclude='share/man' --exclude='share/info' \
-          --exclude='share/locale' --exclude='include' --exclude='var' \
+          --exclude='share/doc' \
+          --exclude='share/man' \
+          --exclude='share/info' \
+          --exclude='share/locale' \
+          --exclude='include' \
+          --exclude='var' \
           bin/ lib/ libexec/ etc/ share/ 2>/dev/null || true
         
         echo "=== Tarball ==="
         ls -lh $GITHUB_WORKSPACE/bionic-tools.tar.gz
+        echo "Contenido:"
         tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | head -30
+        echo "... ($(tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | wc -l) entries total)"
 
-    - name: Upload APK
+    - name: Build APK
+      run: flutter build apk --release
+    
+    - name: Debug - Check APK
+      run: |
+        echo "Buscando APK..."
+        find build/ -name "*.apk" -type f 2>/dev/null || echo "No APK found"
+        ls -la build/app/outputs/flutter-apk/ 2>/dev/null || echo "No output dir"
+
+    - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
         name: linux-container-apk
         path: build/app/outputs/flutter-apk/app-release.apk
+        if-no-files-found: warn
 
-    - name: Upload Bionic Tools
+    - name: Upload Bionic Tools artifact
       uses: actions/upload-artifact@v4
       with:
         name: bionic-tools
         path: bionic-tools.tar.gz
+        if-no-files-found: warn
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/v')

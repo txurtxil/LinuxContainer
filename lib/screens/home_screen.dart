@@ -64,7 +64,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Linux Container'),
+        title: const Text("Linux Container v9.5"),
         centerTitle: true,
         elevation: 0,
         actions: [

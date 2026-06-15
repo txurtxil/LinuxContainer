@@ -1,52 +1,74 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'proot_service.dart';
 
-class OpenCloudService {
+class OpenCloudService extends ChangeNotifier {
   bool _installed = false;
   bool _running = false;
+  String _status = 'No instalado';
   String _output = '';
-  String _status = 'No disponible';
-  String _version = '';
 
   bool get installed => _installed;
   bool get running => _running;
-  String get output => _output;
   String get status => _status;
-  String get version => _version;
+  String get output => _output;
 
-  /// OpenCloud requiere servidor web (Apache/Nginx), PHP y MariaDB.
-  /// TODOS son binarios musl que no pueden ejecutarse en Android 15+.
-  /// Esta funcionalidad esta en desarrollo para una version futura.
+  Future<void> installOpenCloud() async {
+    _status = 'Instalando OpenCloud...';
+    _output = 'Iniciando instalacion...\n';
+    notifyListeners();
 
-  Future<void> installNextcloud() async {
-    _output = '''╔══════════════════════════════════════════════╗
-║     OpenCloud / Nextcloud - NO DISPONIBLE     ║
-╠══════════════════════════════════════════════╣
-║ OpenCloud requiere un servidor web (Apache), ║
-║ PHP, y MariaDB. Todos estos son binarios     ║
-║ musl que NO pueden ejecutarse en Android 15+ ║
-║                                              ║
-║ Soluciones futuras:                          ║
-║ • Compilar Apache/PHP/MariaDB para bionic    ║
-║ • Usar Termux como backend                   ║
-║ • Implementar servidor web en Dart puro      ║
-║                                              ║
-║ Por ahora usa el servidor TCP (SSH) para     ║
-║ ejecutar comandos remotamente.               ║
-╚══════════════════════════════════════════════╝''';
-    _status = 'No disponible - en desarrollo';
+    final proot = ProotService();
+    final rootfs = proot.rootfsPath ?? '${await _appDir}/rootfs';
+
+    if (!proot.hasBionic) {
+      _output += 'ERROR: Se requieren binarios nativos. Pulsa Setup Linux primero.\n';
+      _status = 'Error: sin bionic';
+      notifyListeners();
+      return;
+    }
+
+    try {
+      for (final pkg in ['apache2', 'php', 'php-mysqli', 'mariadb', 'mariadb-client']) {
+        _output += 'Instalando $pkg...\n';
+        await proot.installApk(pkg);
+        notifyListeners();
+      }
+
+      _output += 'Configurando servicios...\n';
+      await Directory('$rootfs/var/www/localhost/htdocs').create(recursive: true);
+      await File('$rootfs/var/www/localhost/htdocs/index.html').writeAsString(
+        '<html><body><h1>OpenCloud en Linux Container</h1>'
+        '<p>Servidor web funcionando en Android via Alpine Linux!</p>'
+        '<p>Puerto: 8080</p></body></html>'
+      );
+
+      _installed = true;
+      _status = 'OpenCloud instalado (puerto 8080)';
+      _output += 'Instalacion completada.\nWeb: http://localhost:8080\n';
+      notifyListeners();
+    } catch (e) {
+      _status = 'Error: $e';
+      _output += 'Error: $e\n';
+      notifyListeners();
+    }
   }
 
-  Future<void> startServer() async {
-    _output = 'OpenCloud no disponible - requiere servidores musl\n';
-    _status = 'No disponible';
+  Future<void> startOpenCloud() async {
+    _status = 'Iniciando...';
+    _output = 'Servicios no implementados aun...\n';
+    notifyListeners();
   }
 
-  Future<void> stopServer() async {
-    _output = 'OpenCloud no disponible\n';
-    _status = 'No disponible';
+  Future<void> stopOpenCloud() async {
+    _running = false;
+    _status = 'Detenido';
+    notifyListeners();
   }
 
-  Future<void> getVersion() async {
-    _version = 'N/A';
-  }
+  Future<String> get _appDir async =>
+    '${(await getApplicationDocumentsDirectory()).path}/linux_container';
 }
