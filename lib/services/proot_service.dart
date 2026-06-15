@@ -201,10 +201,20 @@ class ProotService extends ChangeNotifier {
 
       _downloadProgress = 1.0;
       _initialized = shOk;
-      _statusMessage = shOk
-          ? 'Linux listo'
-          : 'Error: /bin/sh no encontrado en rootfs';
-      _logMsg(_statusMessage);
+      if (shOk) {
+        _statusMessage = 'Linux listo - Instalando paquetes esenciales...';
+        _logMsg(_statusMessage);
+        notifyListeners();
+
+        // Instalar paquetes esenciales post-setup
+        await installEssentials();
+
+        _statusMessage = 'Linux listo - Todo instalado';
+        _logMsg(_statusMessage);
+      } else {
+        _statusMessage = 'Error: /bin/sh no encontrado en rootfs';
+        _logMsg(_statusMessage);
+      }
       _logMsg('=== FIN SETUP ===');
     } catch (e) {
       _logMsg('EXCEPCIÓN: $e');
@@ -826,6 +836,74 @@ class ProotService extends ChangeNotifier {
       await sink.close();
       _logMsg('OK: $recv bytes');
     } finally { client.close(); }
+  }
+
+  // ────────── Instalar paquetes esenciales ──────────
+  Future<void> installEssentials() async {
+    _logMsg('Actualizando repositorios apk...');
+    _statusMessage = 'Actualizando repositorios...';
+    notifyListeners();
+    try {
+      final update = await runCommand('apk update 2>&1 || true',
+          timeout: const Duration(seconds: 120));
+      _logMsg('apk update: ${update.length > 200 ? update.substring(0, 200) + "..." : update}');
+    } catch (e) {
+      _logMsg('apk update fallo: $e');
+    }
+
+    _statusMessage = 'Instalando openssh-server...';
+    notifyListeners();
+    try {
+      final ssh = await runCommand(
+        'apk add openssh-server openssh-keygen 2>&1 || true',
+        timeout: const Duration(seconds: 180));
+      _logMsg('openssh: ${ssh.length > 100 ? ssh.substring(0, 100) + "..." : ssh}');
+    } catch (e) {
+      _logMsg('openssh fallo: $e');
+    }
+
+    _statusMessage = 'Instalando curl wget bash ca-certificates...';
+    notifyListeners();
+    try {
+      final utils = await runCommand(
+        'apk add curl wget bash ca-certificates sudo nano 2>&1 || true',
+        timeout: const Duration(seconds: 180));
+      _logMsg('utilidades: ${utils.length > 100 ? utils.substring(0, 100) + "..." : utils}');
+    } catch (e) {
+      _logMsg('utilidades fallo: $e');
+    }
+
+    // Generar claves SSH y configurar
+    _statusMessage = 'Configurando SSH...';
+    notifyListeners();
+    try {
+      // Generar claves de host SSH
+      final keys = await runCommand(
+        'ssh-keygen -A 2>&1 || true',
+        timeout: const Duration(seconds: 30));
+      if (keys.isNotEmpty) _logMsg('ssh-keys: ${keys.substring(0, keys.length > 60 ? 60 : keys.length)}');
+
+      // Configurar sshd para permitir root
+      final config = await runCommand(
+        'sed -i "s/#PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config 2>/dev/null; '
+        'sed -i "s/#PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config 2>/dev/null; '
+        'echo "root:linux" | chpasswd 2>/dev/null || true; '
+        'echo "SSH configurado"',
+        timeout: const Duration(seconds: 10));
+      _logMsg(config);
+
+      // Arrancar SSH
+      final start = await runCommand(
+        '/usr/sbin/sshd 2>&1 || /usr/sbin/sshd -p 2222 2>&1 || echo "sshd ya en ejecucion"',
+        timeout: const Duration(seconds: 10));
+      _logMsg('sshd: $start');
+    } catch (e) {
+      _logMsg('config ssh fallo: $e');
+    }
+
+    _statusMessage = 'Paquetes esenciales instalados';
+    _logMsg('Paquetes esenciales OK');
+    notifyListeners();
   }
 
   Future<void> resetEnvironment() async {
