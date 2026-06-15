@@ -222,7 +222,7 @@ class ProotService extends ChangeNotifier {
       await Directory(outPath).parent.create(recursive: true);
 
       // ── Symlinks y Hardlinks ──
-      final linkTarget = (entry is TarFile) ? entry.linkName : '';
+      final linkTarget = (entry is TarFile) ? (entry as TarFile).linkName : '';
       if (linkTarget.isNotEmpty || entry.isSymbolicLink) {
         // SYMLINK o HARDLINK
         final target = entry.isSymbolicLink
