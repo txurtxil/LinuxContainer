@@ -9,7 +9,6 @@ import 'opencloud_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -21,6 +20,52 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ProotService>().checkEnvironment();
     });
+  }
+
+  void _showLogDialog(ProotService proot) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            AppBar(
+              title: const Text('Log de Setup'),
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.content_copy),
+                  onPressed: () {
+                    // Podríamos copiar al portapapeles
+                    Navigator.pop(ctx);
+                  },
+                ),
+              ],
+            ),
+            Expanded(
+              child: Container(
+                color: Colors.black,
+                padding: const EdgeInsets.all(8),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    proot.logText,
+                    style: const TextStyle(
+                      color: Colors.greenAccent,
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -39,7 +84,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                // Header
+                // ─── Header ───
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
@@ -89,6 +134,15 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         ),
+                        // Botón Ver Log si hay log disponible
+                        if (proot.logText.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          TextButton.icon(
+                            onPressed: () => _showLogDialog(proot),
+                            icon: const Icon(Icons.terminal, size: 16),
+                            label: const Text('Ver Log'),
+                          ),
+                        ],
                       ],
                       if (proot.isDownloading) ...[
                         const SizedBox(height: 16),
@@ -97,13 +151,36 @@ class _HomeScreenState extends State<HomeScreen> {
                           backgroundColor: theme.colorScheme.onPrimaryContainer
                               .withValues(alpha: 0.15),
                         ),
+                        // Log compacto durante descarga
+                        if (proot.logText.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            height: 80,
+                            child: SingleChildScrollView(
+                              child: SelectableText(
+                                proot.logText,
+                                style: TextStyle(
+                                  color: Colors.greenAccent.withValues(alpha: 0.8),
+                                  fontFamily: 'monospace',
+                                  fontSize: 9,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ],
                   ),
                 ),
                 const SizedBox(height: 24),
 
-                // Quick Action Cards
+                // ─── Accesos Rápidos ───
                 Text(
                   'Accesos Rápidos',
                   style: theme.textTheme.titleMedium?.copyWith(
@@ -116,7 +193,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   context,
                   icon: Icons.terminal,
                   title: 'Terminal',
-                  subtitle: 'Shell interactivo con apt',
+                  subtitle: 'Shell interactivo con apk',
                   color: Colors.teal,
                   onTap: () => Navigator.push(
                     context,
@@ -129,7 +206,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   context,
                   icon: Icons.inventory_2,
                   title: 'Gestor de Paquetes',
-                  subtitle: 'Instalar/eliminar paquetes apt',
+                  subtitle: 'Instalar/eliminar paquetes apk',
                   color: Colors.indigo,
                   onTap: () => Navigator.push(
                     context,
@@ -175,6 +252,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     MaterialPageRoute(builder: (_) => const OpenCloudScreen()),
                   ),
                 ),
+
+                if (!proot.initialized && !proot.isDownloading && proot.logText.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: () => _showLogDialog(proot),
+                    icon: const Icon(Icons.terminal),
+                    label: const Text('Ver Log Completo'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ],
               ],
             ),
           );
