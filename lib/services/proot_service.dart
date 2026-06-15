@@ -184,7 +184,7 @@ class ProotService extends ChangeNotifier {
       if (binName == 'apk' && _apkStaticPath != null) {
         binPath = _apkStaticPath;
       } else if (_staticBusyboxPath != null &&
-                 File(_staticBusyboxPath!).exists()) {
+                 await File(_staticBusyboxPath!).exists()) {
         // Usar busybox static con el applet deseado
         // Ej: "ls /etc" -> linker64 busybox.static ls /etc
         binPath = _staticBusyboxPath;
@@ -381,7 +381,7 @@ class ProotService extends ChangeNotifier {
       _statusMessage = 'Verificando binarios...';
       notifyListeners();
 
-      if (_staticBusyboxPath != null && await File(_staticBusyboxPath!).exists()) {
+      if (_staticBusyboxPath != null && await await File(_staticBusyboxPath!).exists()) {
         final sz = await File(_staticBusyboxPath!).length();
         _logMsg('busybox.static OK: $sz bytes');
       } else {
