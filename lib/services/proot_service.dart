@@ -246,7 +246,7 @@ class ProotService extends ChangeNotifier {
         final linker = await _linker;
         if (linker != null) {
           // Extraer busybox primero
-          await _logMsg('Usando linker para extraer busybox');
+          _logMsg('Usando linker para extraer busybox');
           // No podemos extraer un solo archivo sin tar... usar Dart
           await _extractAssetBusybox(tempFile.path, rootfs);
           final bb = File('$rootfs/bin/busybox');
