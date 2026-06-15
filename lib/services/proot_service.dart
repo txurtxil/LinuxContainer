@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
+import 'package:archive/archive.dart';
 
 class ProotService extends ChangeNotifier {
   static final ProotService _instance = ProotService._internal();
@@ -31,15 +32,13 @@ class ProotService extends ChangeNotifier {
 
   String? _rootfsPath;
 
-  // URLs corregidas
   static const String _minirootfsUrl =
       'https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/alpine-minirootfs-3.24.1-aarch64.tar.gz';
   static const String _debianRootfsUrl =
       'https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-arm64.tar.xz';
-  static const String _prootUrl =
-      'https://github.com/proot-me/proot/releases/download/v5.4.0/proot-v5.4.0-aarch64-static';
+  static const String _prootRsUrl =
+      'https://github.com/proot-me/proot-rs/releases/download/v0.1.0/proot-rs-aarch64';
 
-  // Linker del sistema Android
   Future<String?> get _linker async {
     if (await File('/system/bin/linker64').exists()) return '/system/bin/linker64';
     if (await File('/system/bin/linker').exists()) return '/system/bin/linker';
@@ -51,7 +50,6 @@ class ProotService extends ChangeNotifier {
     return '${dir.path}/linux_container';
   }
 
-  // ─── Comprobación ───
   Future<bool> checkEnvironment() async {
     _log.clear();
     try {
@@ -62,7 +60,7 @@ class ProotService extends ChangeNotifier {
         final sh = File('$rootfs/bin/sh');
         if (await sh.exists()) {
           final st = await sh.stat();
-          if (st.size > 0 && st.mode & 0x40 != 0) {
+          if (st.size > 0) {
             _initialized = true;
             _statusMessage = 'Linux listo';
             _logMsg('Rootfs OK, /bin/sh existe (${st.size} bytes)');
@@ -82,7 +80,6 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ─── Setup ───
   Future<void> setupEnvironment() async {
     if (_isDownloading) return;
     _isDownloading = true;
@@ -97,33 +94,30 @@ class ProotService extends ChangeNotifier {
       final appDir = await _appDir;
       final rootfs = '$appDir/rootfs';
       _rootfsPath = rootfs;
-
       await Directory(appDir).create(recursive: true);
       await Directory(rootfs).create(recursive: true);
 
       bool ok = false;
 
-      // 1: Asset embeebido (Alpine, funciona offline)
+      // 1: Asset embeebido (Alpine 3.24.1)
       ok = await _setupFromAsset(rootfs);
       if (ok) { _logMsg('✓ Rootfs extraído desde asset'); }
 
       // 2: Minirootfs descargado
       if (!ok) {
         ok = await _setupWithMinirootfs(appDir, rootfs);
-        if (ok) { _logMsg('✓ Rootfs desde minirootfs descargado'); }
+        if (ok) { _logMsg('✓ Rootfs desde minirootfs'); }
       }
 
-      // 3: Debian rootfs
+      // 3: Debian
       if (!ok) {
         ok = await _setupWithDebianRootfs(appDir, rootfs);
-        if (ok) { _logMsg('✓ Rootfs Debian descargado'); }
+        if (ok) { _logMsg('✓ Rootfs Debian'); }
       }
 
-      if (!ok) {
-        throw Exception('No se pudo crear el rootfs');
-      }
+      if (!ok) { throw Exception('No se pudo crear el rootfs'); }
 
-      // ─── Post-extracción: reparar hardlinks ───
+      // ─── Post: reparar hardlinks (copiar busybox a archivos 0 bytes) ───
       _logMsg('Reparando hardlinks…');
       await _fixHardlinks(rootfs);
 
@@ -131,7 +125,6 @@ class ProotService extends ChangeNotifier {
       _downloadProgress = 0.80;
       _statusMessage = 'Configurando red…';
       notifyListeners();
-
       await Directory('$rootfs/etc').create(recursive: true);
       await File('$rootfs/etc/resolv.conf').writeAsString(
         'nameserver 8.8.8.8\nnameserver 1.1.1.1\n');
@@ -139,7 +132,7 @@ class ProotService extends ChangeNotifier {
         '127.0.0.1 localhost\n::1 localhost\n');
 
       if (await File('$rootfs/etc/apt').exists()) {
-        _logMsg('Rootfs Debian, configurando apt sources');
+        _logMsg('Rootfs Debian, configurando apt');
         final aptDir = Directory('$rootfs/etc/apt');
         await aptDir.create(recursive: true);
         if (!await File('$rootfs/etc/apt/sources.list').exists()) {
@@ -153,13 +146,13 @@ class ProotService extends ChangeNotifier {
       // ─── Permisos ───
       await _chmodBins(rootfs);
 
-      // ─── PROOT ───
+      // ─── PROOT-rs ───
       _downloadProgress = 0.90;
-      _statusMessage = 'Descargando PROOT…';
+      _statusMessage = 'Descargando PROOT-rs…';
       notifyListeners();
-      await _downloadProot(appDir);
+      await _downloadProotRs(appDir);
 
-      // ─── Verificación final ───
+      // ─── Verificación ───
       bool shOk = await File('$rootfs/bin/sh').exists() &&
                   await File('$rootfs/bin/sh').length() > 0;
 
@@ -181,7 +174,7 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ────────── Asset embeebido ──────────
+  // ────────── Asset con archive package ──────────
   Future<bool> _setupFromAsset(String rootfs) async {
     _logMsg('--- Buscando assets embebidos ---');
     try {
@@ -191,106 +184,108 @@ class ProotService extends ChangeNotifier {
         return false;
       }
 
-      _logMsg('Extrayendo desde asset: assets/rootfs.tar.gz');
+      _logMsg('Leyendo asset: assets/rootfs.tar.gz');
       final data = await rootBundle.load('assets/rootfs.tar.gz');
-      final tempFile = File('${rootfs}_asset.tgz');
-      await tempFile.writeAsBytes(data.buffer.asUint8List());
+      final bytes = data.buffer.asUint8List();
 
-      final result = await _extractTar(tempFile.path, rootfs);
-      await tempFile.delete();
-      return result;
+      _logMsg('Descomprimiendo con archive package…');
+      final gzBytes = GZipDecoder().decodeBytes(bytes);
+      final archive = TarDecoder().decodeBytes(gzBytes);
+
+      _logMsg('Extrayendo ${archive.length} entradas…');
+      int count = 0;
+      int dirs = 0, files = 0, symlinks = 0;
+
+      for (final entry in archive) {
+        String name = entry.name;
+        if (name.startsWith('./')) { name = name.substring(2); }
+        if (name.isEmpty || name == '.') { continue; }
+
+        final outPath = '$rootfs/$name';
+
+        // Directorio
+        if (name.endsWith('/')) {
+          await Directory(outPath).create(recursive: true);
+          dirs++;
+          count++;
+          _pulse(count, dirs + files + symlinks + 1);
+          continue;
+        }
+
+        await Directory(outPath).parent.create(recursive: true);
+
+        // Symlink
+        if (entry.isSymbolicLink) {
+          final target = entry.symbolicLink;
+          if (target != null && target.isNotEmpty) {
+            final resolved = target.startsWith('/')
+                ? '$rootfs$target'
+                : '${Directory(outPath).parent.path}/$target';
+            if (await File(resolved).exists()) {
+              try { await File(resolved).copy(outPath); } catch (_) {}
+            }
+          }
+          symlinks++;
+          count++;
+          _pulse(count, archive.length);
+          continue;
+        }
+
+        // Archivo normal
+        if (entry.isFile) {
+          final content = entry.content;
+          if (content.isNotEmpty) {
+            await File(outPath).writeAsBytes(content);
+            files++;
+          } else {
+            // Hardlink (0 bytes) → se repara después
+            await File(outPath).writeAsString('');
+          }
+          count++;
+          _pulse(count, archive.length);
+          continue;
+        }
+
+        count++;
+      }
+
+      _logMsg('Extraídos: $dirs directorios, $files archivos, $symlinks symlinks');
+
+      // Verificar que busybox existe y tiene contenido
+      final bb = File('$rootfs/bin/busybox');
+      if (await bb.exists() && await bb.length() > 0) {
+        _logMsg('busybox OK: ${await bb.length()} bytes');
+        return true;
+      }
+
+      _logMsg('ERROR: busybox no encontrado o vacío tras extracción');
+      return false;
     } catch (e) {
-      _logMsg('Asset falló: $e');
+      _logMsg('Asset+archive falló: $e');
+      _logMsg('Stack: ${StackTrace.current}');
       return false;
     }
   }
 
-  // ────────── Minirootfs descargado ──────────
-  Future<bool> _setupWithMinirootfs(String appDir, String rootfs) async {
-    _logMsg('--- MÉTODO: Minirootfs descargado ---');
-    _statusMessage = 'Descargando Alpine…';
-    notifyListeners();
-
-    final tgzPath = '$appDir/rootfs.tar.gz';
-    if (!await File(tgzPath).exists()) {
-      try {
-        await _downloadFile(_minirootfsUrl, tgzPath, 0.20, 0.50);
-      } catch (e) {
-        _logMsg('ERROR descarga minirootfs: $e');
-        return false;
-      }
+  void _pulse(int count, int total) {
+    if (total > 0 && count % 100 == 0) {
+      _downloadProgress = 0.50 + (count / total) * 0.30;
+      _statusMessage = 'Extrayendo ${(count * 100 / total).toInt()}%';
+      notifyListeners();
     }
-
-    _downloadProgress = 0.55;
-    _statusMessage = 'Extrayendo…';
-    notifyListeners();
-
-    return _extractTar(tgzPath, rootfs);
-  }
-
-  // ────────── Debian rootfs ──────────
-  Future<bool> _setupWithDebianRootfs(String appDir, String rootfs) async {
-    _logMsg('--- MÉTODO: Debian rootfs ---');
-    _statusMessage = 'Descargando Debian…';
-    notifyListeners();
-
-    final xzPath = '$appDir/debian-rootfs.tar.xz';
-    if (!await File(xzPath).exists()) {
-      try {
-        await _downloadFile(_debianRootfsUrl, xzPath, 0.20, 0.50);
-      } catch (e) {
-        _logMsg('ERROR descarga Debian: $e');
-        return false;
-      }
-    }
-
-    _downloadProgress = 0.55;
-    _statusMessage = 'Extrayendo Debian…';
-    notifyListeners();
-
-    return _extractTar(xzPath, rootfs);
-  }
-
-  // ────────── Extraer tar (toybox → linker+busybox) ──────────
-  Future<bool> _extractTar(String tarPath, String rootfs) async {
-    // Método 1: toybox/toolbox tar del sistema
-    for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
-      if (await File(tb).exists()) {
-        _logMsg('Extrayendo con $tb');
-        try {
-          await Process.run(tb, ['tar', '-xf', tarPath, '-C', rootfs])
-              .timeout(const Duration(seconds: 180));
-          // Verificar si hay busybox (el binario real, no hardlink)
-          if (await File('$rootfs/bin/busybox').exists() &&
-              await File('$rootfs/bin/busybox').length() > 0) {
-            _logMsg('Extraído con $tb');
-            return true;
-          }
-        } catch (e) { _logMsg('$tb falló: $e'); }
-      }
-    }
-
-    _logMsg('No se pudo extraer el tar');
-    return false;
   }
 
   // ────────── Reparar hardlinks ──────────
   Future<void> _fixHardlinks(String rootfs) async {
-    // En Alpine rootfs, busybox es el binario real.
-    // Los applets (sh, ls, cp...) son hardlinks a busybox
-    // y se extraen como 0 bytes. Copiamos busybox a ellos.
     final bbFile = File('$rootfs/bin/busybox');
-    if (!await bbFile.exists()) {
-      _logMsg('busybox no encontrado, no se pueden reparar hardlinks');
-      return;
-    }
+    if (!await bbFile.exists()) { _logMsg('busybox no existe'); return; }
     final bbLen = await bbFile.length();
-    if (bbLen == 0) {
-      _logMsg('busybox tiene tamaño 0, no se puede reparar');
-      return;
-    }
+    if (bbLen == 0) { _logMsg('busybox tamaño 0'); return; }
 
+    _logMsg('busybox: ${bbLen} bytes, reparando hardlinks…');
+    final bbData = await bbFile.readAsBytes();
     int fixed = 0;
+
     for (final dir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin']) {
       final d = Directory('$rootfs$dir');
       if (!await d.exists()) { continue; }
@@ -299,8 +294,7 @@ class ProotService extends ChangeNotifier {
           if (entity is File) {
             try {
               if (await entity.length() == 0) {
-                await entity.writeAsBytes(await bbFile.readAsBytes());
-                await _runChmod(entity.path);
+                await entity.writeAsBytes(bbData);
                 fixed++;
               }
             } catch (_) {}
@@ -311,6 +305,115 @@ class ProotService extends ChangeNotifier {
     _logMsg('Hardlinks reparados: $fixed');
   }
 
+  // ────────── Minirootfs descargado ──────────
+  Future<bool> _setupWithMinirootfs(String appDir, String rootfs) async {
+    _logMsg('--- Minirootfs descargado ---');
+    _statusMessage = 'Descargando Alpine…';
+    notifyListeners();
+
+    final tgzPath = '$appDir/rootfs.tar.gz';
+    if (!await File(tgzPath).exists()) {
+      try {
+        await _downloadFile(_minirootfsUrl, tgzPath, 0.20, 0.50);
+      } catch (e) {
+        _logMsg('ERROR descarga: $e');
+        return false;
+      }
+    }
+
+    _downloadProgress = 0.55;
+    _statusMessage = 'Extrayendo con archive…';
+    notifyListeners();
+    return _extractTarDart(tgzPath, rootfs);
+  }
+
+  // ────────── Debian ──────────
+  Future<bool> _setupWithDebianRootfs(String appDir, String rootfs) async {
+    _logMsg('--- Debian rootfs ---');
+    _statusMessage = 'Descargando Debian…';
+    notifyListeners();
+
+    final xzPath = '$appDir/debian-rootfs.tar.xz';
+    if (!await File(xzPath).exists()) {
+      try {
+        await _downloadFile(_debianRootfsUrl, xzPath, 0.20, 0.50);
+      } catch (e) {
+        _logMsg('ERROR descarga: $e');
+        return false;
+      }
+    }
+
+    _downloadProgress = 0.55;
+    _statusMessage = 'Extrayendo Debian…';
+    notifyListeners();
+
+    // Toybox para .tar.xz (Dart no maneja XZ)
+    for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
+      if (await File(tb).exists()) {
+        try {
+          await Process.run(tb, ['tar', '-xf', xzPath, '-C', rootfs])
+              .timeout(const Duration(seconds: 180));
+          if (await File('$rootfs/bin/sh').exists() &&
+              await File('$rootfs/bin/sh').length() > 0) { return true; }
+        } catch (e) { _logMsg('$tb falló: $e'); }
+      }
+    }
+    return false;
+  }
+
+  // ────────── Extraer tar.gz con archive package ──────────
+  Future<bool> _extractTarDart(String tgzPath, String rootfs) async {
+    try {
+      final bytes = await File(tgzPath).readAsBytes();
+      final gz = GZipDecoder().decodeBytes(bytes);
+      final archive = TarDecoder().decodeBytes(gz);
+
+      int count = 0;
+      for (final entry in archive) {
+        String name = entry.name;
+        if (name.startsWith('./')) { name = name.substring(2); }
+        if (name.isEmpty || name == '.') { continue; }
+
+        final outPath = '$rootfs/$name';
+
+        if (name.endsWith('/')) {
+          await Directory(outPath).create(recursive: true);
+          count++; continue;
+        }
+
+        await Directory(outPath).parent.create(recursive: true);
+
+        if (entry.isSymbolicLink) {
+          final target = entry.symbolicLink;
+          if (target != null && target.isNotEmpty) {
+            final resolved = target.startsWith('/')
+                ? '$rootfs$target'
+                : '${Directory(outPath).parent.path}/$target';
+            if (await File(resolved).exists()) {
+              try { await File(resolved).copy(outPath); } catch (_) {}
+            }
+          }
+          count++; continue;
+        }
+
+        if (entry.isFile) {
+          final content = entry.content;
+          if (content.isNotEmpty) {
+            await File(outPath).writeAsBytes(content);
+          } else {
+            await File(outPath).writeAsString('');
+          }
+          count++; continue;
+        }
+        count++;
+      }
+      return true;
+    } catch (e) {
+      _logMsg('Error extracción Dart: $e');
+      return false;
+    }
+  }
+
   // ────────── Permisos ──────────
   Future<void> _chmodBins(String rootfs) async {
     for (final dir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/lib']) {
@@ -318,39 +421,33 @@ class ProotService extends ChangeNotifier {
       if (await d.exists()) {
         try {
           await for (final entity in d.list()) {
-            if (entity is File) { try { await _runChmod(entity.path); } catch (_) {} }
+            if (entity is File) {
+              try {
+                await Process.run('chmod', ['755', entity.path])
+                    .timeout(const Duration(seconds: 5));
+              } catch (_) {}
+            }
           }
         } catch (_) {}
       }
     }
   }
 
-  Future<void> _runChmod(String path) async {
-    final linker = await _linker;
-    if (linker != null) {
-      await Process.run(linker, ['/system/bin/chmod', '755', path]).timeout(
-          const Duration(seconds: 10));
-    } else {
-      await Process.run('chmod', ['755', path]).timeout(
-          const Duration(seconds: 10));
-    }
-  }
-
-  // ────────── PROOT ──────────
-  Future<void> _downloadProot(String appDir) async {
+  // ────────── PROOT-rs ──────────
+  Future<void> _downloadProotRs(String appDir) async {
     final prootPath = '$appDir/proot';
     if (await File(prootPath).exists()) { return; }
     try {
-      _logMsg('Descargando PROOT');
-      await _downloadFile(_prootUrl, prootPath, 0.85, 0.95);
-      await _runChmod(prootPath);
-      _logMsg('PROOT OK');
+      _logMsg('Descargando PROOT-rs');
+      await _downloadFile(_prootRsUrl, prootPath, 0.85, 0.95);
+      await Process.run('chmod', ['755', prootPath]);
+      _logMsg('PROOT-rs OK');
     } catch (e) {
-      _logMsg('PROOT no disponible: $e');
+      _logMsg('PROOT-rs no disponible: $e');
     }
   }
 
-  // ────────── Ejecutar comandos ──────────
+  // ────────── runCommand ──────────
   Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     if (!_initialized || _rootfsPath == null) {
       return 'Error: Linux no inicializado.\nPulsa "Setup Linux" primero.\n';
@@ -420,7 +517,6 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ────────── Download ──────────
   Future<void> _downloadFile(String url, String path, double sw, double ew) async {
     final client = HttpClient();
     try {
