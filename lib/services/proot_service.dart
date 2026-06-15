@@ -37,7 +37,7 @@ class ProotService extends ChangeNotifier {
   static const String _debianRootfsUrl =
       'https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-arm64.tar.xz';
   static const String _prootRsUrl =
-      'https://github.com/proot-me/proot-rs/releases/download/v0.1.0/proot-rs-aarch64';
+      'https://github.com/proot-me/proot-rs/releases/download/v0.1.0/proot-rs-v0.1.0-aarch64-linux-android.tar.gz';
 
   Future<String?> get _linker async {
     if (await File('/system/bin/linker64').exists()) return '/system/bin/linker64';
@@ -174,7 +174,7 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ────────── Asset con archive package ──────────
+    // ────────── Asset: system tar + archive fallback ──────────
   Future<bool> _setupFromAsset(String rootfs) async {
     _logMsg('--- Buscando assets embebidos ---');
     try {
@@ -188,105 +188,169 @@ class ProotService extends ChangeNotifier {
       final data = await rootBundle.load('assets/rootfs.tar.gz');
       final bytes = data.buffer.asUint8List();
 
-      _logMsg('Descomprimiendo con archive package…');
+      // Guardar a archivo temporal para system tar
+      final appDir = await _appDir;
+      final tarPath = '$appDir/cached_rootfs.tar.gz';
+      await File(tarPath).writeAsBytes(bytes);
+
+      // Intentar system tar primero (maneja symlinks y hardlinks nativamente)
+      for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
+        if (await File(tb).exists()) {
+          try {
+            _logMsg('Extrayendo con $tb tar');
+            final result = await Process.run(
+              tb, ['tar', '-xzf', tarPath, '-C', rootfs],
+            ).timeout(const Duration(seconds: 180));
+            if (result.exitCode == 0) {
+              if (await File('$rootfs/bin/sh').exists() &&
+                  await File('$rootfs/bin/sh').length() > 0) {
+                _logMsg('OK: /bin/sh extraido con $tb');
+                return true;
+              }
+              if (await File('$rootfs/bin/busybox').exists() &&
+                  await File('$rootfs/bin/busybox').length() > 0) {
+                _logMsg('OK: busybox extraido con $tb');
+                return true;
+              }
+              _logMsg('system tar extrajo pero /bin/sh no encontrado');
+            }
+          } catch (e) {
+            _logMsg('system tar fallo: $e');
+          }
+        }
+      }
+
+      // Fallback: archive package Dart con multi-pasada
+      _logMsg('Fallback: archive package Dart');
       final gzBytes = GZipDecoder().decodeBytes(bytes);
       final archive = TarDecoder().decodeBytes(gzBytes);
+      _logMsg('Total entradas: ${archive.length}');
 
-      _logMsg('Extrayendo ${archive.length} entradas…');
-      
-      int dirs = 0, files = 0, symlinks = 0;
+      int dirs = 0, files = 0, symlinksDeferred = 0, emptyFiles = 0;
+      final deferred = <MapEntry<String, String>>[]; // [path, target]
 
+      // PASADA 1: directorios + archivos (no symlinks)
       for (final entry in archive) {
         String name = entry.name;
-        if (name.startsWith('./')) { name = name.substring(2); }
-        if (name.isEmpty || name == '.') { continue; }
-
+        if (name.startsWith('./')) name = name.substring(2);
+        if (name.isEmpty || name == '.') continue;
         final outPath = '$rootfs/$name';
 
-        // Directorio
         if (name.endsWith('/')) {
           await Directory(outPath).create(recursive: true);
-          dirs++;
-          
-          _pulse(count, dirs + files + symlinks + 1);
-          continue;
+          dirs++; continue;
         }
-
         await Directory(outPath).parent.create(recursive: true);
 
-        // Symlink
         if (entry.isSymbolicLink) {
-          final target = entry.symbolicLink;
-          if (target != null && target.isNotEmpty) {
-            final resolved = target.startsWith('/')
-                ? '$rootfs$target'
-                : '${Directory(outPath).parent.path}/$target';
-            if (await File(resolved).exists()) {
-              try { await File(resolved).copy(outPath); } catch (_) {}
-            }
-          }
-          symlinks++;
-          
-          _pulse(count, archive.length);
+          final target = entry.symbolicLink ?? '';
+          if (target.isNotEmpty) deferred.add(MapEntry(outPath, target));
+          symlinksDeferred++;
           continue;
         }
 
-        // Archivo normal
         if (entry.isFile) {
-          final content = entry.content;
+          final content = entry.content as List<int>;
           if (content.isNotEmpty) {
+            try { if (await Link(outPath).exists()) await Link(outPath).delete(); } catch (_) {}
             await File(outPath).writeAsBytes(content);
             files++;
           } else {
-            // Hardlink (0 bytes) → se repara después
-            await File(outPath).writeAsString('');
+            await File(outPath).writeAsBytes([]); // hardlink placeholder
+            emptyFiles++;
           }
-          
-          _pulse(count, archive.length);
-          continue;
         }
-
-        
       }
+      _logMsg('1a pasada: $dirs dirs, $files archivos, $symlinksDeferred symlinks, $emptyFiles hardlinks');
 
-      _logMsg('Extraídos: $dirs directorios, $files archivos, $symlinks symlinks');
+      // PASADA 2: symlinks -> copiar contenido del target
+      int symlinksOk = 0;
+      for (final me in deferred) {
+        final outPath = me.key;
+        String target = me.value.replaceAll('//', '/');
+        final resolved = target.startsWith('/')
+            ? '$rootfs$target'
+            : '${Directory(outPath).parent.path}/$target';
 
-      // Verificar que busybox existe y tiene contenido
+        if (await File(resolved).exists() && await File(resolved).length() > 0) {
+          try { await File(outPath).writeAsBytes(await File(resolved).readAsBytes()); symlinksOk++; continue; } catch (_) {}
+        }
+        try { await Link(outPath).create(target); symlinksOk++; } catch (_) {}
+      }
+      _logMsg('2a pasada: $symlinksOk/$symlinksDeferred symlinks procesados');
+
+      // PASADA 3: hardlinks -> copiar desde busybox
+      int hardlinksFixed = 0;
       final bb = File('$rootfs/bin/busybox');
-      if (await bb.exists() && await bb.length() > 0) {
-        _logMsg('busybox OK: ${await bb.length()} bytes');
-        return true;
+      List<int>? bbData;
+      if (await bb.exists() && await bb.length() > 0) bbData = await bb.readAsBytes();
+
+      final muslLibs = <String, List<int>>{};
+      for (final lib in ['ld-musl-aarch64.so.1', 'libc.musl-aarch64.so.1']) {
+        final lf = File('$rootfs/lib/$lib');
+        if (await lf.exists() && await lf.length() > 0) muslLibs[lib] = await lf.readAsBytes();
       }
 
-      _logMsg('ERROR: busybox no encontrado o vacío tras extracción');
-      return false;
+      for (final scanDir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/lib', '/usr/lib']) {
+        final d = Directory('$rootfs$scanDir');
+        if (!await d.exists()) continue;
+        try {
+          await for (final entity in d.list(followLinks: false)) {
+            if (entity is File && await entity.length() == 0) {
+              final path = entity.path;
+              if (bbData != null && (path.contains('/bin/') || path.contains('/sbin/'))) {
+                await entity.writeAsBytes(bbData); hardlinksFixed++;
+              } else if (path.contains('/lib/') && muslLibs.isNotEmpty) {
+                for (final le in muslLibs.entries) {
+                  if (path.endsWith(le.key)) break;
+                  if (path.contains('ld-musl') && muslLibs.containsKey('libc.musl-aarch64.so.1')) {
+                    await entity.writeAsBytes(muslLibs['libc.musl-aarch64.so.1']!); hardlinksFixed++;
+                  } else if (path.contains('libc.musl') && muslLibs.containsKey('ld-musl-aarch64.so.1')) {
+                    await entity.writeAsBytes(muslLibs['ld-musl-aarch64.so.1']!); hardlinksFixed++;
+                  }
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      _logMsg('3a pasada: $hardlinksFixed hardlinks reparados');
+
+      // Asegurar /bin/sh
+      if (bbData != null && (!await File('$rootfs/bin/sh').exists() || await File('$rootfs/bin/sh').length() == 0)) {
+        await File('$rootfs/bin/sh').writeAsBytes(bbData);
+        _logMsg('Creado /bin/sh desde busybox');
+      }
+
+      final hasSh = await File('$rootfs/bin/sh').exists() && await File('$rootfs/bin/sh').length() > 0;
+      _logMsg(hasSh ? 'OK: /bin/sh presente' : 'ERROR: /bin/sh ausente');
+      return hasSh;
     } catch (e) {
-      _logMsg('Asset+archive falló: $e');
-      _logMsg('Stack: ${StackTrace.current}');
+      _logMsg('Asset fallo: $e');
       return false;
     }
   }
 
-  void _pulse(int count, int total) {
-    if (total > 0 && count % 100 == 0) {
-      _downloadProgress = 0.50 + (count / total) * 0.30;
-      _statusMessage = 'Extrayendo ${(count * 100 ~/ total)}%';
-      notifyListeners();
-    }
-  }
-
-  // ────────── Reparar hardlinks ──────────
+  // ──────────// ────────── Reparar hardlinks ──────────
   Future<void> _fixHardlinks(String rootfs) async {
-    final bbFile = File('$rootfs/bin/busybox');
-    if (!await bbFile.exists()) { _logMsg('busybox no existe'); return; }
-    final bbLen = await bbFile.length();
-    if (bbLen == 0) { _logMsg('busybox tamaño 0'); return; }
+    // Buscar busybox
+    final bbPath = '$rootfs/bin/busybox';
+    List<int>? bbData;
+    if (await File(bbPath).exists() && await File(bbPath).length() > 0) {
+      bbData = await File(bbPath).readAsBytes();
+    }
 
-    _logMsg('busybox: $bbLen bytes, reparando hardlinks…');
-    final bbData = await bbFile.readAsBytes();
+    // Buscar librerias musl
+    final muslLibs = <String, List<int>>{};
+    for (final lib in ['ld-musl-aarch64.so.1', 'libc.musl-aarch64.so.1']) {
+      final f = File('$rootfs/lib/$lib');
+      if (await f.exists() && await f.length() > 0) {
+        muslLibs[lib] = await f.readAsBytes();
+      }
+    }
+
     int fixed = 0;
-
-    for (final dir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin']) {
+    for (final dir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/lib', '/usr/lib']) {
       final d = Directory('$rootfs$dir');
       if (!await d.exists()) { continue; }
       try {
@@ -294,14 +358,37 @@ class ProotService extends ChangeNotifier {
           if (entity is File) {
             try {
               if (await entity.length() == 0) {
-                await entity.writeAsBytes(bbData);
-                fixed++;
+                final path = entity.path;
+                // bin/ -> copiar busybox
+                if (bbData != null && (path.contains('/bin/') || path.contains('/sbin/'))) {
+                  await entity.writeAsBytes(bbData); fixed++;
+                }
+                // lib/ -> copiar musl lib
+                if (path.contains('/lib/') && muslLibs.isNotEmpty) {
+                  for (final me in muslLibs.entries) {
+                    if (path.endsWith(me.key)) break;
+                    if (path.contains('ld-musl') && muslLibs.containsKey('libc.musl-aarch64.so.1')) {
+                      await entity.writeAsBytes(muslLibs['libc.musl-aarch64.so.1']!); fixed++;
+                    } else if (path.contains('libc.musl') && muslLibs.containsKey('ld-musl-aarch64.so.1')) {
+                      await entity.writeAsBytes(muslLibs['ld-musl-aarch64.so.1']!); fixed++;
+                    }
+                  }
+                }
               }
             } catch (_) {}
           }
         }
       } catch (_) {}
     }
+
+    // Asegurar /bin/sh
+    if (bbData != null) {
+      final shFile = File('$rootfs/bin/sh');
+      if (!await shFile.exists() || await shFile.length() == 0) {
+        try { await shFile.writeAsBytes(bbData); _logMsg('Creado /bin/sh desde busybox'); fixed++; } catch (_) {}
+      }
+    }
+
     _logMsg('Hardlinks reparados: $fixed');
   }
 
@@ -322,8 +409,35 @@ class ProotService extends ChangeNotifier {
     }
 
     _downloadProgress = 0.55;
-    _statusMessage = 'Extrayendo con archive…';
+    _statusMessage = 'Extrayendo Alpine…';
     notifyListeners();
+
+    // Intentar system tar primero
+    for (final tb in ['/system/bin/toybox', '/system/bin/toolbox']) {
+      if (await File(tb).exists()) {
+        try {
+          _logMsg('Extrayendo Alpine con $tb');
+          final result = await Process.run(
+            tb, ['tar', '-xzf', tgzPath, '-C', rootfs],
+          ).timeout(const Duration(seconds: 180));
+          if (result.exitCode == 0) {
+            if (await File('$rootfs/bin/sh').exists() && await File('$rootfs/bin/sh').length() > 0) {
+              _logMsg('Alpine extraido con $tb');
+              return true;
+            }
+            if (await File('$rootfs/bin/busybox').exists() && await File('$rootfs/bin/busybox').length() > 0) {
+              _logMsg('busybox extraido con $tb');
+              return true;
+            }
+          }
+        } catch (e) {
+          _logMsg('$tb tar fallo: $e');
+        }
+      }
+    }
+
+    // Fallback archive package
+    _logMsg('Usando archive package Dart');
     return _extractTarDart(tgzPath, rootfs);
   }
 
@@ -436,12 +550,37 @@ class ProotService extends ChangeNotifier {
   // ────────── PROOT-rs ──────────
   Future<void> _downloadProotRs(String appDir) async {
     final prootPath = '$appDir/proot';
-    if (await File(prootPath).exists()) { return; }
+    if (await File(prootPath).exists()) { _logMsg('PROOT-rs ya existe'); return; }
     try {
-      _logMsg('Descargando PROOT-rs');
-      await _downloadFile(_prootRsUrl, prootPath, 0.85, 0.95);
-      await Process.run('chmod', ['755', prootPath]);
-      _logMsg('PROOT-rs OK');
+      _logMsg('Descargando PROOT-rs (tar.gz)');
+      final tgzPath = '$appDir/proot-rs.tar.gz';
+      await _downloadFile(_prootRsUrl, tgzPath, 0.85, 0.92);
+
+      // Extraer binario del tar.gz
+      final bytes = await File(tgzPath).readAsBytes();
+      try {
+        final gz = GZipDecoder().decodeBytes(bytes);
+        final archive = TarDecoder().decodeBytes(gz);
+        for (final entry in archive) {
+          if (entry.isFile && entry.content.length > 100000) {
+            await File(prootPath).writeAsBytes(entry.content);
+            await Process.run('chmod', ['755', prootPath]);
+            _logMsg('PROOT-rs extraido: ${entry.content.length} bytes');
+            try { await File(tgzPath).delete(); } catch (_) {}
+            return;
+          }
+        }
+        _logMsg('No se encontro binario en tar.gz');
+      } catch (e) {
+        _logMsg('Error extrayendo proot-rs tar.gz: $e');
+        // Fallback: binario directo
+        final size = await File(tgzPath).length();
+        if (size > 100000) {
+          await File(tgzPath).copy(prootPath);
+          await Process.run('chmod', ['755', prootPath]);
+          _logMsg('PROOT-rs copiado directamente: $size bytes');
+        }
+      }
     } catch (e) {
       _logMsg('PROOT-rs no disponible: $e');
     }
