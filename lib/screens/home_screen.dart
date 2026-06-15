@@ -35,15 +35,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: const Icon(Icons.close),
                 onPressed: () => Navigator.pop(ctx),
               ),
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.content_copy),
-                  onPressed: () {
-                    // Podríamos copiar al portapapeles
-                    Navigator.pop(ctx);
-                  },
-                ),
-              ],
             ),
             Expanded(
               child: Container(
@@ -76,6 +67,14 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Linux Container'),
         centerTitle: true,
         elevation: 0,
+        actions: [
+          // Boton Ver Log SIEMPRE visible
+          IconButton(
+            icon: const Icon(Icons.terminal),
+            tooltip: 'Ver Log',
+            onPressed: () => _showLogDialog(context.read<ProotService>()),
+          ),
+        ],
       ),
       body: Consumer<ProotService>(
         builder: (context, proot, _) {
@@ -134,44 +133,21 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         ),
-                        // Botón Ver Log (siempre visible)
-                        const SizedBox(height: 8),
-                        TextButton.icon(
-                          onPressed: () => _showLogDialog(proot),
-                          icon: const Icon(Icons.terminal, size: 16),
-                          label: const Text('Ver Log'),
-                        ),
                       ],
                       if (proot.isDownloading) ...[
                         const SizedBox(height: 16),
                         LinearProgressIndicator(
-                          value: proot.downloadProgress,
-                          backgroundColor: theme.colorScheme.onPrimaryContainer
-                              .withValues(alpha: 0.15),
+                          value: proot.downloadProgress > 0 ? proot.downloadProgress : null,
+                          backgroundColor: Colors.white24,
                         ),
-                        // Log compacto durante descarga
-                        if (proot.logText.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.3),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            height: 80,
-                            child: SingleChildScrollView(
-                              child: SelectableText(
-                                proot.logText,
-                                style: TextStyle(
-                                  color: Colors.greenAccent.withValues(alpha: 0.8),
-                                  fontFamily: 'monospace',
-                                  fontSize: 9,
-                                  height: 1.3,
-                                ),
-                              ),
-                            ),
+                        const SizedBox(height: 8),
+                        Text(
+                          proot.statusMessage,
+                          style: TextStyle(
+                            color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                            fontSize: 12,
                           ),
-                        ],
+                        ),
                       ],
                     ],
                   ),
@@ -230,7 +206,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   context,
                   icon: Icons.wifi_rounded,
                   title: 'Networking',
-                  subtitle: 'Ping, curl, traceroute, DNS',
+                  subtitle: 'Ping, HTTP, DNS, traceroute',
                   color: Colors.blue,
                   onTap: () => Navigator.push(
                     context,
@@ -243,21 +219,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   context,
                   icon: Icons.cloud_rounded,
                   title: 'OpenCloud',
-                  subtitle: 'Nextcloud - Tu nube privada',
+                  subtitle: 'Próximamente - Nube privada',
                   color: Colors.deepPurple,
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const OpenCloudScreen()),
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-                OutlinedButton.icon(
-                  onPressed: () => _showLogDialog(proot),
-                  icon: const Icon(Icons.terminal),
-                  label: const Text('Ver Log Completo'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
               ],

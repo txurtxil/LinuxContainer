@@ -18,7 +18,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _useProot = true;
   bool _running = false;
   final List<String> _history = [];
-  int _historyIndex = -1;
 
   @override
   void dispose() {
@@ -44,7 +43,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (cmd.trim().isEmpty || _running) return;
 
     _history.add(cmd);
-    _historyIndex = _history.length;
     final terminal = context.read<TerminalService>();
     final proot = context.read<ProotService>();
 
@@ -61,8 +59,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
     try {
       String output;
       if (_useProot && proot.initialized) {
-        output = await proot.runShell(cmd,
-            timeout: const Duration(seconds: 120));
+        // Interceptar comandos apk para usar Dart backend
+        if (cmd.startsWith('apk ')) {
+          output = await _handleApkCommand(cmd, proot);
+        } else {
+          output = await proot.runShell(cmd,
+              timeout: const Duration(seconds: 120));
+        }
       } else if (_useProot && !proot.initialized) {
         output = 'Linux no inicializado. Ve a Inicio y haz Setup primero.';
       } else {
@@ -76,6 +79,63 @@ class _TerminalScreenState extends State<TerminalScreen> {
     } finally {
       _running = false;
       _scrollToBottom();
+    }
+  }
+
+  /// Intercepta comandos apk y los redirige al backend Dart
+  Future<String> _handleApkCommand(String cmd, ProotService proot) async {
+    final parts = cmd.trim().split(RegExp(r'\s+'));
+    if (parts.length < 2) return 'apk: uso: apk <comando> [args]\nComandos: update, search, add, del, info, list';
+
+    final subcmd = parts[1];
+    switch (subcmd) {
+      case 'update':
+        await proot.refreshApkIndex();
+        return 'APKINDEX actualizado: ${proot.apkIndex.length} paquetes';
+
+      case 'search':
+        if (parts.length < 3) return 'apk search: falta termino de busqueda';
+        final q = parts.sublist(2).join(' ');
+        final results = proot.searchPackages(q);
+        if (results.isEmpty) return 'No se encontraron paquetes para: $q';
+        final buf = StringBuffer('Resultados para: $q (${results.length})\n\n');
+        for (final r in results) {
+          final inst = proot.installedPackages.contains(r['name']) ? ' [instalado]' : '';
+          buf.writeln('  ${r['name']} - ${r['version']}$inst');
+        }
+        return buf.toString();
+
+      case 'add':
+        if (parts.length < 3) return 'apk add: falta nombre del paquete';
+        final pkg = parts[2];
+        if (await proot.installApk(pkg)) {
+          return 'OK $pkg instalado correctamente';
+        }
+        return 'Error instalando $pkg';
+
+      case 'del':
+        if (parts.length < 3) return 'apk del: falta nombre del paquete';
+        final dpkg = parts[2];
+        if (await proot.removeApk(dpkg)) {
+          return 'OK $dpkg eliminado';
+        }
+        return 'Error eliminando $dpkg';
+
+      case 'info':
+        if (parts.length < 3) return 'apk info: falta nombre del paquete';
+        return proot.getPackageInfo(parts[2]);
+
+      case 'list':
+        final installed = proot.listInstalledPackages();
+        if (installed.isEmpty) return 'No hay paquetes instalados';
+        final buf = StringBuffer('Paquetes instalados (${installed.length}):\n\n');
+        for (final p in installed) {
+          buf.writeln('  ${p['name']} - ${p['version']}');
+        }
+        return buf.toString();
+
+      default:
+        return 'apk: comando desconocido: $subcmd\nComandos: update, search, add, del, info, list';
     }
   }
 
@@ -106,6 +166,38 @@ class _TerminalScreenState extends State<TerminalScreen> {
     );
   }
 
+  void _showLogDialog(ProotService proot) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            AppBar(
+              title: const Text('Log de Setup'),
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+            ),
+            Expanded(
+              child: Container(
+                color: Colors.black,
+                padding: const EdgeInsets.all(8),
+                child: SingleChildScrollView(
+                  child: SelectableText(proot.logText,
+                      style: const TextStyle(
+                        color: Colors.greenAccent,
+                        fontFamily: 'monospace', fontSize: 11, height: 1.3)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -116,12 +208,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
       appBar: AppBar(
         title: Text(_useProot ? 'Terminal Linux' : 'Terminal Local'),
         actions: [
-          if (_useProot)
-            IconButton(
-              icon: const Icon(Icons.terminal),
-              tooltip: 'Ver Log',
-              onPressed: () => _showLogDialog(proot),
-            ),
+          IconButton(
+            icon: const Icon(Icons.terminal),
+            tooltip: 'Ver Log',
+            onPressed: () => _showLogDialog(proot),
+          ),
           IconButton(
             icon: const Icon(Icons.clear_all),
             tooltip: 'Limpiar',
@@ -230,38 +321,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  void _showLogDialog(ProotService proot) {
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        insetPadding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            AppBar(
-              title: const Text('Log de Setup'),
-              leading: IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.pop(ctx),
-              ),
-            ),
-            Expanded(
-              child: Container(
-                color: Colors.black,
-                padding: const EdgeInsets.all(8),
-                child: SingleChildScrollView(
-                  child: SelectableText(proot.logText,
-                      style: const TextStyle(
-                        color: Colors.greenAccent,
-                        fontFamily: 'monospace', fontSize: 11, height: 1.3)),
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

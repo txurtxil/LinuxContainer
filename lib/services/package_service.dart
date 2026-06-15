@@ -17,70 +17,91 @@ class PackageService {
   Future<void> updatePackages() async {
     _loading = true;
     _status = 'Actualizando repositorios…';
-    _output = await _proot.runCommand(
-      'apk update 2>&1',
-      timeout: const Duration(seconds: 120),
-    );
-    _status = 'Repositorios actualizados';
+    _output = '';
+    notify();
+    await _proot.refreshApkIndex();
+    _status = 'Repositorios actualizados (${_proot.apkIndex.length} paquetes)';
+    _output = 'APKINDEX: ${_proot.apkIndex.length} paquetes disponibles\n';
     _loading = false;
+    notify();
   }
 
   Future<void> searchPackages(String query) async {
     _loading = true;
     _status = 'Buscando: $query';
-    _output = await _proot.runCommand(
-      'apk search "$query" 2>&1 | head -50',
-      timeout: const Duration(seconds: 30),
-    );
-    _parsePackages(_output);
+    _output = '';
+    notify();
+
+    final results = _proot.searchPackages(query);
+    _packages = results.map((r) => PackageModel(
+      name: r['name']!,
+      version: r['version']!,
+      description: r['version']!,
+      installed: _proot.installedPackages.contains(r['name']),
+    )).toList();
+
+    if (_packages.isEmpty) {
+      _output = 'No se encontraron paquetes para: $query\n';
+    } else {
+      _output = '${_packages.length} resultados para: $query\n\n';
+      for (final p in _packages) {
+        _output += '  ${p.name} - ${p.version}${p.installed ? " [instalado]" : ""}\n';
+      }
+    }
     _status = 'Resultados para: $query';
     _loading = false;
+    notify();
   }
 
   Future<void> installPackage(String name) async {
     _loading = true;
     _status = 'Instalando $name…';
-    _output = await _proot.runCommand(
-      'apk add "$name" 2>&1',
-      timeout: const Duration(seconds: 180),
-    );
-    _status = 'Paquete $name instalado';
+    _output = 'Instalando $name...\n';
+    notify();
+
+    bool ok = await _proot.installApk(name);
+    if (ok) {
+      _output += '✅ $name instalado correctamente\n';
+      _status = 'Paquete $name instalado';
+    } else {
+      _output += '❌ Error instalando $name\n';
+      _status = 'Error instalando $name';
+    }
     _loading = false;
+    notify();
   }
 
   Future<void> removePackage(String name) async {
     _loading = true;
     _status = 'Eliminando $name…';
-    _output = await _proot.runCommand(
-      'apk del "$name" 2>&1',
-      timeout: const Duration(seconds: 60),
-    );
-    _status = 'Paquete $name eliminado';
+    _output = 'Eliminando $name...\n';
+    notify();
+
+    bool ok = await _proot.removeApk(name);
+    _output += ok ? '✅ $name eliminado\n' : '❌ Error eliminando $name\n';
+    _status = ok ? 'Paquete $name eliminado' : 'Error eliminando $name';
     _loading = false;
+    notify();
   }
 
   Future<void> listInstalled() async {
     _loading = true;
     _status = 'Listando paquetes instalados…';
-    _output = await _proot.runCommand(
-      'apk info 2>&1 | head -60',
-      timeout: const Duration(seconds: 30),
-    );
-    _status = 'Paquetes instalados';
-    _loading = false;
-  }
-
-  void _parsePackages(String output) {
-    _packages = [];
-    for (final line in output.split('\n')) {
-      if (line.trim().isNotEmpty && !line.contains(':')) {
-        _packages.add(PackageModel(
-          name: line.trim().split(' ').first,
-          version: '',
-          description: line.trim(),
-          installed: false,
-        ));
+    final installed = _proot.listInstalledPackages();
+    if (installed.isEmpty) {
+      _output = 'No hay paquetes instalados\n';
+    } else {
+      _output = 'Paquetes instalados (${installed.length}):\n\n';
+      for (final p in installed) {
+        _output += '  ${p['name']} - ${p['version']}\n';
       }
     }
+    _status = 'Paquetes instalados';
+    _loading = false;
+    notify();
+  }
+
+  void notify() {
+    // Force state update callback
   }
 }

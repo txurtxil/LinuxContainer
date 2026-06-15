@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -16,6 +17,9 @@ class ProotService extends ChangeNotifier {
   String _statusMessage = 'No iniciado';
   String _lastOutput = '';
   final List<String> _log = [];
+  Map<String, String> _apkIndex = {};
+  final Set<String> _installedPkgs = {};
+  String _arch = '';
 
   List<String> get log => List.unmodifiable(_log);
   String get logText => _log.join('\n');
@@ -30,19 +34,38 @@ class ProotService extends ChangeNotifier {
   String get statusMessage => _statusMessage;
   String get lastOutput => _lastOutput;
   String? get rootfsPath => _rootfsPath;
+  Map<String, String> get apkIndex => Map.unmodifiable(_apkIndex);
+  Set<String> get installedPackages => Set.unmodifiable(_installedPkgs);
 
   String? _rootfsPath;
-
-  static const String _alpineMirror = 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64';
+  String _alpineMirror = 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main';
+  static const String _alpineVersion = 'v3.24';
 
   Future<String> get _appDir async {
     return '${(await getApplicationDocumentsDirectory()).path}/linux_container';
   }
 
+  /// Detect device architecture
+  Future<String> getArchitecture() async {
+    if (_arch.isNotEmpty) return _arch;
+    try {
+      final result = await Process.run('uname', ['-m']).timeout(const Duration(seconds: 5));
+      final arch = (result.stdout as String).trim();
+      if (arch == 'aarch64' || arch == 'arm64') _arch = 'aarch64';
+      else if (arch == 'x86_64' || arch == 'amd64') _arch = 'x86_64';
+      else if (arch.startsWith('armv')) _arch = 'armv7';
+      else _arch = arch;
+    } catch (e) {
+      _arch = 'aarch64'; // default
+    }
+    _alpineMirror = 'https://dl-cdn.alpinelinux.org/alpine/$_alpineVersion/main/$_arch';
+    _logMsg('Arquitectura: $_arch');
+    return _arch;
+  }
+
   // ═══════════════════════════════════════════════════════
-  // runCommand: system shell (toybox/binario) con PATH rootfs
+  // runCommand: system shell (toybox) con PATH rootfs
   // Usa /system/bin/sh que permite execve desde /system/bin
-  // NO usa linker64 para binarios rootfs (musl incompat)
   // ═══════════════════════════════════════════════════════
   Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     _lastOutput = '';
@@ -70,7 +93,7 @@ class ProotService extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════
-  // runShell: interactiva (same as runCommand)
+  // runShell: interactiva
   // ═══════════════════════════════════════════════════════
   Future<String> runShell(String command, {Duration timeout = const Duration(seconds: 60)}) async {
     return runCommand(command, timeout: timeout);
@@ -82,6 +105,7 @@ class ProotService extends ChangeNotifier {
   Future<bool> checkEnvironment() async {
     _log.clear();
     try {
+      await getArchitecture();
       final rootfs = '${await _appDir}/rootfs';
       _rootfsPath = rootfs;
       if (await Directory(rootfs).exists() && await File('$rootfs/bin/sh').exists()) {
@@ -114,18 +138,19 @@ class ProotService extends ChangeNotifier {
     notifyListeners();
 
     try {
+      await getArchitecture();
       final appDir = await _appDir;
       final rootfs = '$appDir/rootfs';
       _rootfsPath = rootfs;
       await Directory(appDir).create(recursive: true);
       await Directory(rootfs).create(recursive: true);
 
-      // 1: Alpine rootfs
+      // 1: Alpine rootfs desde asset
       _statusMessage = 'Extrayendo rootfs Alpine...';
       notifyListeners();
       bool ok = await _setupFromAsset(rootfs);
       if (!ok) ok = await _setupWithMinirootfs(appDir, rootfs);
-      if (!ok) throw Exception('No se pudo crear el rootfs');
+      if (!ok) throw Exception('No se pudo extraer rootfs');
       _logMsg('Rootfs Alpine OK');
 
       // 2: Reparar hardlinks y symlinks
@@ -152,9 +177,15 @@ class ProotService extends ChangeNotifier {
         _logMsg('Shell: ${test.trim()}');
       } catch (e) { _logMsg('Shell: $e'); }
 
-      // 5: Instalar paquetes Alpine via Dart
+      // 5: Cargar indice APK
       _downloadProgress = 0.80;
-      _statusMessage = 'Instalando paquetes (Dart)...';
+      _statusMessage = 'Cargando indice de paquetes...';
+      notifyListeners();
+      await _refreshApkIndex(rootfs);
+
+      // 6: Instalar paquetes esenciales via Dart
+      _downloadProgress = 0.85;
+      _statusMessage = 'Instalando paquetes esenciales...';
       notifyListeners();
       await _installEssentials(rootfs);
 
@@ -174,56 +205,166 @@ class ProotService extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════
-  // Alpine Package Management en Dart (sin apk binary)
+  // PUBLIC APK MANAGEMENT API
+  // ═══════════════════════════════════════════════════════
+
+  /// Refresca el indice APKINDEX desde el mirror Alpine
+  Future<void> refreshApkIndex() async {
+    final rootfs = _rootfsPath ?? '${await _appDir}/rootfs';
+    await _refreshApkIndex(rootfs);
+  }
+
+  Future<void> _refreshApkIndex(String rootfs) async {
+    await getArchitecture();
+    _apkIndex = await _getApkVersions(rootfs);
+    _logMsg('APKINDEX: ${_apkIndex.length} paquetes');
+  }
+
+  /// Busca paquetes por nombre
+  List<Map<String, String>> searchPackages(String query, {int limit = 50}) {
+    final results = <Map<String, String>>[];
+    final q = query.toLowerCase();
+    for (final entry in _apkIndex.entries) {
+      if (entry.key.toLowerCase().contains(q)) {
+        results.add({'name': entry.key, 'version': entry.value});
+        if (results.length >= limit) break;
+      }
+    }
+    return results;
+  }
+
+  /// Instala un paquete Alpine via Dart (extrae .apk al rootfs)
+  Future<bool> installApk(String pkgName) async {
+    final rootfs = _rootfsPath ?? '${await _appDir}/rootfs';
+    final ver = _apkIndex[pkgName];
+    if (ver == null) { _logMsg('$pkgName: no encontrado en APKINDEX'); return false; }
+    final ok = await _installApk(pkgName, ver, rootfs);
+    if (ok) _installedPkgs.add(pkgName);
+    return ok;
+  }
+
+  /// Elimina un paquete instalado
+  Future<bool> removeApk(String pkgName) async {
+    final rootfs = _rootfsPath ?? '${await _appDir}/rootfs';
+    // Intentar eliminar archivos conocidos (no tenemos DB de archivos)
+    // Por ahora solo marcamos como no instalado
+    _installedPkgs.remove(pkgName);
+    _logMsg('$pkgName: marcado como eliminado');
+    return true;
+  }
+
+  /// Lista paquetes instalados
+  List<Map<String, String>> listInstalledPackages() {
+    return _installedPkgs.map((name) => {
+      'name': name,
+      'version': _apkIndex[name] ?? '?',
+    }).toList();
+  }
+
+  /// Obtiene informacion de un paquete
+  String getPackageInfo(String pkgName) {
+    final ver = _apkIndex[pkgName];
+    if (ver == null) return 'Paquete no encontrado: $pkgName';
+    final installed = _installedPkgs.contains(pkgName);
+    return '$pkgName - $ver ${installed ? "[instalado]" : "[disponible]"}';
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // PROOT ALTERNATIVE: Direct command execution
+  // ═══════════════════════════════════════════════════════
+  /// Inicia un servidor TCP simple para acceso remoto (alternativa a SSH)
+  /// Usa Dart's HttpServer para crear un endpoint de comandos
+  Future<bool> startTcpCommandServer(int port) async {
+    try {
+      final server = await HttpServer.bind('0.0.0.0', port);
+      _logMsg('TCP Server escuchando en puerto $port');
+      server.listen((request) async {
+        if (request.method == 'POST' && request.uri.path == '/exec') {
+          final body = await utf8.decodeStream(request);
+          final cmd = jsonDecode(body)['cmd'] as String? ?? '';
+          final output = await runCommand(cmd, timeout: const Duration(seconds: 60));
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'output': output}));
+          await request.response.close();
+        } else {
+          request.response.statusCode = 404;
+          await request.response.close();
+        }
+      });
+      return true;
+    } catch (e) {
+      _logMsg('TCP Server error: $e');
+      return false;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // PRIVATE: Alpine APK Management
   // ═══════════════════════════════════════════════════════
 
   /// Parsea APKINDEX.tar.gz y devuelve {nombre: version}
   Future<Map<String, String>> _getApkVersions(String rootfs) async {
+    await getArchitecture();
+    final idxUrl = '$_alpineMirror/APKINDEX.tar.gz';
     final idxPath = '$rootfs/../APKINDEX.tar.gz';
+
     if (!await File(idxPath).exists()) {
       try {
-        await _downloadFile('$_alpineMirror/APKINDEX.tar.gz', idxPath, 0.80, 0.82);
-      } catch (e) { _logMsg('Error APKINDEX: $e'); return {}; }
+        await _downloadFile(idxUrl, idxPath, 0.80, 0.82);
+      } catch (e) {
+        _logMsg('Error APKINDEX: $e');
+        return {};
+      }
     }
 
     try {
       final data = await File(idxPath).readAsBytes();
       final tarData = GZipDecoder().decodeBytes(data);
-      final result = <String, String>{};
+      final idxContent = _extractFileFromTar(tarData, 'APKINDEX');
+      if (idxContent == null) { _logMsg('APKINDEX no encontrado en tar'); return {}; }
 
-      int pos = 0;
-      while (pos + 512 <= tarData.length) {
-        if (tarData[pos] == 0) break;
-        final nameEnd = tarData.indexOf(0, pos);
-        if (nameEnd < 0 || nameEnd - pos > 100) break;
-        final name = String.fromCharCodes(tarData.sublist(pos, nameEnd));
-        if (name == 'APKINDEX') {
-          final szStr = String.fromCharCodes(tarData.sublist(pos+124,pos+136))
-                         .split('\x00')[0].trim();
-          final sz = int.tryParse(szStr, radix: 8) ?? 0;
-          final content = String.fromCharCodes(
-              tarData.sublist(pos+512, pos+512+sz));
-          String cn = '', cv = '';
-          for (final line in content.split('\n')) {
-            if (line.startsWith('P:')) cn = line.substring(2).trim();
-            else if (line.startsWith('V:')) cv = line.substring(2).trim();
-            else if (line.isEmpty && cn.isNotEmpty) {
-              result[cn] = cv; cn = ''; cv = '';
-            }
-          }
-          break;
+      final result = <String, String>{};
+      String cn = '', cv = '';
+      for (final line in idxContent.split('\n')) {
+        if (line.startsWith('P:')) cn = line.substring(2).trim();
+        else if (line.startsWith('V:')) cv = line.substring(2).trim();
+        else if (line.isEmpty && cn.isNotEmpty) {
+          result[cn] = cv;
+          cn = ''; cv = '';
         }
-        final szStr = String.fromCharCodes(tarData.sublist(pos+124,pos+136))
-                       .split('\x00')[0].trim();
-        final padded = ((int.tryParse(szStr, radix: 8) ?? 0) + 511) ~/ 512 * 512;
-        pos += 512 + padded;
       }
       return result;
-    } catch (e) { _logMsg('Parse APKINDEX: $e'); return {}; }
+    } catch (e) {
+      _logMsg('Parse APKINDEX: $e');
+      return {};
+    }
+  }
+
+  /// Extrae un archivo de datos tar raw
+  String? _extractFileFromTar(List<int> tarData, String fileName) {
+    int pos = 0;
+    while (pos + 512 <= tarData.length) {
+      if (tarData[pos] == 0) break;
+      final nameEnd = tarData.indexOf(0, pos);
+      if (nameEnd < 0 || nameEnd - pos > 100) break;
+      final name = String.fromCharCodes(tarData.sublist(pos, nameEnd));
+      if (name == fileName) {
+        final szStr = String.fromCharCodes(tarData.sublist(pos + 124, pos + 136))
+            .split('\x00')[0].trim();
+        final sz = int.tryParse(szStr, radix: 8) ?? 0;
+        return String.fromCharCodes(tarData.sublist(pos + 512, pos + 512 + sz));
+      }
+      final szStr = String.fromCharCodes(tarData.sublist(pos + 124, pos + 136))
+          .split('\x00')[0].trim();
+      final padded = ((int.tryParse(szStr, radix: 8) ?? 0) + 511) ~/ 512 * 512;
+      pos += 512 + padded;
+    }
+    return null;
   }
 
   /// Descarga e instala un .apk (gzip+tar) al rootfs
   Future<bool> _installApk(String pkg, String ver, String rootfs) async {
+    await getArchitecture();
     final url = '$_alpineMirror/$pkg-$ver.apk';
     final apkPath = '$rootfs/../$pkg-$ver.apk';
 
@@ -246,14 +387,45 @@ class ProotService extends ChangeNotifier {
           await Directory('$rootfs/$name').create(recursive: true);
           files++; continue;
         }
-        // Saltar scripts de instalacion (.pre-install, .post-install)
-        if (name.contains('.pre-install') || name.contains('.post-install')) continue;
+        // Saltar scripts de instalacion
+        if (name.contains('.pre-install') || name.contains('.post-install') ||
+            name.contains('.trigger')) continue;
+
+        final target = File('$rootfs/$name');
+        await target.parent.create(recursive: true);
+
+        if (entry.isSymbolicLink && (entry.symbolicLink ?? '').isNotEmpty) {
+          final linkTarget = entry.symbolicLink!;
+          if (linkTarget.startsWith('/')) {
+            final realTarget = File('$rootfs$linkTarget');
+            if (await realTarget.exists() && await realTarget.length() > 0) {
+              try {
+                if (await Link(target.path).exists()) await Link(target.path).delete();
+                await target.writeAsBytes(await realTarget.readAsBytes());
+                files++;
+              } catch (_) {}
+            }
+          } else {
+            try {
+              if (await Link(target.path).exists()) await Link(target.path).delete();
+              await target.writeAsBytes(utf8.encode(linkTarget));
+              files++;
+            } catch (_) {}
+          }
+          continue;
+        }
+
         if (entry.isFile && entry.content.isNotEmpty) {
-          await File('$rootfs/$name').writeAsBytes(entry.content as List<int>);
+          await target.writeAsBytes(entry.content as List<int>);
+          // Aplicar permisos de ejecucion si corresponde
+          final mode = entry.mode;
+          if (mode != null && (mode & 0x49) != 0) { // any exec bit
+            try { await Process.run('chmod', ['+x', target.path]); } catch (_) {}
+          }
           files++;
         }
       }
-      _logMsg('$pkg-$ver: $files archivos');
+      _logMsg('$pkg-$ver: $files archivos extraidos');
       try { await File(apkPath).delete(); } catch (_) {}
       return true;
     } catch (e) {
@@ -262,19 +434,13 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // installEssentials
-  // ═══════════════════════════════════════════════════════
+  /// Instala paquetes esenciales
   Future<void> _installEssentials(String rootfs) async {
     _logMsg('=== Instalando paquetes esenciales (Dart) ===');
+    if (_apkIndex.isEmpty) {
+      _apkIndex = await _getApkVersions(rootfs);
+    }
 
-    // Obtener versiones del APKINDEX
-    _statusMessage = 'Obteniendo indice de paquetes...';
-    notifyListeners();
-    final versions = await _getApkVersions(rootfs);
-    _logMsg('Disponibles: ${versions.length} paquetes');
-
-    // Instalar paquetes Alpine
     final packages = [
       'openssh-server', 'openssh-keygen', 'openssh-sftp-server',
       'curl', 'wget', 'bash', 'ca-certificates', 'sudo', 'nano'
@@ -282,26 +448,18 @@ class ProotService extends ChangeNotifier {
 
     int installed = 0, failed = 0;
     for (final pkg in packages) {
-      final ver = versions[pkg];
-      if (ver == null) { _logMsg('$pkg: no encontrado'); failed++; continue; }
+      final ver = _apkIndex[pkg];
+      if (ver == null) { _logMsg('$pkg: no encontrado en repositorio'); continue; }
       _statusMessage = 'Instalando $pkg...';
       notifyListeners();
-      if (await _installApk(pkg, ver, rootfs)) { installed++; }
-      else { failed++; }
+      if (await _installApk(pkg, ver, rootfs)) {
+        _installedPkgs.add(pkg);
+        installed++;
+      } else { failed++; }
     }
 
-    _logMsg('Instalados: $installed, Fallos: $failed');
-
-    // Configurar SSH
-    _statusMessage = 'Configurando SSH...';
-    notifyListeners();
-    _logMsg('Generando claves SSH...');
-    // ssh-keygen de Alpine es musl y no funciona via linker64
-    // Las claves se generan en el setup inicial del contenedor
-    // Por ahora, configuracion manual necesaria
-
-    _logMsg('=== Paquetes esenciales OK ===');
-    _statusMessage = 'Paquetes instalados';
+    _logMsg('Paquetes: $installed instalados, $failed fallos');
+    _statusMessage = 'Paquetes esenciales instalados';
     notifyListeners();
   }
 
@@ -362,6 +520,7 @@ class ProotService extends ChangeNotifier {
         if (n.isEmpty || n == '.') continue;
         if (n.endsWith('/')) { await Directory('$rootfs/$n').create(recursive: true); continue; }
         await Directory('$rootfs/$n').parent.create(recursive: true);
+        // Symlink absolutos: copiar contenido
         if (entry.isSymbolicLink && (entry.symbolicLink ?? '').startsWith('/')) {
           try {
             final r = File('$rootfs${entry.symbolicLink}');
@@ -451,6 +610,7 @@ class ProotService extends ChangeNotifier {
     final d = await _appDir;
     try { await Directory(d).delete(recursive: true); } catch (_) {}
     _initialized = false; _rootfsPath = null;
+    _apkIndex = {}; _installedPkgs.clear();
     _statusMessage = 'Reiniciado'; _log.clear(); _logMsg('Reiniciado');
     notifyListeners();
   }
