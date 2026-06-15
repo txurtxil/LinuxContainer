@@ -27,78 +27,43 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Android SDK
-      run: |
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-
     - name: Get dependencies
       run: flutter pub get
 
     - name: Build APK
       run: flutter build apk --release
 
-    # Build bionic tools from Termux .deb packages
     - name: Build Bionic Tools
       run: |
-        # Descargar y preparar
+        # Download Termux package index
         curl -sL "https://packages.termux.org/apt/termux-main/dists/stable/main/binary-aarch64/Packages.gz" -o /tmp/Packages.gz
         gunzip -c /tmp/Packages.gz > /tmp/Packages
         mkdir -p /tmp/bionic-build
 
-        get_deb_and_extract() {
-          local pkg="$1"
-          echo "=== $pkg ==="
-          local filename=$(grep -A 30 "^Package: $pkg$" /tmp/Packages | grep "^Filename:" | awk '{print $2}')
-          if [ -z "$filename" ]; then echo "  -> no encontrado"; return 1; fi
-          local url="https://packages.termux.org/apt/termux-main/$filename"
-          local debname=$(basename "$filename")
-          echo "  $url"
-          curl -sL -o "/tmp/$debname" "$url" || { echo "  -> download fail"; return 1; }
-          # Usar dpkg-deb para extraer (disponible en Ubuntu)
-          dpkg-deb -x "/tmp/$debname" /tmp/bionic-build/ 2>&1 || {
-            echo "  -> dpkg-deb fallo, intentando python..."
-            python3 -c "
-import subprocess, sys
-# Parse ar manualmente
-with open('/tmp/$debname', 'rb') as f:
-    data = f.read()
-pos = 8
-while pos + 60 <= len(data):
-    name = data[pos:pos+16].decode('ascii', errors='replace').strip().rstrip('/')
-    sz = int(data[pos+48:pos+58].decode('ascii').strip())
-    if 'data.tar' in name:
-        with open('/tmp/data.tar', 'wb') as out:
-            out.write(data[pos+60:pos+60+sz])
-        # Detectar compresion
-        ext = name.split('.')[-1]
-        if ext == 'xz':
-            subprocess.run(['xz', '-d', '/tmp/data.tar', '--stdout'], check=True, capture_output=True)
-        break
-    pos += 60 + sz + (sz % 2)
-"
-          }
-          echo "  -> OK"
-        }
-
-        # Instalar paquetes
+        # Function to download and extract a deb
         for pkg in bash nano openssh libandroid-support libcrypt openssl zlib ca-certificates; do
-          get_deb_and_extract "$pkg"
+          echo "=== $pkg ==="
+          filename=$(grep -A 30 "^Package: $pkg\$" /tmp/Packages | grep "^Filename:" | awk '{print $2}')
+          if [ -z "$filename" ]; then
+            echo "  -> no encontrado"
+            continue
+          fi
+          url="https://packages.termux.org/apt/termux-main/$filename"
+          debname=$(basename "$filename")
+          curl -sL -o "/tmp/$debname" "$url" || { echo "  -> download fail"; continue; }
+          dpkg-deb -x "/tmp/$debname" /tmp/bionic-build/ 2>/dev/null && echo "  -> OK" || echo "  -> dpkg-deb fail"
         done
 
-        # Verificar que se extrajeron archivos
-        echo "=== Contenido extraido ==="
-        find /tmp/bionic-build -type f -name "*.so*" -o -type f -executable 2>/dev/null | head -30
-        
-        # Crear tarball (gz, portable)
+        # Create tarball
         cd /tmp/bionic-build
         tar -czf $GITHUB_WORKSPACE/bionic-tools.tar.gz \
           --exclude='share/doc' --exclude='share/man' --exclude='share/info' \
           --exclude='share/locale' --exclude='include' --exclude='var' --exclude='tmp' \
           bin/ lib/ libexec/ etc/ 2>/dev/null || true
-        
+
+        echo "=== Tarball ==="
         ls -lh $GITHUB_WORKSPACE/bionic-tools.tar.gz
-        echo "=== Tarball contents ==="
-        tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | head -40
+        tar -tzf $GITHUB_WORKSPACE/bionic-tools.tar.gz | head -20
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
