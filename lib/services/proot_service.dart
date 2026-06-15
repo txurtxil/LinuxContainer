@@ -153,21 +153,24 @@ class ProotService extends ChangeNotifier {
       // Asegurar que el directorio padre existe
       await Directory(outPath).parent.create(recursive: true);
 
-      if (entry.isFile) {
+      if (entry.isSymbolicLink) {
+        // Es un symlink (type '2') o hardlink (type '1')
+        // Ambos tienen symbolicLink set pero content vacío
+        final target = entry.symbolicLink ?? '';
+        if (target.isNotEmpty) {
+          // Si ya existe un archivo o symlink, borrarlo
+          if (await File(outPath).exists()) await File(outPath).delete();
+          if (await Link(outPath).exists()) await Link(outPath).delete();
+          await Link(outPath).create(target);
+        }
+      } else if (entry.isFile) {
         // Es un archivo real con contenido
         final contentBytes = entry.content as List<int>;
-        // Si ya existe un symlink con este nombre, borrarlo primero
-        if (await Link(outPath).exists()) {
-          await Link(outPath).delete();
+        if (contentBytes.isNotEmpty) {
+          // Si ya existe un symlink con este nombre, borrarlo
+          if (await Link(outPath).exists()) await Link(outPath).delete();
+          await File(outPath).writeAsBytes(contentBytes);
         }
-        await File(outPath).writeAsBytes(contentBytes);
-      } else if (entry.isSymbolicLink) {
-        // Es un symlink
-        final target = entry.symbolicLink ?? '';
-        // Si ya existe un archivo o symlink, borrarlo
-        if (await File(outPath).exists()) await File(outPath).delete();
-        if (await Link(outPath).exists()) await Link(outPath).delete();
-        try { await Link(outPath).create(target); } catch (_) {}
       }
 
       extracted++;
