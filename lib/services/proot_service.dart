@@ -152,9 +152,52 @@ class ProotService extends ChangeNotifier {
       notifyListeners();
       await _downloadProotRs(appDir);
 
-      // ─── Verificación ───
-      bool shOk = await File('$rootfs/bin/sh').exists() &&
-                  await File('$rootfs/bin/sh').length() > 0;
+      // ─── Verificacion (repara symlinks absolutos de Alpine) ───
+      await _fixAbsoluteSymlinks(rootfs);
+
+      bool shOk = false;
+
+      // Buscar shell disponible
+      for (final candidate in ['$rootfs/bin/sh', '$rootfs/bin/busybox', '$rootfs/bin/dash']) {
+        try {
+          final f = File(candidate);
+          if (await f.exists() && await f.length() > 0) {
+            shOk = true;
+            // Si no es /bin/sh, copiarlo
+            if (candidate != '$rootfs/bin/sh') {
+              try {
+                final target = File('$rootfs/bin/sh');
+                try { if (await Link(target.path).exists()) await Link(target.path).delete(); } catch (_) {}
+                try { if (await target.exists()) await target.delete(); } catch (_) {}
+                await target.writeAsBytes(await f.readAsBytes());
+                _logMsg('/bin_sh copiado desde ' + candidate.split('/').last + ' (' + (await target.length()).toString() + ' b)');
+              } catch (e) {
+                _logMsg('No se pudo copiar a /bin/sh: $e');
+              }
+            }
+            break;
+          }
+        } catch (_) { continue; }
+      }
+
+      // Ultimo recurso: cualquier binario del rootfs
+      if (!shOk) {
+        for (final dir in ['/bin', '/sbin', '/usr/bin']) {
+          final d = Directory('$rootfs$dir');
+          if (!await d.exists()) continue;
+          try {
+            await for (final entity in d.list(followLinks: false)) {
+              if (entity is File && await entity.length() > 1000) {
+                await File('$rootfs/bin/sh').writeAsBytes(await entity.readAsBytes());
+                shOk = true;
+                _logMsg('/bin/sh creado desde binario (' + (await File('$rootfs/bin/sh').length()).toString() + ' b)');
+                break;
+              }
+            }
+          } catch (_) {}
+          if (shOk) break;
+        }
+      }
 
       _downloadProgress = 1.0;
       _initialized = shOk;
@@ -421,11 +464,20 @@ class ProotService extends ChangeNotifier {
             tb, ['tar', '-xzf', tgzPath, '-C', rootfs],
           ).timeout(const Duration(seconds: 180));
           if (result.exitCode == 0) {
+            await _fixAbsoluteSymlinks(rootfs);
             if (await File('$rootfs/bin/sh').exists() && await File('$rootfs/bin/sh').length() > 0) {
               _logMsg('Alpine extraido con $tb');
               return true;
             }
             if (await File('$rootfs/bin/busybox').exists() && await File('$rootfs/bin/busybox').length() > 0) {
+              if (!await File('$rootfs/bin/sh').exists() || await File('$rootfs/bin/sh').length() == 0) {
+                try {
+                  final target = File('$rootfs/bin/sh');
+                  try { if (await Link(target.path).exists()) await Link(target.path).delete(); } catch (_) {}
+                  try { if (await target.exists()) await target.delete(); } catch (_) {}
+                  await target.writeAsBytes(await File('$rootfs/bin/busybox').readAsBytes());
+                } catch (_) {}
+              }
               _logMsg('busybox extraido con $tb');
               return true;
             }
@@ -547,7 +599,54 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ────────── PROOT-rs ──────────
+  // ────────── Arreglar symlinks absolutos de Alpine ──────────
+  /// Los rootfs de Alpine usan symlinks absolutos (ej: /bin/sh -> /bin/busybox).
+  /// Al extraerlos con system tar, estos apuntan al sistema Android, no al rootfs.
+  /// Esta funcion convierte los symlinks rotos en archivos reales.
+  Future<void> _fixAbsoluteSymlinks(String rootfs) async {
+    final targetDirs = ['/bin', '/sbin', '/usr/bin', '/usr/sbin', '/lib', '/usr/lib'];
+    int fixed = 0;
+
+    for (final dir in targetDirs) {
+      final d = Directory('\$rootfs\$dir');
+      if (!await d.exists()) continue;
+      try {
+        await for (final entity in d.list(followLinks: false)) {
+          if (entity is Link) {
+            try {
+              final target = await entity.target();
+              if (target.startsWith('/')) {
+                // Symlink absoluto -> resolver dentro del rootfs
+                final resolved = '\$rootfs\$target';
+                final resolvedFile = File(resolved);
+                if (await resolvedFile.exists() && await resolvedFile.length() > 0) {
+                  final data = await resolvedFile.readAsBytes();
+                  // Reemplazar symlink con archivo real
+                  try { await entity.delete(); } catch (_) {}
+                  await File(entity.path).writeAsBytes(data);
+                  fixed++;
+                }
+              } else {
+                // Symlink relativo -> resolver desde el directorio del symlink
+                final parent = Directory(entity.path).parent.path;
+                final resolved = '\$parent/\$target'.replaceAll(RegExp(r'/+'), '/');
+                final resolvedFile = File(resolved);
+                if (await resolvedFile.exists() && await resolvedFile.length() > 0) {
+                  final data = await resolvedFile.readAsBytes();
+                  try { await entity.delete(); } catch (_) {}
+                  await File(entity.path).writeAsBytes(data);
+                  fixed++;
+                }
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    }
+    _logMsg('Symlinks absolutos reparados: \$fixed');
+  }
+
+  // ────────── PROOT-rs ──────────  // ────────── PROOT-rs ──────────
   Future<void> _downloadProotRs(String appDir) async {
     final prootPath = '$appDir/proot';
     if (await File(prootPath).exists()) { _logMsg('PROOT-rs ya existe'); return; }
