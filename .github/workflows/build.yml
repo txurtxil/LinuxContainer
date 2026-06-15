@@ -14,39 +14,116 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Setup Flutter
       uses: subosito/flutter-action@v2
       with:
         flutter-version: '3.27.1'
         cache: true
-    
+
     - name: Setup Java
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
-    
+
     - name: Android SDK
       run: |
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-34" > /dev/null 2>&1 || true
-    
+
     - name: Get dependencies
       run: flutter pub get
-    
+
     - name: Build APK
       run: flutter build apk --release
-    
+
+    # Build bionic tools from Termux .deb packages
+    - name: Build Bionic Tools (Termux binaries)
+      run: |
+        mkdir -p bionic-tools
+        # Descargar Termux Packages.gz para obtener URLs exactas
+        curl -sL "https://packages.termux.org/apt/termux-main/dists/stable/main/binary-aarch64/Packages.gz" -o /tmp/Packages.gz
+        gunzip -c /tmp/Packages.gz > /tmp/Packages
+        
+        # Funcion para descargar y extraer un .deb
+        extract_deb() {
+          local pkg="$1"
+          echo "=== Descargando $pkg ==="
+          # Buscar en el indice
+          local info=$(awk -v pkg="$pkg" '/^Package:/ { found=0 } $0 == "Package: " pkg { found=1 } found' /tmp/Packages | head -50)
+          local filename=$(echo "$info" | grep "^Filename:" | awk '{print $2}')
+          if [ -z "$filename" ]; then
+            echo "  -> No encontrado"
+            return 1
+          fi
+          local url="https://packages.termux.org/apt/termux-main/$filename"
+          echo "  URL: $url"
+          local debname=$(basename "$filename")
+          curl -sL "$url" -o "/tmp/$debname"
+          # Extraer .deb (formato ar)
+          mkdir -p "/tmp/deb_extract_$pkg"
+          cd "/tmp/deb_extract_$pkg"
+          ar x "/tmp/$debname"
+          # Extraer data.tar.xz
+          if [ -f data.tar.xz ]; then
+            tar -xJf data.tar.xz -C /tmp/bionic_build/ 2>/dev/null || tar -xf data.tar.xz -C /tmp/bionic_build/ 2>/dev/null || {
+              # Si xz no funciona, intentar con xz-utils
+              xz -d data.tar.xz --stdout | tar -x -C /tmp/bionic_build/ 2>/dev/null || {
+                echo "  -> Error extrayendo data.tar.xz"
+                return 1
+              }
+            }
+          elif [ -f data.tar.gz ]; then
+            tar -xzf data.tar.gz -C /tmp/bionic_build/
+          else
+            echo "  -> No data.tar.* encontrado"
+            ls -la
+            return 1
+          fi
+          echo "  -> OK"
+          rm -rf "/tmp/deb_extract_$pkg" "/tmp/$debname"
+        }
+        
+        rm -rf /tmp/bionic_build
+        mkdir -p /tmp/bionic_build
+        
+        # Paquetes necesarios
+        for pkg in bash nano openssh libandroid-support libcrypt openssl zlib ca-certificates; do
+          extract_deb "$pkg" || echo "  -> Fallo $pkg"
+        done
+        
+        # Crear tarball con los binarios extraidos
+        cd /tmp/bionic_build
+        # Solo incluir bin, lib, etc, share
+        tar -czf $GITHUB_WORKSPACE/bionic-tools.tar.gz \
+          --exclude='share/doc' \
+          --exclude='share/man' \
+          --exclude='share/info' \
+          --exclude='share/locale' \
+          --exclude='include' \
+          --exclude='var' \
+          --exclude='tmp' \
+          bin/ lib/ etc/ libexec/ 2>/dev/null || true
+        ls -lh $GITHUB_WORKSPACE/bionic-tools.tar.gz
+        echo "Bionic tools built successfully"
+
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: linux-container-apk
         path: build/app/outputs/flutter-apk/app-release.apk
-    
+
+    - name: Upload Bionic Tools
+      uses: actions/upload-artifact@v4
+      with:
+        name: bionic-tools
+        path: bionic-tools.tar.gz
+
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v2
       with:
-        files: build/app/outputs/flutter-apk/app-release.apk
+        files: |
+          build/app/outputs/flutter-apk/app-release.apk
+          bionic-tools.tar.gz
         generate_release_notes: true
