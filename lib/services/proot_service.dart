@@ -355,21 +355,55 @@ class ProotService extends ChangeNotifier {
   Future<void> _extractDebPackage(String debPath, String targetDir) async {
     final data = await File(debPath).readAsBytes();
 
-    // Parsear ar format para extraer data.tar.xz
-    final tarXzData = _extractFromAr(data, 'data.tar.xz');
-    if (tarXzData == null) {
-      // Intentar data.tar.gz
-      final tarGzData = _extractFromAr(data, 'data.tar.gz');
-      if (tarGzData == null) throw Exception('No se encontro data.tar.* en .deb');
-      // Extraer tar.gz con Dart
-      final tarDecoded = GZipDecoder().decodeBytes(tarGzData);
+    // Probar multiples patrones para el data.tar
+    List<int>? tarData;
+    String compressionType = 'xz';
+
+    for (final suffix in ['xz', 'gz', 'bz2', 'lz', 'zst']) {
+      tarData = _extractFromAr(data, 'data.tar.$suffix');
+      if (tarData != null) { compressionType = suffix; break; }
+    }
+    // Termux a veces usa nombres con ./ prefijo
+    if (tarData == null) {
+      for (final suffix in ['xz', 'gz', 'bz2', 'lz', 'zst']) {
+        tarData = _extractFromAr(data, './data.tar.$suffix');
+        if (tarData != null) { compressionType = suffix; break; }
+      }
+    }
+    // Tambien buscar cualquier entry que contenga data.tar
+    if (tarData == null) {
+      _logMsg('ar: buscando cualquier entry con data.tar...');
+      int pos = 8;
+      while (pos + 60 <= data.length) {
+        if (data.sublist(pos, pos + 60).every((b) => b == 0)) break;
+        final nameStr = String.fromCharCodes(data.sublist(pos, pos + 16));
+        final name = nameStr.trim();
+        final sizeStr = String.fromCharCodes(data.sublist(pos + 48, pos + 58)).trim();
+        final size = int.tryParse(sizeStr) ?? 0;
+        if (name.contains('data.tar')) {
+          _logMsg('ar: encontrado entry con data.tar: "$name"');
+          tarData = data.sublist(pos + 60, pos + 60 + size);
+          if (name.endsWith('.gz')) compressionType = 'gz';
+          else if (name.endsWith('.xz')) compressionType = 'xz';
+          else if (name.endsWith('.bz2')) compressionType = 'bz2';
+          else if (name.endsWith('.zst')) compressionType = 'zst';
+          break;
+        }
+        pos += 60 + size + (size % 2);
+      }
+    }
+
+    if (tarData == null) throw Exception('No se encontro data.tar.* en .deb');
+
+    if (compressionType == 'gz') {
+      final tarDecoded = GZipDecoder().decodeBytes(tarData);
       await _extractTarToDir(tarDecoded, targetDir);
       return;
     }
 
     // Tenemos data.tar.xz - extraer con toybox
     final xzPath = '$debPath.tar.xz';
-    await File(xzPath).writeAsBytes(tarXzData!);
+    await File(xzPath).writeAsBytes(tarData!);
 
     // Intentar varios metodos de extraccion
     bool extracted = false;
@@ -442,30 +476,35 @@ class ProotService extends ChangeNotifier {
   List<int>? _extractFromAr(List<int> arData, String fileName) {
     if (arData.length < 8) return null;
     final magic = String.fromCharCodes(arData.sublist(0, 8));
-    if (magic != '!<arch>\n') return null;
+    if (magic != '!<arch>\n') { _logMsg('ar: bad magic: $magic'); return null; }
 
     int pos = 8;
+    final entries = <String>[];
     while (pos + 60 <= arData.length) {
-      // Nombre: 16 bytes
-      final nameBytes = arData.sublist(pos, pos + 16);
-      final name = String.fromCharCodes(nameBytes).split('\x00')[0].trim();
-
-      // Tamaño: 10 bytes (decimal)
-      final sizeStr = String.fromCharCodes(arData.sublist(pos + 48, pos + 58)).trim();
-      final size = int.tryParse(sizeStr) ?? 0;
-
-      // Saltar tabla de simbolos GNU (//)
+      if (arData.sublist(pos, pos + 60).every((b) => b == 0)) break;
+      // Nombre: 16 bytes, space-padded
+      final nameStr = String.fromCharCodes(arData.sublist(pos, pos + 16));
+      String name = nameStr.trim();
+      // Si es referencia a tabla de nombres // o /N
       if (name == '//') {
+        final sizeStr = String.fromCharCodes(arData.sublist(pos + 48, pos + 58)).trim();
+        final size = int.tryParse(sizeStr) ?? 0;
         pos += 60 + size + (size % 2);
         continue;
       }
+      // Tamaño: 10 bytes decimal
+      final sizeStr = String.fromCharCodes(arData.sublist(pos + 48, pos + 58)).trim();
+      final size = int.tryParse(sizeStr) ?? 0;
+      entries.add(name);
 
       if (name == fileName) {
+        _logMsg('ar: encontrado $fileName ($size bytes)');
         return arData.sublist(pos + 60, pos + 60 + size);
       }
 
       pos += 60 + size + (size % 2);
     }
+    _logMsg('ar: entradas encontradas: ${entries.take(5).join(", ")}');
     return null;
   }
 
