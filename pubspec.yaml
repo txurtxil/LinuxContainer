@@ -1,7 +1,7 @@
 name: linux_container_app
-description: "Terminal Linux - Proot + SSH + Networking + OpenCloud"
+description: "Terminal Linux - Contenedor Linux con Alpine + PROOT + SSH + Networking"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.6.0
@@ -13,6 +13,7 @@ dependencies:
   path_provider: ^2.1.3
   shared_preferences: ^2.3.3
   provider: ^6.1.2
+  archive: ^4.0.2
 
 dev_dependencies:
   flutter_test:

@@ -2,11 +2,14 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:archive/archive.dart';
 
 class ProotService extends ChangeNotifier {
+  // ─── Singleton: todos los servicios comparten el mismo estado ───
   static final ProotService _instance = ProotService._internal();
   factory ProotService() => _instance;
   ProotService._internal();
+
   // ─── Estado ───
   bool _initialized = false;
   bool _isDownloading = false;
@@ -21,7 +24,6 @@ class ProotService extends ChangeNotifier {
   String get lastOutput => _lastOutput;
 
   // ─── Rutas ───
-  String? _busyboxPath;
   String? _prootPath;
   String? _rootfsPath;
 
@@ -39,24 +41,13 @@ class ProotService extends ChangeNotifier {
 
       if (await Directory(rootfs).exists()) {
         final sh = File('$rootfs/bin/sh');
-        if (await sh.exists()) {
+        if (await sh.exists() && await sh.length() > 0) {
           _initialized = true;
           _statusMessage = 'Linux listo';
           notifyListeners();
           return true;
         }
       }
-
-      // ¿Ya tenemos busybox?
-      final bb = File('$appDir/bin/busybox');
-      if (await bb.exists()) {
-        _busyboxPath = bb.path;
-        _initialized = true;
-        _statusMessage = 'Linux listo (modo básico)';
-        notifyListeners();
-        return true;
-      }
-
       _statusMessage = 'Linux no instalado – pulsa Setup';
       notifyListeners();
       return false;
@@ -72,7 +63,7 @@ class ProotService extends ChangeNotifier {
     if (_isDownloading) return;
     _isDownloading = true;
     _downloadProgress = 0.0;
-    _statusMessage = 'Iniciando setup…';
+    _statusMessage = 'Iniciando…';
     _lastOutput = '';
     notifyListeners();
 
@@ -82,147 +73,94 @@ class ProotService extends ChangeNotifier {
 
       // Crear directorios base
       await Directory(appDir).create(recursive: true);
-      await Directory('$appDir/bin').create(recursive: true);
       await Directory(_rootfsPath!).create(recursive: true);
 
-      // ── Paso 1: Descargar BusyBox estático ──
-      _downloadProgress = 0.05;
-      _statusMessage = 'Descargando BusyBox…';
+      // ── Paso 1: Descargar Alpine minirootfs (tar.gz) ──
+      _downloadProgress = 0.1;
+      _statusMessage = 'Descargando Alpine Linux…';
       notifyListeners();
 
-      final bbPath = '$appDir/bin/busybox';
-      if (!await File(bbPath).exists()) {
+      final tgzPath = '$appDir/rootfs.tar.gz';
+      if (!await File(tgzPath).exists()) {
         await _downloadFile(
-          'https://busybox.net/downloads/binaries/1.36.1/busybox-armv8l',
-          bbPath,
+          'https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz',
+          tgzPath,
+          0.1, 0.5,  // startWeight, endWeight
         );
-        // Hacer ejecutable
-        await Process.run('chmod', ['755', bbPath]);
       }
-      _busyboxPath = bbPath;
 
-      // ── Paso 2: Crear symlinks de busybox ──
-      _downloadProgress = 0.15;
-      _statusMessage = 'Instalando comandos base…';
+      // ── Paso 2: Extraer rootfs ──
+      _downloadProgress = 0.5;
+      _statusMessage = 'Extrayendo rootfs…';
       notifyListeners();
 
-      await _installBusyboxLinks('$appDir/bin');
+      if (!await File('$_rootfsPath/bin/sh').exists()) {
+        await _extractTarGz(tgzPath, _rootfsPath!);
+      }
 
-      // ── Paso 3: Descargar PROOT estático ──
-      _downloadProgress = 0.25;
+      // ── Paso 3: Verificar bin/sh y aplicar permisos ──
+      _downloadProgress = 0.65;
+      _statusMessage = 'Configurando permisos…';
+      notifyListeners();
+
+      // Hacer ejecutables los binarios clave
+      await _chmodRecursive(_rootfsPath!);
+
+      // Verificar que sh se extrajo correctamente
+      final shFile = File('$_rootfsPath/bin/sh');
+      final shOk = await shFile.exists() && await shFile.length() > 0;
+      if (!shOk) {
+        // Intentar extraer busybox a mano como fallback
+        _statusMessage = 'Recuperando: extrayendo busybox manual…';
+        notifyListeners();
+        await _extractBusyboxManually(tgzPath, _rootfsPath!);
+      }
+
+      // ── Paso 4: Configurar red ──
+      _downloadProgress = 0.75;
+      _statusMessage = 'Configurando red…';
+      notifyListeners();
+
+      await Directory('$_rootfsPath/etc').create(recursive: true);
+      await File('$_rootfsPath/etc/resolv.conf').writeAsString(
+        'nameserver 8.8.8.8\nnameserver 1.1.1.1\n',
+      );
+      await File('$_rootfsPath/etc/hosts').writeAsString(
+        '127.0.0.1 localhost\n::1 localhost\n',
+      );
+
+      // ── Paso 5: Descargar PROOT estático ──
+      _downloadProgress = 0.85;
       _statusMessage = 'Descargando PROOT…';
       notifyListeners();
 
-      final prootPath = '$appDir/bin/proot';
+      final prootPath = '$appDir/proot';
       if (!await File(prootPath).exists()) {
         try {
           await _downloadFile(
             'https://github.com/proot-me/proot/releases/download/v5.4.0/proot-v5.4.0-aarch64-static',
             prootPath,
+            0.85, 0.95,
           );
           await Process.run('chmod', ['755', prootPath]);
         } catch (e) {
-          _lastOutput += 'PROOT download falló: $e. Usando modo sin PROOT.\n';
+          _lastOutput += 'PROOT download falló: $e (se usará modo básico)\n';
         }
       }
       if (await File(prootPath).exists()) {
         _prootPath = prootPath;
       }
 
-      // ── Paso 4: Descargar rootfs Debian ──
-      _downloadProgress = 0.35;
-      _statusMessage = 'Descargando Debian rootfs…';
-      notifyListeners();
-
-      final rootfsTgz = File('$appDir/rootfs.tar.xz');
-      if (!await rootfsTgz.exists()) {
-        // Intentar varios mirrors
-        bool downloaded = false;
-        final urls = [
-          'https://github.com/debuerreotype/docker-debian-artifacts/raw/dist-arm64v8/bookworm/rootfs.tar.xz',
-          'https://cloud.debian.org/images/cloud/bookworm/20250331-1966/debian-12-arm64-20250331-1966.tar.xz',
-        ];
-        for (final url in urls) {
-          try {
-            await _downloadFile(url, rootfsTgz.path);
-            downloaded = true;
-            break;
-          } catch (_) {
-            continue;
-          }
-        }
-        if (!downloaded) {
-          throw Exception('No se pudo descargar rootfs Debian');
-        }
-      }
-
-      // ── Paso 5: Extraer rootfs con BusyBox tar ──
-      _downloadProgress = 0.55;
-      _statusMessage = 'Extrayendo rootfs…';
-      notifyListeners();
-
-      // Usar busybox tar para extraer (evita bugs de dart:io archive)
-      final hasTar = await File('$appDir/bin/tar').exists();
-      if (hasTar) {
-        await _runBusybox([
-          'tar', '-xf', rootfsTgz.path, '-C', _rootfsPath!,
-          '--no-same-permissions', '--no-same-owner',
-        ]);
-      } else {
-        // Fallback: extracción con Dart
-        _statusMessage = 'Extrayendo con Dart…';
-        notifyListeners();
-        await _extractTarXz(rootfsTgz.path, _rootfsPath!);
-      }
-
-      // ── Paso 6: Post-configuración ──
-      _downloadProgress = 0.75;
-      _statusMessage = 'Configurando entorno…';
-      notifyListeners();
-
-      // /etc/resolv.conf (DNS)
-      final etcDir = Directory('$_rootfsPath/etc');
-      await etcDir.create(recursive: true);
-      await File('$_rootfsPath/etc/resolv.conf').writeAsString(
-        'nameserver 8.8.8.8\nnameserver 1.1.1.1\n',
-      );
-
-      // /etc/hosts
-      await File('$_rootfsPath/etc/hosts').writeAsString(
-        '127.0.0.1 localhost\n::1 localhost\n',
-      );
-
-      // /etc/apt/sources.list si no existe
-      final aptDir = Directory('$_rootfsPath/etc/apt');
-      await aptDir.create(recursive: true);
-      final sources = File('$_rootfsPath/etc/apt/sources.list');
-      if (!await sources.exists()) {
-        await sources.writeAsString(
-          'deb http://deb.debian.org/debian bookworm main contrib non-free\n'
-          'deb http://deb.debian.org/debian-security bookworm-security main contrib non-free\n'
-          'deb http://deb.debian.org/debian bookworm-updates main contrib non-free\n',
-        );
-      }
-
-      // Asegurar /bin/sh
-      if (!await File('$_rootfsPath/bin/sh').exists()) {
-        final bb = _busyboxPath ?? '$appDir/bin/busybox';
-        if (await File(bb).exists()) {
-          await File('$_rootfsPath/bin/sh').parent.create(recursive: true);
-          await File(bb).copy('$_rootfsPath/bin/busybox');
-          await Process.run(bb, ['--install', '-s', '$_rootfsPath/bin']);
-        }
-      }
-
-      // Verificar que tenemos sh
-      final shExists = await File('$_rootfsPath/bin/sh').exists();
+      // ── Verificación final ──
+      final shExists = await File('$_rootfsPath/bin/sh').exists() &&
+                       await File('$_rootfsPath/bin/sh').length() > 0;
 
       _downloadProgress = 1.0;
       _initialized = shExists;
       _statusMessage = shExists
-          ? 'Debian Linux listo'
+          ? 'Alpine Linux listo'
           : 'Error: /bin/sh no encontrado en rootfs';
-      _lastOutput += _statusMessage;
+      _lastOutput += '\n$_statusMessage';
     } catch (e) {
       _statusMessage = 'Error: $e';
       _lastOutput += '\nError: $e';
@@ -233,112 +171,231 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ─── Instalar symlinks de busybox ───
-  Future<void> _installBusyboxLinks(String binDir) async {
-    final bb = _busyboxPath;
-    if (bb == null) return;
+  // ─── Extraer tar.gz con soporte correcto de hardlinks ───
+  Future<void> _extractTarGz(String tarPath, String destPath) async {
+    // Estrategia 1: Usar toybox tar del sistema (funciona en Android)
+    for (final tarBin in ['/system/bin/toybox', '/system/bin/toolbox', '/system/bin/busybox']) {
+      if (await File(tarBin).exists()) {
+        try {
+          final result = await Process.run(
+            tarBin, ['tar', '-xf', tarPath, '-C', destPath,
+                     '--no-same-permissions', '--no-same-owner'],
+          );
+          if (result.exitCode == 0) {
+            _lastOutput += 'Extraído con $tarBin\n';
+            return;
+          }
+        } catch (_) {}
+      }
+    }
 
-    final applets = [
-      'sh', 'bash', 'ls', 'cp', 'mv', 'rm', 'mkdir', 'chmod', 'chown',
-      'cat', 'echo', 'grep', 'sed', 'awk', 'cut', 'tr', 'sort', 'uniq',
-      'head', 'tail', 'wc', 'tee', 'find', 'xargs', 'clear',
-      'tar', 'gzip', 'gunzip', 'bzip2', 'unxz', 'xzcat',
-      'wget', 'curl', 'ping', 'netstat', 'nslookup', 'dig',
-      'ifconfig', 'route', 'ip', 'arp',
-      'kill', 'killall', 'ps', 'top', 'pidof',
-      'mount', 'umount', 'df', 'du', 'free',
-      'vi', 'nano', 'less', 'more',
-      'date', 'cal', 'sleep', 'time', 'env',
-      'whoami', 'id', 'uname', 'uptime',
-      'ln', 'readlink', 'realpath',
-    ];
+    // Estrategia 2: Extracción con Dart archive (fix hardlinks)
+    _statusMessage = 'Extrayendo con Dart…';
+    notifyListeners();
 
-    // Si no existe la carpeta destino, usar busybox --install
-    await Directory(binDir).create(recursive: true);
+    final bytes = await File(tarPath).readAsBytes();
+    final gzipBytes = GZipDecoder().decodeBytes(bytes);
+    final archive = TarDecoder().decodeBytes(gzipBytes);
 
-    // Intentar --install primero (más rápido)
+    int extracted = 0;
+    final total = archive.length;
+
+    // Mapa de inodos -> primer path que lo contiene (para hardlinks)
+    final Map<int, String> inodeMap = {};
+
+    for (final entry in archive) {
+      String name = entry.name;
+      if (name.startsWith('./')) name = name.substring(2);
+      if (name.isEmpty || name == '.') continue;
+
+      final outPath = '$destPath/$name';
+
+      // ── Directorios ──
+      if (name.endsWith('/')) {
+        await Directory(outPath).create(recursive: true);
+        extracted++;
+        _updateExtractionProgress(extracted, total);
+        continue;
+      }
+
+      // Asegurar directorio padre
+      await Directory(outPath).parent.create(recursive: true);
+
+      // ── Symlinks y Hardlinks ──
+      final linkTarget = (entry is TarFile) ? entry.linkName : '';
+      if (linkTarget.isNotEmpty || entry.isSymbolicLink) {
+        // SYMLINK o HARDLINK
+        final target = entry.isSymbolicLink
+            ? (entry.symbolicLink ?? linkTarget)
+            : linkTarget;
+
+        if (target.isNotEmpty) {
+          // Resolver path relativo
+          String resolved;
+          if (target.startsWith('/')) {
+            resolved = '$destPath$target';
+          } else {
+            final parentDir = Directory(outPath).parent.path;
+            resolved = '$parentDir/$target';
+          }
+          resolved = resolved.replaceAll(RegExp(r'/+'), '/');
+
+          // Si el target existe, copiar en lugar de hacer symlink
+          // (Android no permite symlinks fácilmente en app data)
+          if (await File(resolved).exists()) {
+            try {
+              await File(resolved).copy(outPath);
+            } catch (_) {
+              // fallback: crear archivo vacío
+              await File(outPath).writeAsBytes(entry.content);
+            }
+          } else {
+            // Escribir contenido si tiene (puede estar vacío para hardlinks)
+            final data = entry.content;
+            if (data.isNotEmpty) {
+              await File(outPath).writeAsBytes(data);
+            } else {
+              // Hardlink sin contenido → archivo vacío
+              await File(outPath).writeAsString('');
+            }
+          }
+        } else {
+          await File(outPath).writeAsBytes(entry.content);
+        }
+        extracted++;
+        _updateExtractionProgress(extracted, total);
+        continue;
+      }
+
+      // ── Archivos normales ──
+      if (entry.isFile) {
+        final data = entry.content;
+        if (data.isNotEmpty) {
+          await File(outPath).writeAsBytes(data);
+        } else {
+          // Podría ser hardlink sin linkName (archive bug)
+          // Intentar detectar: si tamaño 0 y no es directorio, crear vacío
+          await File(outPath).writeAsString('');
+        }
+        extracted++;
+        _updateExtractionProgress(extracted, total);
+        continue;
+      }
+
+      // Otros tipos (desconocido)
+      extracted++;
+      _updateExtractionProgress(extracted, total);
+    }
+  }
+
+  void _updateExtractionProgress(int current, int total) {
+    if (total > 0 && current % 50 == 0) {
+      _downloadProgress = 0.5 + (current / total) * 0.15;
+      _statusMessage = 'Extrayendo ${(current * 100 / total).toInt()}%';
+      notifyListeners();
+    }
+  }
+
+  // ─── Extraer busybox manualmente si la extracción normal falla ───
+  Future<void> _extractBusyboxManually(String tarPath, String destPath) async {
     try {
-      await Process.run(bb, ['--install', '-s', binDir]);
-    } catch (_) {
-      // Fallback manual
-      for (final applet in applets) {
-        final link = File('$binDir/$applet');
-        if (!await link.exists()) {
-          try {
-            await link.parent.create(recursive: true);
-            link.createSync(recursive: false);
-            // En Android no podemos crear symlinks fácilmente,
-            // usamos un script que redirige a busybox
-            final script = '#!/system/bin/sh\n"{BB}" {APPLET} "{ARGS}"\n'
-              .replaceFirst('{BB}', bb)
-              .replaceFirst('{APPLET}', applet)
-              .replaceFirst('{ARGS}', r'$@');
-          await link.writeAsString(script);
-            await Process.run('chmod', ['755', link.path]);
-          } catch (_) {
-            // ignorar errores de symlinks en Android
+      final bytes = await File(tarPath).readAsBytes();
+      final gzipBytes = GZipDecoder().decodeBytes(bytes);
+      final archive = TarDecoder().decodeBytes(gzipBytes);
+
+      for (final entry in archive) {
+        String name = entry.name;
+        if (name.startsWith('./')) name = name.substring(2);
+        if (name == 'bin/busybox' && entry.isFile) {
+          final data = entry.content;
+          if (data.isNotEmpty) {
+            await Directory('$destPath/bin').create(recursive: true);
+            await File('$destPath/bin/busybox').writeAsBytes(data);
+            await Process.run('chmod', ['755', '$destPath/bin/busybox']);
+            // Crear symlink de sh a busybox
+            final script = '#!/system/bin/sh\n'
+                '$destPath/bin/busybox sh "\$@"\n';
+            await File('$destPath/bin/sh').writeAsString(script);
+            await Process.run('chmod', ['755', '$destPath/bin/sh']);
+            _lastOutput += 'busybox extraído manualmente\n';
+            return;
           }
         }
       }
-    }
-  }
-
-  // ─── Ejecutar un comando con busybox ───
-  Future<String> _runBusybox(List<String> args, {Duration timeout = const Duration(seconds: 60)}) async {
-    final bb = _busyboxPath;
-    if (bb == null) return 'Error: BusyBox no disponible';
-
-    try {
-      // Intentar con linker del sistema (noexec bypass)
-      final linker = (await File('/system/bin/linker64').exists())
-          ? '/system/bin/linker64'
-          : (await File('/system/bin/linker').exists())
-              ? '/system/bin/linker'
-              : null;
-
-      if (linker != null) {
-        final result = await Process.run(
-          linker, [bb, ...args],
-          environment: {
-            'PATH': '$bb:${_rootfsPath ?? ""}/usr/bin:${_rootfsPath ?? ""}/bin:/system/bin:/system/xbin',
-          },
-        ).timeout(timeout);
-        return '${result.stdout}${result.stderr}';
-      }
-
-      // Fallback directo
-      final result = await Process.run(bb, args).timeout(timeout);
-      return '${result.stdout}${result.stderr}';
     } catch (e) {
-      return 'Error ejecutando busybox: $e';
+      _lastOutput += 'Error en extracción manual: $e\n';
     }
   }
 
-  // ─── Ejecutar comando principal ───
+  // ─── Hacer ejecutables los binarios en rootfs ───
+  Future<void> _chmodRecursive(String dirPath) async {
+    final dir = Directory(dirPath);
+    try {
+      final entities = await dir.list(recursive: true, followLinks: false).toList();
+      for (final entity in entities) {
+        if (entity is File) {
+          final name = entity.path.split('/').last;
+          // binarios comunes que deben ser ejecutables
+          if ([
+            'sh', 'busybox', 'apk', 'init',
+          ].contains(name) || name.contains('.so')) {
+            try {
+              await Process.run('chmod', ['755', entity.path]);
+            } catch (_) {}
+          }
+        }
+      }
+      // También hacer ejecutables todo /bin /sbin /usr/bin
+      for (final binDir in ['/bin', '/sbin', '/usr/bin', '/usr/sbin']) {
+        final d = Directory('$dirPath$binDir');
+        if (await d.exists()) {
+          try {
+            final files = await d.list().toList();
+            for (final f in files) {
+              if (f is File) {
+                try {
+                  await Process.run('chmod', ['755', f.path]);
+                } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  // ─── Ejecutar comando en el entorno Linux ───
   Future<String> runCommand(String command, {Duration timeout = const Duration(seconds: 60)}) async {
-    if (!_initialized) {
-      return 'Error: Linux no inicializado.\n'
-          'Pulsa "Setup Linux" en la pantalla de inicio.\n';
+    if (!_initialized || _rootfsPath == null) {
+      return 'Error: Linux no inicializado.\nPulsa "Setup Linux" primero.\n';
     }
 
-    final rootfs = _rootfsPath;
+    final rootfs = _rootfsPath!;
     final proot = _prootPath;
-    final bb = _busyboxPath;
+
+    // Detectar linker del sistema Android
+    final linker = (await File('/system/bin/linker64').exists())
+        ? '/system/bin/linker64'
+        : (await File('/system/bin/linker').exists())
+            ? '/system/bin/linker'
+            : null;
+
+    final busyboxPath = '$rootfs/bin/busybox';
+    final shPath = '$rootfs/bin/sh';
+    final hasBusybox = await File(busyboxPath).exists() && await File(busyboxPath).length() > 0;
+    final hasSh = await File(shPath).exists() && await File(shPath).length() > 0;
 
     try {
-      // ── Estrategia 1: PROOT + rootfs ──
-      if (proot != null && rootfs != null && await File(proot).exists()) {
+      // ── Estrategia 1: PROOT (entorno completo con fakeroot) ──
+      if (proot != null && await File(proot).exists() && linker != null) {
         try {
-          final linker = '/system/bin/linker64';
-          final hasLinker = await File(linker).exists();
-
           final args = [
             '-0',                           // fake root
             '-r', rootfs,                   // rootfs path
             '-b', '/proc',                  // bind proc
             '-b', '/sys',                   // bind sys
             '-b', '/dev',                   // bind dev
-            '-b', '/system',                // Android system (linker)
+            '-b', '/system',                // Android system (linker64)
             '-w', '/root',                  // working dir
             '/usr/bin/env',
             'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
@@ -347,10 +404,37 @@ class ProotService extends ChangeNotifier {
             'sh', '-c', command,
           ];
 
-          final exec = hasLinker ? [linker, proot, ...args] : [proot, ...args];
-
           final result = await Process.run(
-            exec.removeAt(0), exec,
+            linker, [proot, ...args],
+            workingDirectory: rootfs,
+            environment: {
+              'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
+            },
+          ).timeout(timeout);
+
+          final out = result.stdout as String;
+          final err = result.stderr as String;
+          _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
+          return _lastOutput;
+        } catch (e) {
+          _lastOutput = 'PROOT falló: $e\n';
+          // fall through
+        }
+      }
+
+      // ── Estrategia 2: Linker del sistema + busybox ──
+      if (linker != null && hasBusybox) {
+        try {
+          final result = await Process.run(
+            linker, [busyboxPath, 'sh', '-c', command],
+            environment: {
+              'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
+                      '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin',
+              'HOME': '$rootfs/root',
+              'TERM': 'xterm-256color',
+              'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
+              'PREFIX': rootfs,
+            },
             workingDirectory: rootfs,
           ).timeout(timeout);
 
@@ -359,40 +443,47 @@ class ProotService extends ChangeNotifier {
           _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
           return _lastOutput;
         } catch (e) {
-          _lastOutput = 'PROOT falló ($e), intentando BusyBox…\n';
-          // Fall through
+          _lastOutput = 'Linker+Busybox falló: $e\n';
         }
       }
 
-      // ── Estrategia 2: Linker + BusyBox sh ──
-      if (bb != null && await File(bb).exists()) {
-        final linker = '/system/bin/linker64';
-        final hasLinker = await File(linker).exists();
-
-        if (hasLinker) {
+      // ── Estrategia 3: Linker + sh directo ──
+      if (linker != null && hasSh) {
+        try {
           final result = await Process.run(
-            linker, [bb, 'sh', '-c', command],
+            linker, [shPath, '-c', command],
             environment: {
-              'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/system/bin:/system/xbin',
-              'HOME': '/root',
+              'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
+                      '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin',
+              'HOME': '$rootfs/root',
               'TERM': 'xterm-256color',
+              'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
             },
+            workingDirectory: rootfs,
           ).timeout(timeout);
 
           final out = result.stdout as String;
           final err = result.stderr as String;
           _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
           return _lastOutput;
+        } catch (e) {
+          _lastOutput = 'Linker+sh falló: $e\n';
         }
+      }
 
-        // Directo
+      // ── Estrategia 4: /system/bin/sh + rootfs en PATH ──
+      if (await File('/system/bin/sh').exists()) {
         final result = await Process.run(
-          bb, ['sh', '-c', command],
+          '/system/bin/sh', ['-c', command],
           environment: {
-            'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-            'HOME': '/root',
+            'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:'
+                    '$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin:'
+                    '/system/bin:/system/xbin',
+            'HOME': '$rootfs/root',
             'TERM': 'xterm-256color',
+            'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
           },
+          workingDirectory: rootfs,
         ).timeout(timeout);
 
         final out = result.stdout as String;
@@ -401,32 +492,7 @@ class ProotService extends ChangeNotifier {
         return _lastOutput;
       }
 
-      // ── Estrategia 3: rootfs/bin/sh directo ──
-      if (rootfs != null) {
-        final shPath = '$rootfs/bin/sh';
-        if (await File(shPath).exists()) {
-          final linker = '/system/bin/linker64';
-          if (await File(linker).exists()) {
-            final result = await Process.run(
-              linker, [shPath, '-c', command],
-              environment: {
-                'PATH': '$rootfs/usr/local/sbin:$rootfs/usr/local/bin:$rootfs/usr/sbin:$rootfs/usr/bin:$rootfs/sbin:$rootfs/bin:/system/bin:/system/xbin',
-                'HOME': '$rootfs/root',
-                'TERM': 'xterm-256color',
-                'LD_LIBRARY_PATH': '$rootfs/lib:$rootfs/usr/lib',
-              },
-            ).timeout(timeout);
-
-            final out = result.stdout as String;
-            final err = result.stderr as String;
-            _lastOutput = err.isNotEmpty ? '$out\n$err' : out;
-            return _lastOutput;
-          }
-        }
-      }
-
-      return 'Error: No se pudo ejecutar el comando.\n'
-          'Asegúrate de que el entorno Linux esté instalado.\n';
+      return 'Error: No se pudo ejecutar el comando.\n';
     } on TimeoutException {
       return '\n[Timeout] El comando excedió ${timeout.inSeconds}s\n';
     } catch (e) {
@@ -437,89 +503,20 @@ class ProotService extends ChangeNotifier {
     }
   }
 
-  // ─── Extraer tar.xz con Dart (fallback) ───
-  Future<void> _extractTarXz(String tarPath, String destPath) async {
-    _statusMessage = 'Leyendo archivo…';
-    notifyListeners();
-
-    final bytes = await File(tarPath).readAsBytes();
-
-    // Intentar detectar compresión
-    List<int> tarBytes;
-    if (bytes.length > 3 &&
-        bytes[0] == 0xFD && bytes[1] == 0x37 && bytes[2] == 0x7A) {
-      // XZ magic bytes → no podemos descomprimir fácilmente en Dart puro
-      _statusMessage = 'Formato XZ detectado. BusyBox tar necesario.';
-      notifyListeners();
-      // Buscar busybox tar en varias ubicaciones
-      for (final candidate in [
-        _busyboxPath,
-        '$_rootfsPath/bin/tar',
-        '/system/bin/tar',
-      ]) {
-        if (candidate != null && await File(candidate).exists()) {
-          final result = await Process.run(candidate, [
-            '-xf', tarPath, '-C', destPath,
-            '--no-same-permissions', '--no-same-owner',
-          ]);
-          _lastOutput += 'tar exit: ${result.exitCode}\n${result.stderr}';
-          return;
-        }
-      }
-      throw Exception('No hay tar disponible para extraer XZ');
-    }
-
-    // GZip
-    _statusMessage = 'Descomprimiendo…';
-    notifyListeners();
-    tarBytes = await _gunzip(bytes);
-
-    _statusMessage = 'Extrayendo archivos…';
-    notifyListeners();
-    await _untar(tarBytes, destPath);
-  }
-
-  Future<List<int>> _gunzip(List<int> data) async {
-    try {
-      final proc = await Process.start(
-        _busyboxPath ?? 'gzip', ['-d'],
-      );
-      proc.stdin.add(data);
-      await proc.stdin.close();
-      final output = await proc.stdout.toList();
-      await proc.stderr.drain();
-      final code = await proc.exitCode;
-      if (code == 0 && output.isNotEmpty) {
-        return output.expand((x) => x).toList();
-      }
-    } catch (_) {}
-    return data;
-  }
-
-  Future<void> _untar(List<int> data, String destPath) async {
-    if (_busyboxPath != null && await File(_busyboxPath!).exists()) {
-      final tarPath = '${await _appDir}/tmp.tar';
-      await File(tarPath).writeAsBytes(data);
-      await _runBusybox([
-        'tar', '-xf', tarPath, '-C', destPath,
-        '--no-same-permissions', '--no-same-owner',
-      ]);
-      await File(tarPath).delete();
-      return;
-    }
-    throw Exception('No hay tar disponible');
-  }
-
-  // ─── Descarga de archivos ───
-  Future<void> _downloadFile(String url, String path) async {
+  // ─── Descarga de archivos con seguimiento de progreso ───
+  Future<void> _downloadFile(
+    String url, String path,
+    double startWeight, double endWeight,
+  ) async {
     final client = HttpClient();
     try {
-      final uri = Uri.parse(url);
-      final request = await client.getUrl(uri);
+      final request = await client.getUrl(Uri.parse(url));
       final response = await request.close();
 
       if (response.statusCode != 200) {
-        throw Exception('HTTP ${response.statusCode} descargando $url');
+        throw Exception(
+          'HTTP ${response.statusCode} descargando $url',
+        );
       }
 
       final totalBytes = response.contentLength;
@@ -530,8 +527,12 @@ class ProotService extends ChangeNotifier {
         sink.add(chunk);
         receivedBytes += chunk.length;
         if (totalBytes > 0) {
-          _downloadProgress = 0.25 + (receivedBytes / totalBytes) * 0.30;
-          notifyListeners();
+          _downloadProgress = startWeight +
+              (receivedBytes / totalBytes) * (endWeight - startWeight);
+          if (receivedBytes % (1024 * 512) < chunk.length) {
+            // Actualizar cada ~512KB
+            notifyListeners();
+          }
         }
       }
       await sink.flush();
@@ -548,7 +549,6 @@ class ProotService extends ChangeNotifier {
       await Directory(appDir).delete(recursive: true);
     } catch (_) {}
     _initialized = false;
-    _busyboxPath = null;
     _prootPath = null;
     _rootfsPath = null;
     _statusMessage = 'Entorno reiniciado';

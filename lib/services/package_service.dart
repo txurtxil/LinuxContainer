@@ -18,7 +18,7 @@ class PackageService {
     _loading = true;
     _status = 'Actualizando repositorios…';
     _output = await _proot.runCommand(
-      'apt-get update 2>&1',
+      'apk update 2>&1',
       timeout: const Duration(seconds: 120),
     );
     _status = 'Repositorios actualizados';
@@ -29,7 +29,7 @@ class PackageService {
     _loading = true;
     _status = 'Buscando: $query';
     _output = await _proot.runCommand(
-      'apt-cache search "$query" 2>&1 | head -50',
+      'apk search "$query" 2>&1 | head -50',
       timeout: const Duration(seconds: 30),
     );
     _parsePackages(_output);
@@ -41,7 +41,7 @@ class PackageService {
     _loading = true;
     _status = 'Instalando $name…';
     _output = await _proot.runCommand(
-      'DEBIAN_FRONTEND=noninteractive apt-get install -y "$name" 2>&1',
+      'apk add "$name" 2>&1',
       timeout: const Duration(seconds: 180),
     );
     _status = 'Paquete $name instalado';
@@ -52,7 +52,7 @@ class PackageService {
     _loading = true;
     _status = 'Eliminando $name…';
     _output = await _proot.runCommand(
-      'DEBIAN_FRONTEND=noninteractive apt-get remove -y "$name" 2>&1',
+      'apk del "$name" 2>&1',
       timeout: const Duration(seconds: 60),
     );
     _status = 'Paquete $name eliminado';
@@ -63,7 +63,7 @@ class PackageService {
     _loading = true;
     _status = 'Listando paquetes instalados…';
     _output = await _proot.runCommand(
-      'dpkg --list 2>&1 | head -60',
+      'apk info 2>&1 | head -60',
       timeout: const Duration(seconds: 30),
     );
     _status = 'Paquetes instalados';
@@ -73,19 +73,13 @@ class PackageService {
   void _parsePackages(String output) {
     _packages = [];
     for (final line in output.split('\n')) {
-      if (line.trim().isNotEmpty &&
-          !line.contains(':')) {
-        final parts = line.split(RegExp(r'\s+'));
-        if (parts.length >= 2) {
-          _packages.add(PackageModel(
-            name: parts[0],
-            version: parts.length >= 2 ? parts[1] : '',
-            description: parts.length >= 3
-                ? parts.sublist(2).join(' ')
-                : line.trim(),
-            installed: false,
-          ));
-        }
+      if (line.trim().isNotEmpty && !line.contains(':')) {
+        _packages.add(PackageModel(
+          name: line.trim().split(' ').first,
+          version: '',
+          description: line.trim(),
+          installed: false,
+        ));
       }
     }
   }
