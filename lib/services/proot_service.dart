@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -267,7 +266,7 @@ class ProotService extends ChangeNotifier {
         if (!await link.exists()) {
           try {
             await link.parent.create(recursive: true);
-            await link.createSync(recursive: false);
+            link.createSync(recursive: false);
             // En Android no podemos crear symlinks fácilmente,
             // usamos un script que redirige a busybox
             final script = '#!/system/bin/sh\n"{BB}" {APPLET} "{ARGS}"\n'
