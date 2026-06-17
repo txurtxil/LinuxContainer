@@ -1,0 +1,2476 @@
+#compdef coreutils
+
+autoload -U is-at-least
+
+_coreutils() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_coreutils_commands" \
+"*::: :->coreutils" \
+&& ret=0
+    case $state in
+    (coreutils)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:coreutils-command-$line[1]:"
+        case $line[1] in
+            ([)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(arch)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(b2sum)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(base32)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(base64)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(basename)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(basenc)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cat)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(chcon)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(chgrp)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(chmod)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(chown)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(chroot)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cksum)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(comm)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cp)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(csplit)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cut)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(date)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(dd)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(df)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(dir)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(dircolors)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(dirname)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(du)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(echo)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(env)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(expand)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(expr)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(factor)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(false)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(fmt)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(fold)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(groups)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(head)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(hostid)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(hostname)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(id)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(join)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(kill)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(link)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(ln)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(logname)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(ls)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(md5sum)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(mkdir)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(mkfifo)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(mknod)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(mktemp)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(more)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(mv)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(nice)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(nl)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(nohup)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(nproc)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(numfmt)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(od)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(paste)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(pathchk)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(pinky)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(pr)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(printenv)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(printf)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(ptx)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(pwd)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(readlink)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(realpath)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(rm)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(rmdir)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(runcon)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(seq)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sha1sum)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sha224sum)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sha256sum)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sha384sum)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sha512sum)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(shred)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(shuf)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sleep)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sort)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(split)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(stat)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(stdbuf)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(stty)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sum)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sync)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(tac)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(tail)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(tee)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(timeout)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(touch)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(tr)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(true)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(truncate)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(tsort)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(tty)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(uname)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(unexpand)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(uniq)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(unlink)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(uptime)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(users)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(vdir)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(wc)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(who)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(whoami)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(yes)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_coreutils__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:coreutils-help-command-$line[1]:"
+        case $line[1] in
+            ([)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(arch)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(b2sum)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(base32)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(base64)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(basename)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(basenc)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(cat)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(chcon)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(chgrp)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(chmod)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(chown)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(chroot)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(cksum)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(comm)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(cp)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(csplit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(cut)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(date)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(dd)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(df)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(dir)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(dircolors)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(dirname)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(du)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(echo)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(env)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(expand)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(expr)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(factor)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(false)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(fmt)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(fold)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(groups)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(head)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(hostid)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(hostname)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(id)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(join)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(kill)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(link)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(ln)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(logname)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(ls)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(md5sum)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(mkdir)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(mkfifo)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(mknod)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(mktemp)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(more)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(mv)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(nice)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(nl)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(nohup)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(nproc)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(numfmt)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(od)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(paste)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pathchk)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pinky)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pr)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(printenv)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(printf)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(ptx)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pwd)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(readlink)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(realpath)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rm)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rmdir)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(runcon)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(seq)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sha1sum)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sha224sum)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sha256sum)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sha384sum)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sha512sum)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(shred)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(shuf)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sleep)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sort)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(split)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(stat)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(stdbuf)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(stty)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sum)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sync)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tac)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tail)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tee)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(timeout)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(touch)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tr)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(true)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(truncate)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tsort)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tty)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(uname)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(unexpand)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(uniq)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(unlink)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(uptime)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(users)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(vdir)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(wc)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(who)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(whoami)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(yes)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_coreutils_commands] )) ||
+_coreutils_commands() {
+    local commands; commands=(
+'[:test-about' \
+'arch:arch-about' \
+'b2sum:b2sum-about' \
+'base32:base32-about' \
+'base64:base64-about' \
+'basename:basename-about' \
+'basenc:basenc-about' \
+'cat:cat-about' \
+'chcon:chcon-about' \
+'chgrp:chgrp-about' \
+'chmod:chmod-about' \
+'chown:chown-about' \
+'chroot:chroot-about' \
+'cksum:cksum-about' \
+'comm:comm-about' \
+'cp:cp-about' \
+'csplit:csplit-about' \
+'cut:cut-about' \
+'date:date-about' \
+'dd:dd-about' \
+'df:df-about' \
+'dir:dir-about' \
+'dircolors:dircolors-about' \
+'dirname:dirname-about' \
+'du:du-about' \
+'echo:echo-about' \
+'env:env-about' \
+'expand:expand-about' \
+'expr:expr-about' \
+'factor:factor-about' \
+'false:false-about' \
+'fmt:fmt-about' \
+'fold:fold-about' \
+'groups:groups-about' \
+'head:head-about' \
+'hostid:hostid-about' \
+'hostname:hostname-about' \
+'id:id-about' \
+'install:install-about' \
+'join:join-about' \
+'kill:kill-about' \
+'link:link-about' \
+'ln:ln-about' \
+'logname:logname-about' \
+'ls:ls-about' \
+'md5sum:md5sum-about' \
+'mkdir:mkdir-about' \
+'mkfifo:mkfifo-about' \
+'mknod:mknod-about' \
+'mktemp:mktemp-about' \
+'more:more-about' \
+'mv:mv-about' \
+'nice:nice-about' \
+'nl:nl-about' \
+'nohup:nohup-about' \
+'nproc:nproc-about' \
+'numfmt:numfmt-about' \
+'od:od-about' \
+'paste:paste-about' \
+'pathchk:pathchk-about' \
+'pinky:pinky-about' \
+'pr:pr-about' \
+'printenv:printenv-about' \
+'printf:printf-about' \
+'ptx:ptx-about' \
+'pwd:pwd-about' \
+'readlink:readlink-about' \
+'realpath:realpath-about' \
+'rm:rm-about' \
+'rmdir:rmdir-about' \
+'runcon:runcon-about' \
+'seq:seq-about' \
+'sha1sum:sha1sum-about' \
+'sha224sum:sha224sum-about' \
+'sha256sum:sha256sum-about' \
+'sha384sum:sha384sum-about' \
+'sha512sum:sha512sum-about' \
+'shred:shred-about' \
+'shuf:shuf-about' \
+'sleep:sleep-about' \
+'sort:sort-about' \
+'split:split-about' \
+'stat:stat-about' \
+'stdbuf:stdbuf-about' \
+'stty:stty-about' \
+'sum:sum-about' \
+'sync:sync-about' \
+'tac:tac-about' \
+'tail:tail-about' \
+'tee:tee-about' \
+'test:test-about' \
+'timeout:timeout-about' \
+'touch:touch-about' \
+'tr:tr-about' \
+'true:true-about' \
+'truncate:truncate-about' \
+'tsort:tsort-about' \
+'tty:tty-about' \
+'uname:uname-about' \
+'unexpand:unexpand-about' \
+'uniq:uniq-about' \
+'unlink:unlink-about' \
+'uptime:uptime-about' \
+'users:users-about' \
+'vdir:vdir-about' \
+'wc:wc-about' \
+'who:who-about' \
+'whoami:whoami-about' \
+'yes:yes-about' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'coreutils commands' commands "$@"
+}
+(( $+functions[_coreutils__[_commands] )) ||
+_coreutils__[_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils [ commands' commands "$@"
+}
+(( $+functions[_coreutils__arch_commands] )) ||
+_coreutils__arch_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils arch commands' commands "$@"
+}
+(( $+functions[_coreutils__b2sum_commands] )) ||
+_coreutils__b2sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils b2sum commands' commands "$@"
+}
+(( $+functions[_coreutils__base32_commands] )) ||
+_coreutils__base32_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils base32 commands' commands "$@"
+}
+(( $+functions[_coreutils__base64_commands] )) ||
+_coreutils__base64_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils base64 commands' commands "$@"
+}
+(( $+functions[_coreutils__basename_commands] )) ||
+_coreutils__basename_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils basename commands' commands "$@"
+}
+(( $+functions[_coreutils__basenc_commands] )) ||
+_coreutils__basenc_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils basenc commands' commands "$@"
+}
+(( $+functions[_coreutils__cat_commands] )) ||
+_coreutils__cat_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils cat commands' commands "$@"
+}
+(( $+functions[_coreutils__chcon_commands] )) ||
+_coreutils__chcon_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils chcon commands' commands "$@"
+}
+(( $+functions[_coreutils__chgrp_commands] )) ||
+_coreutils__chgrp_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils chgrp commands' commands "$@"
+}
+(( $+functions[_coreutils__chmod_commands] )) ||
+_coreutils__chmod_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils chmod commands' commands "$@"
+}
+(( $+functions[_coreutils__chown_commands] )) ||
+_coreutils__chown_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils chown commands' commands "$@"
+}
+(( $+functions[_coreutils__chroot_commands] )) ||
+_coreutils__chroot_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils chroot commands' commands "$@"
+}
+(( $+functions[_coreutils__cksum_commands] )) ||
+_coreutils__cksum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils cksum commands' commands "$@"
+}
+(( $+functions[_coreutils__comm_commands] )) ||
+_coreutils__comm_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils comm commands' commands "$@"
+}
+(( $+functions[_coreutils__cp_commands] )) ||
+_coreutils__cp_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils cp commands' commands "$@"
+}
+(( $+functions[_coreutils__csplit_commands] )) ||
+_coreutils__csplit_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils csplit commands' commands "$@"
+}
+(( $+functions[_coreutils__cut_commands] )) ||
+_coreutils__cut_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils cut commands' commands "$@"
+}
+(( $+functions[_coreutils__date_commands] )) ||
+_coreutils__date_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils date commands' commands "$@"
+}
+(( $+functions[_coreutils__dd_commands] )) ||
+_coreutils__dd_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils dd commands' commands "$@"
+}
+(( $+functions[_coreutils__df_commands] )) ||
+_coreutils__df_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils df commands' commands "$@"
+}
+(( $+functions[_coreutils__dir_commands] )) ||
+_coreutils__dir_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils dir commands' commands "$@"
+}
+(( $+functions[_coreutils__dircolors_commands] )) ||
+_coreutils__dircolors_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils dircolors commands' commands "$@"
+}
+(( $+functions[_coreutils__dirname_commands] )) ||
+_coreutils__dirname_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils dirname commands' commands "$@"
+}
+(( $+functions[_coreutils__du_commands] )) ||
+_coreutils__du_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils du commands' commands "$@"
+}
+(( $+functions[_coreutils__echo_commands] )) ||
+_coreutils__echo_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils echo commands' commands "$@"
+}
+(( $+functions[_coreutils__env_commands] )) ||
+_coreutils__env_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils env commands' commands "$@"
+}
+(( $+functions[_coreutils__expand_commands] )) ||
+_coreutils__expand_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils expand commands' commands "$@"
+}
+(( $+functions[_coreutils__expr_commands] )) ||
+_coreutils__expr_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils expr commands' commands "$@"
+}
+(( $+functions[_coreutils__factor_commands] )) ||
+_coreutils__factor_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils factor commands' commands "$@"
+}
+(( $+functions[_coreutils__false_commands] )) ||
+_coreutils__false_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils false commands' commands "$@"
+}
+(( $+functions[_coreutils__fmt_commands] )) ||
+_coreutils__fmt_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils fmt commands' commands "$@"
+}
+(( $+functions[_coreutils__fold_commands] )) ||
+_coreutils__fold_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils fold commands' commands "$@"
+}
+(( $+functions[_coreutils__groups_commands] )) ||
+_coreutils__groups_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils groups commands' commands "$@"
+}
+(( $+functions[_coreutils__head_commands] )) ||
+_coreutils__head_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils head commands' commands "$@"
+}
+(( $+functions[_coreutils__help_commands] )) ||
+_coreutils__help_commands() {
+    local commands; commands=(
+'[:test-about' \
+'arch:arch-about' \
+'b2sum:b2sum-about' \
+'base32:base32-about' \
+'base64:base64-about' \
+'basename:basename-about' \
+'basenc:basenc-about' \
+'cat:cat-about' \
+'chcon:chcon-about' \
+'chgrp:chgrp-about' \
+'chmod:chmod-about' \
+'chown:chown-about' \
+'chroot:chroot-about' \
+'cksum:cksum-about' \
+'comm:comm-about' \
+'cp:cp-about' \
+'csplit:csplit-about' \
+'cut:cut-about' \
+'date:date-about' \
+'dd:dd-about' \
+'df:df-about' \
+'dir:dir-about' \
+'dircolors:dircolors-about' \
+'dirname:dirname-about' \
+'du:du-about' \
+'echo:echo-about' \
+'env:env-about' \
+'expand:expand-about' \
+'expr:expr-about' \
+'factor:factor-about' \
+'false:false-about' \
+'fmt:fmt-about' \
+'fold:fold-about' \
+'groups:groups-about' \
+'head:head-about' \
+'hostid:hostid-about' \
+'hostname:hostname-about' \
+'id:id-about' \
+'install:install-about' \
+'join:join-about' \
+'kill:kill-about' \
+'link:link-about' \
+'ln:ln-about' \
+'logname:logname-about' \
+'ls:ls-about' \
+'md5sum:md5sum-about' \
+'mkdir:mkdir-about' \
+'mkfifo:mkfifo-about' \
+'mknod:mknod-about' \
+'mktemp:mktemp-about' \
+'more:more-about' \
+'mv:mv-about' \
+'nice:nice-about' \
+'nl:nl-about' \
+'nohup:nohup-about' \
+'nproc:nproc-about' \
+'numfmt:numfmt-about' \
+'od:od-about' \
+'paste:paste-about' \
+'pathchk:pathchk-about' \
+'pinky:pinky-about' \
+'pr:pr-about' \
+'printenv:printenv-about' \
+'printf:printf-about' \
+'ptx:ptx-about' \
+'pwd:pwd-about' \
+'readlink:readlink-about' \
+'realpath:realpath-about' \
+'rm:rm-about' \
+'rmdir:rmdir-about' \
+'runcon:runcon-about' \
+'seq:seq-about' \
+'sha1sum:sha1sum-about' \
+'sha224sum:sha224sum-about' \
+'sha256sum:sha256sum-about' \
+'sha384sum:sha384sum-about' \
+'sha512sum:sha512sum-about' \
+'shred:shred-about' \
+'shuf:shuf-about' \
+'sleep:sleep-about' \
+'sort:sort-about' \
+'split:split-about' \
+'stat:stat-about' \
+'stdbuf:stdbuf-about' \
+'stty:stty-about' \
+'sum:sum-about' \
+'sync:sync-about' \
+'tac:tac-about' \
+'tail:tail-about' \
+'tee:tee-about' \
+'test:test-about' \
+'timeout:timeout-about' \
+'touch:touch-about' \
+'tr:tr-about' \
+'true:true-about' \
+'truncate:truncate-about' \
+'tsort:tsort-about' \
+'tty:tty-about' \
+'uname:uname-about' \
+'unexpand:unexpand-about' \
+'uniq:uniq-about' \
+'unlink:unlink-about' \
+'uptime:uptime-about' \
+'users:users-about' \
+'vdir:vdir-about' \
+'wc:wc-about' \
+'who:who-about' \
+'whoami:whoami-about' \
+'yes:yes-about' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'coreutils help commands' commands "$@"
+}
+(( $+functions[_coreutils__help__[_commands] )) ||
+_coreutils__help__[_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help [ commands' commands "$@"
+}
+(( $+functions[_coreutils__help__arch_commands] )) ||
+_coreutils__help__arch_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help arch commands' commands "$@"
+}
+(( $+functions[_coreutils__help__b2sum_commands] )) ||
+_coreutils__help__b2sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help b2sum commands' commands "$@"
+}
+(( $+functions[_coreutils__help__base32_commands] )) ||
+_coreutils__help__base32_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help base32 commands' commands "$@"
+}
+(( $+functions[_coreutils__help__base64_commands] )) ||
+_coreutils__help__base64_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help base64 commands' commands "$@"
+}
+(( $+functions[_coreutils__help__basename_commands] )) ||
+_coreutils__help__basename_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help basename commands' commands "$@"
+}
+(( $+functions[_coreutils__help__basenc_commands] )) ||
+_coreutils__help__basenc_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help basenc commands' commands "$@"
+}
+(( $+functions[_coreutils__help__cat_commands] )) ||
+_coreutils__help__cat_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help cat commands' commands "$@"
+}
+(( $+functions[_coreutils__help__chcon_commands] )) ||
+_coreutils__help__chcon_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help chcon commands' commands "$@"
+}
+(( $+functions[_coreutils__help__chgrp_commands] )) ||
+_coreutils__help__chgrp_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help chgrp commands' commands "$@"
+}
+(( $+functions[_coreutils__help__chmod_commands] )) ||
+_coreutils__help__chmod_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help chmod commands' commands "$@"
+}
+(( $+functions[_coreutils__help__chown_commands] )) ||
+_coreutils__help__chown_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help chown commands' commands "$@"
+}
+(( $+functions[_coreutils__help__chroot_commands] )) ||
+_coreutils__help__chroot_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help chroot commands' commands "$@"
+}
+(( $+functions[_coreutils__help__cksum_commands] )) ||
+_coreutils__help__cksum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help cksum commands' commands "$@"
+}
+(( $+functions[_coreutils__help__comm_commands] )) ||
+_coreutils__help__comm_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help comm commands' commands "$@"
+}
+(( $+functions[_coreutils__help__cp_commands] )) ||
+_coreutils__help__cp_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help cp commands' commands "$@"
+}
+(( $+functions[_coreutils__help__csplit_commands] )) ||
+_coreutils__help__csplit_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help csplit commands' commands "$@"
+}
+(( $+functions[_coreutils__help__cut_commands] )) ||
+_coreutils__help__cut_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help cut commands' commands "$@"
+}
+(( $+functions[_coreutils__help__date_commands] )) ||
+_coreutils__help__date_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help date commands' commands "$@"
+}
+(( $+functions[_coreutils__help__dd_commands] )) ||
+_coreutils__help__dd_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help dd commands' commands "$@"
+}
+(( $+functions[_coreutils__help__df_commands] )) ||
+_coreutils__help__df_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help df commands' commands "$@"
+}
+(( $+functions[_coreutils__help__dir_commands] )) ||
+_coreutils__help__dir_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help dir commands' commands "$@"
+}
+(( $+functions[_coreutils__help__dircolors_commands] )) ||
+_coreutils__help__dircolors_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help dircolors commands' commands "$@"
+}
+(( $+functions[_coreutils__help__dirname_commands] )) ||
+_coreutils__help__dirname_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help dirname commands' commands "$@"
+}
+(( $+functions[_coreutils__help__du_commands] )) ||
+_coreutils__help__du_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help du commands' commands "$@"
+}
+(( $+functions[_coreutils__help__echo_commands] )) ||
+_coreutils__help__echo_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help echo commands' commands "$@"
+}
+(( $+functions[_coreutils__help__env_commands] )) ||
+_coreutils__help__env_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help env commands' commands "$@"
+}
+(( $+functions[_coreutils__help__expand_commands] )) ||
+_coreutils__help__expand_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help expand commands' commands "$@"
+}
+(( $+functions[_coreutils__help__expr_commands] )) ||
+_coreutils__help__expr_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help expr commands' commands "$@"
+}
+(( $+functions[_coreutils__help__factor_commands] )) ||
+_coreutils__help__factor_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help factor commands' commands "$@"
+}
+(( $+functions[_coreutils__help__false_commands] )) ||
+_coreutils__help__false_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help false commands' commands "$@"
+}
+(( $+functions[_coreutils__help__fmt_commands] )) ||
+_coreutils__help__fmt_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help fmt commands' commands "$@"
+}
+(( $+functions[_coreutils__help__fold_commands] )) ||
+_coreutils__help__fold_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help fold commands' commands "$@"
+}
+(( $+functions[_coreutils__help__groups_commands] )) ||
+_coreutils__help__groups_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help groups commands' commands "$@"
+}
+(( $+functions[_coreutils__help__head_commands] )) ||
+_coreutils__help__head_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help head commands' commands "$@"
+}
+(( $+functions[_coreutils__help__help_commands] )) ||
+_coreutils__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help help commands' commands "$@"
+}
+(( $+functions[_coreutils__help__hostid_commands] )) ||
+_coreutils__help__hostid_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help hostid commands' commands "$@"
+}
+(( $+functions[_coreutils__help__hostname_commands] )) ||
+_coreutils__help__hostname_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help hostname commands' commands "$@"
+}
+(( $+functions[_coreutils__help__id_commands] )) ||
+_coreutils__help__id_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help id commands' commands "$@"
+}
+(( $+functions[_coreutils__help__install_commands] )) ||
+_coreutils__help__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help install commands' commands "$@"
+}
+(( $+functions[_coreutils__help__join_commands] )) ||
+_coreutils__help__join_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help join commands' commands "$@"
+}
+(( $+functions[_coreutils__help__kill_commands] )) ||
+_coreutils__help__kill_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help kill commands' commands "$@"
+}
+(( $+functions[_coreutils__help__link_commands] )) ||
+_coreutils__help__link_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help link commands' commands "$@"
+}
+(( $+functions[_coreutils__help__ln_commands] )) ||
+_coreutils__help__ln_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help ln commands' commands "$@"
+}
+(( $+functions[_coreutils__help__logname_commands] )) ||
+_coreutils__help__logname_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help logname commands' commands "$@"
+}
+(( $+functions[_coreutils__help__ls_commands] )) ||
+_coreutils__help__ls_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help ls commands' commands "$@"
+}
+(( $+functions[_coreutils__help__md5sum_commands] )) ||
+_coreutils__help__md5sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help md5sum commands' commands "$@"
+}
+(( $+functions[_coreutils__help__mkdir_commands] )) ||
+_coreutils__help__mkdir_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help mkdir commands' commands "$@"
+}
+(( $+functions[_coreutils__help__mkfifo_commands] )) ||
+_coreutils__help__mkfifo_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help mkfifo commands' commands "$@"
+}
+(( $+functions[_coreutils__help__mknod_commands] )) ||
+_coreutils__help__mknod_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help mknod commands' commands "$@"
+}
+(( $+functions[_coreutils__help__mktemp_commands] )) ||
+_coreutils__help__mktemp_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help mktemp commands' commands "$@"
+}
+(( $+functions[_coreutils__help__more_commands] )) ||
+_coreutils__help__more_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help more commands' commands "$@"
+}
+(( $+functions[_coreutils__help__mv_commands] )) ||
+_coreutils__help__mv_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help mv commands' commands "$@"
+}
+(( $+functions[_coreutils__help__nice_commands] )) ||
+_coreutils__help__nice_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help nice commands' commands "$@"
+}
+(( $+functions[_coreutils__help__nl_commands] )) ||
+_coreutils__help__nl_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help nl commands' commands "$@"
+}
+(( $+functions[_coreutils__help__nohup_commands] )) ||
+_coreutils__help__nohup_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help nohup commands' commands "$@"
+}
+(( $+functions[_coreutils__help__nproc_commands] )) ||
+_coreutils__help__nproc_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help nproc commands' commands "$@"
+}
+(( $+functions[_coreutils__help__numfmt_commands] )) ||
+_coreutils__help__numfmt_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help numfmt commands' commands "$@"
+}
+(( $+functions[_coreutils__help__od_commands] )) ||
+_coreutils__help__od_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help od commands' commands "$@"
+}
+(( $+functions[_coreutils__help__paste_commands] )) ||
+_coreutils__help__paste_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help paste commands' commands "$@"
+}
+(( $+functions[_coreutils__help__pathchk_commands] )) ||
+_coreutils__help__pathchk_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help pathchk commands' commands "$@"
+}
+(( $+functions[_coreutils__help__pinky_commands] )) ||
+_coreutils__help__pinky_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help pinky commands' commands "$@"
+}
+(( $+functions[_coreutils__help__pr_commands] )) ||
+_coreutils__help__pr_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help pr commands' commands "$@"
+}
+(( $+functions[_coreutils__help__printenv_commands] )) ||
+_coreutils__help__printenv_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help printenv commands' commands "$@"
+}
+(( $+functions[_coreutils__help__printf_commands] )) ||
+_coreutils__help__printf_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help printf commands' commands "$@"
+}
+(( $+functions[_coreutils__help__ptx_commands] )) ||
+_coreutils__help__ptx_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help ptx commands' commands "$@"
+}
+(( $+functions[_coreutils__help__pwd_commands] )) ||
+_coreutils__help__pwd_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help pwd commands' commands "$@"
+}
+(( $+functions[_coreutils__help__readlink_commands] )) ||
+_coreutils__help__readlink_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help readlink commands' commands "$@"
+}
+(( $+functions[_coreutils__help__realpath_commands] )) ||
+_coreutils__help__realpath_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help realpath commands' commands "$@"
+}
+(( $+functions[_coreutils__help__rm_commands] )) ||
+_coreutils__help__rm_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help rm commands' commands "$@"
+}
+(( $+functions[_coreutils__help__rmdir_commands] )) ||
+_coreutils__help__rmdir_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help rmdir commands' commands "$@"
+}
+(( $+functions[_coreutils__help__runcon_commands] )) ||
+_coreutils__help__runcon_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help runcon commands' commands "$@"
+}
+(( $+functions[_coreutils__help__seq_commands] )) ||
+_coreutils__help__seq_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help seq commands' commands "$@"
+}
+(( $+functions[_coreutils__help__sha1sum_commands] )) ||
+_coreutils__help__sha1sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help sha1sum commands' commands "$@"
+}
+(( $+functions[_coreutils__help__sha224sum_commands] )) ||
+_coreutils__help__sha224sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help sha224sum commands' commands "$@"
+}
+(( $+functions[_coreutils__help__sha256sum_commands] )) ||
+_coreutils__help__sha256sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help sha256sum commands' commands "$@"
+}
+(( $+functions[_coreutils__help__sha384sum_commands] )) ||
+_coreutils__help__sha384sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help sha384sum commands' commands "$@"
+}
+(( $+functions[_coreutils__help__sha512sum_commands] )) ||
+_coreutils__help__sha512sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help sha512sum commands' commands "$@"
+}
+(( $+functions[_coreutils__help__shred_commands] )) ||
+_coreutils__help__shred_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help shred commands' commands "$@"
+}
+(( $+functions[_coreutils__help__shuf_commands] )) ||
+_coreutils__help__shuf_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help shuf commands' commands "$@"
+}
+(( $+functions[_coreutils__help__sleep_commands] )) ||
+_coreutils__help__sleep_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help sleep commands' commands "$@"
+}
+(( $+functions[_coreutils__help__sort_commands] )) ||
+_coreutils__help__sort_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help sort commands' commands "$@"
+}
+(( $+functions[_coreutils__help__split_commands] )) ||
+_coreutils__help__split_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help split commands' commands "$@"
+}
+(( $+functions[_coreutils__help__stat_commands] )) ||
+_coreutils__help__stat_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help stat commands' commands "$@"
+}
+(( $+functions[_coreutils__help__stdbuf_commands] )) ||
+_coreutils__help__stdbuf_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help stdbuf commands' commands "$@"
+}
+(( $+functions[_coreutils__help__stty_commands] )) ||
+_coreutils__help__stty_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help stty commands' commands "$@"
+}
+(( $+functions[_coreutils__help__sum_commands] )) ||
+_coreutils__help__sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help sum commands' commands "$@"
+}
+(( $+functions[_coreutils__help__sync_commands] )) ||
+_coreutils__help__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help sync commands' commands "$@"
+}
+(( $+functions[_coreutils__help__tac_commands] )) ||
+_coreutils__help__tac_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help tac commands' commands "$@"
+}
+(( $+functions[_coreutils__help__tail_commands] )) ||
+_coreutils__help__tail_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help tail commands' commands "$@"
+}
+(( $+functions[_coreutils__help__tee_commands] )) ||
+_coreutils__help__tee_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help tee commands' commands "$@"
+}
+(( $+functions[_coreutils__help__test_commands] )) ||
+_coreutils__help__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help test commands' commands "$@"
+}
+(( $+functions[_coreutils__help__timeout_commands] )) ||
+_coreutils__help__timeout_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help timeout commands' commands "$@"
+}
+(( $+functions[_coreutils__help__touch_commands] )) ||
+_coreutils__help__touch_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help touch commands' commands "$@"
+}
+(( $+functions[_coreutils__help__tr_commands] )) ||
+_coreutils__help__tr_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help tr commands' commands "$@"
+}
+(( $+functions[_coreutils__help__true_commands] )) ||
+_coreutils__help__true_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help true commands' commands "$@"
+}
+(( $+functions[_coreutils__help__truncate_commands] )) ||
+_coreutils__help__truncate_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help truncate commands' commands "$@"
+}
+(( $+functions[_coreutils__help__tsort_commands] )) ||
+_coreutils__help__tsort_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help tsort commands' commands "$@"
+}
+(( $+functions[_coreutils__help__tty_commands] )) ||
+_coreutils__help__tty_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help tty commands' commands "$@"
+}
+(( $+functions[_coreutils__help__uname_commands] )) ||
+_coreutils__help__uname_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help uname commands' commands "$@"
+}
+(( $+functions[_coreutils__help__unexpand_commands] )) ||
+_coreutils__help__unexpand_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help unexpand commands' commands "$@"
+}
+(( $+functions[_coreutils__help__uniq_commands] )) ||
+_coreutils__help__uniq_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help uniq commands' commands "$@"
+}
+(( $+functions[_coreutils__help__unlink_commands] )) ||
+_coreutils__help__unlink_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help unlink commands' commands "$@"
+}
+(( $+functions[_coreutils__help__uptime_commands] )) ||
+_coreutils__help__uptime_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help uptime commands' commands "$@"
+}
+(( $+functions[_coreutils__help__users_commands] )) ||
+_coreutils__help__users_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help users commands' commands "$@"
+}
+(( $+functions[_coreutils__help__vdir_commands] )) ||
+_coreutils__help__vdir_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help vdir commands' commands "$@"
+}
+(( $+functions[_coreutils__help__wc_commands] )) ||
+_coreutils__help__wc_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help wc commands' commands "$@"
+}
+(( $+functions[_coreutils__help__who_commands] )) ||
+_coreutils__help__who_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help who commands' commands "$@"
+}
+(( $+functions[_coreutils__help__whoami_commands] )) ||
+_coreutils__help__whoami_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help whoami commands' commands "$@"
+}
+(( $+functions[_coreutils__help__yes_commands] )) ||
+_coreutils__help__yes_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils help yes commands' commands "$@"
+}
+(( $+functions[_coreutils__hostid_commands] )) ||
+_coreutils__hostid_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils hostid commands' commands "$@"
+}
+(( $+functions[_coreutils__hostname_commands] )) ||
+_coreutils__hostname_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils hostname commands' commands "$@"
+}
+(( $+functions[_coreutils__id_commands] )) ||
+_coreutils__id_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils id commands' commands "$@"
+}
+(( $+functions[_coreutils__install_commands] )) ||
+_coreutils__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils install commands' commands "$@"
+}
+(( $+functions[_coreutils__join_commands] )) ||
+_coreutils__join_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils join commands' commands "$@"
+}
+(( $+functions[_coreutils__kill_commands] )) ||
+_coreutils__kill_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils kill commands' commands "$@"
+}
+(( $+functions[_coreutils__link_commands] )) ||
+_coreutils__link_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils link commands' commands "$@"
+}
+(( $+functions[_coreutils__ln_commands] )) ||
+_coreutils__ln_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils ln commands' commands "$@"
+}
+(( $+functions[_coreutils__logname_commands] )) ||
+_coreutils__logname_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils logname commands' commands "$@"
+}
+(( $+functions[_coreutils__ls_commands] )) ||
+_coreutils__ls_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils ls commands' commands "$@"
+}
+(( $+functions[_coreutils__md5sum_commands] )) ||
+_coreutils__md5sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils md5sum commands' commands "$@"
+}
+(( $+functions[_coreutils__mkdir_commands] )) ||
+_coreutils__mkdir_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils mkdir commands' commands "$@"
+}
+(( $+functions[_coreutils__mkfifo_commands] )) ||
+_coreutils__mkfifo_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils mkfifo commands' commands "$@"
+}
+(( $+functions[_coreutils__mknod_commands] )) ||
+_coreutils__mknod_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils mknod commands' commands "$@"
+}
+(( $+functions[_coreutils__mktemp_commands] )) ||
+_coreutils__mktemp_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils mktemp commands' commands "$@"
+}
+(( $+functions[_coreutils__more_commands] )) ||
+_coreutils__more_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils more commands' commands "$@"
+}
+(( $+functions[_coreutils__mv_commands] )) ||
+_coreutils__mv_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils mv commands' commands "$@"
+}
+(( $+functions[_coreutils__nice_commands] )) ||
+_coreutils__nice_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils nice commands' commands "$@"
+}
+(( $+functions[_coreutils__nl_commands] )) ||
+_coreutils__nl_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils nl commands' commands "$@"
+}
+(( $+functions[_coreutils__nohup_commands] )) ||
+_coreutils__nohup_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils nohup commands' commands "$@"
+}
+(( $+functions[_coreutils__nproc_commands] )) ||
+_coreutils__nproc_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils nproc commands' commands "$@"
+}
+(( $+functions[_coreutils__numfmt_commands] )) ||
+_coreutils__numfmt_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils numfmt commands' commands "$@"
+}
+(( $+functions[_coreutils__od_commands] )) ||
+_coreutils__od_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils od commands' commands "$@"
+}
+(( $+functions[_coreutils__paste_commands] )) ||
+_coreutils__paste_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils paste commands' commands "$@"
+}
+(( $+functions[_coreutils__pathchk_commands] )) ||
+_coreutils__pathchk_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils pathchk commands' commands "$@"
+}
+(( $+functions[_coreutils__pinky_commands] )) ||
+_coreutils__pinky_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils pinky commands' commands "$@"
+}
+(( $+functions[_coreutils__pr_commands] )) ||
+_coreutils__pr_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils pr commands' commands "$@"
+}
+(( $+functions[_coreutils__printenv_commands] )) ||
+_coreutils__printenv_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils printenv commands' commands "$@"
+}
+(( $+functions[_coreutils__printf_commands] )) ||
+_coreutils__printf_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils printf commands' commands "$@"
+}
+(( $+functions[_coreutils__ptx_commands] )) ||
+_coreutils__ptx_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils ptx commands' commands "$@"
+}
+(( $+functions[_coreutils__pwd_commands] )) ||
+_coreutils__pwd_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils pwd commands' commands "$@"
+}
+(( $+functions[_coreutils__readlink_commands] )) ||
+_coreutils__readlink_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils readlink commands' commands "$@"
+}
+(( $+functions[_coreutils__realpath_commands] )) ||
+_coreutils__realpath_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils realpath commands' commands "$@"
+}
+(( $+functions[_coreutils__rm_commands] )) ||
+_coreutils__rm_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils rm commands' commands "$@"
+}
+(( $+functions[_coreutils__rmdir_commands] )) ||
+_coreutils__rmdir_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils rmdir commands' commands "$@"
+}
+(( $+functions[_coreutils__runcon_commands] )) ||
+_coreutils__runcon_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils runcon commands' commands "$@"
+}
+(( $+functions[_coreutils__seq_commands] )) ||
+_coreutils__seq_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils seq commands' commands "$@"
+}
+(( $+functions[_coreutils__sha1sum_commands] )) ||
+_coreutils__sha1sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils sha1sum commands' commands "$@"
+}
+(( $+functions[_coreutils__sha224sum_commands] )) ||
+_coreutils__sha224sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils sha224sum commands' commands "$@"
+}
+(( $+functions[_coreutils__sha256sum_commands] )) ||
+_coreutils__sha256sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils sha256sum commands' commands "$@"
+}
+(( $+functions[_coreutils__sha384sum_commands] )) ||
+_coreutils__sha384sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils sha384sum commands' commands "$@"
+}
+(( $+functions[_coreutils__sha512sum_commands] )) ||
+_coreutils__sha512sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils sha512sum commands' commands "$@"
+}
+(( $+functions[_coreutils__shred_commands] )) ||
+_coreutils__shred_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils shred commands' commands "$@"
+}
+(( $+functions[_coreutils__shuf_commands] )) ||
+_coreutils__shuf_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils shuf commands' commands "$@"
+}
+(( $+functions[_coreutils__sleep_commands] )) ||
+_coreutils__sleep_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils sleep commands' commands "$@"
+}
+(( $+functions[_coreutils__sort_commands] )) ||
+_coreutils__sort_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils sort commands' commands "$@"
+}
+(( $+functions[_coreutils__split_commands] )) ||
+_coreutils__split_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils split commands' commands "$@"
+}
+(( $+functions[_coreutils__stat_commands] )) ||
+_coreutils__stat_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils stat commands' commands "$@"
+}
+(( $+functions[_coreutils__stdbuf_commands] )) ||
+_coreutils__stdbuf_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils stdbuf commands' commands "$@"
+}
+(( $+functions[_coreutils__stty_commands] )) ||
+_coreutils__stty_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils stty commands' commands "$@"
+}
+(( $+functions[_coreutils__sum_commands] )) ||
+_coreutils__sum_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils sum commands' commands "$@"
+}
+(( $+functions[_coreutils__sync_commands] )) ||
+_coreutils__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils sync commands' commands "$@"
+}
+(( $+functions[_coreutils__tac_commands] )) ||
+_coreutils__tac_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils tac commands' commands "$@"
+}
+(( $+functions[_coreutils__tail_commands] )) ||
+_coreutils__tail_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils tail commands' commands "$@"
+}
+(( $+functions[_coreutils__tee_commands] )) ||
+_coreutils__tee_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils tee commands' commands "$@"
+}
+(( $+functions[_coreutils__test_commands] )) ||
+_coreutils__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils test commands' commands "$@"
+}
+(( $+functions[_coreutils__timeout_commands] )) ||
+_coreutils__timeout_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils timeout commands' commands "$@"
+}
+(( $+functions[_coreutils__touch_commands] )) ||
+_coreutils__touch_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils touch commands' commands "$@"
+}
+(( $+functions[_coreutils__tr_commands] )) ||
+_coreutils__tr_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils tr commands' commands "$@"
+}
+(( $+functions[_coreutils__true_commands] )) ||
+_coreutils__true_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils true commands' commands "$@"
+}
+(( $+functions[_coreutils__truncate_commands] )) ||
+_coreutils__truncate_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils truncate commands' commands "$@"
+}
+(( $+functions[_coreutils__tsort_commands] )) ||
+_coreutils__tsort_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils tsort commands' commands "$@"
+}
+(( $+functions[_coreutils__tty_commands] )) ||
+_coreutils__tty_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils tty commands' commands "$@"
+}
+(( $+functions[_coreutils__uname_commands] )) ||
+_coreutils__uname_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils uname commands' commands "$@"
+}
+(( $+functions[_coreutils__unexpand_commands] )) ||
+_coreutils__unexpand_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils unexpand commands' commands "$@"
+}
+(( $+functions[_coreutils__uniq_commands] )) ||
+_coreutils__uniq_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils uniq commands' commands "$@"
+}
+(( $+functions[_coreutils__unlink_commands] )) ||
+_coreutils__unlink_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils unlink commands' commands "$@"
+}
+(( $+functions[_coreutils__uptime_commands] )) ||
+_coreutils__uptime_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils uptime commands' commands "$@"
+}
+(( $+functions[_coreutils__users_commands] )) ||
+_coreutils__users_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils users commands' commands "$@"
+}
+(( $+functions[_coreutils__vdir_commands] )) ||
+_coreutils__vdir_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils vdir commands' commands "$@"
+}
+(( $+functions[_coreutils__wc_commands] )) ||
+_coreutils__wc_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils wc commands' commands "$@"
+}
+(( $+functions[_coreutils__who_commands] )) ||
+_coreutils__who_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils who commands' commands "$@"
+}
+(( $+functions[_coreutils__whoami_commands] )) ||
+_coreutils__whoami_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils whoami commands' commands "$@"
+}
+(( $+functions[_coreutils__yes_commands] )) ||
+_coreutils__yes_commands() {
+    local commands; commands=()
+    _describe -t commands 'coreutils yes commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_coreutils" ]; then
+    _coreutils "$@"
+else
+    compdef _coreutils coreutils
+fi

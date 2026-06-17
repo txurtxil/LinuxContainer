@@ -1,0 +1,54 @@
+install-verbose-copy = { $from } -> { $to }
+install-usage = install [OPCIO]... [DOSIERO]...
+install-error-metadata-failed = eraro pri metadatenoj
+install-help-preserve-context = konservi sekurecan kuntekston
+install-error-install-failed = ne povas instali { $from } al { $to }
+install-error-target-not-dir = celo { $path } ne estas dosierujo
+install-error-invalid-target = nevalida celo { $path }: Dosiero aŭ dosierujo ne ekzistas
+install-error-create-dir-failed = malsukcesis krei { $path }
+install-error-invalid-user = nevalida uzanto: { $user }
+install-error-invalid-group = nevalida grupo: { $group }
+install-verbose-removed = forigis { $path }
+install-verbose-backup = (savkopio: { $backup })
+install-error-extra-operand =
+    ekstra argumento { $operand }
+    { $usage }
+install-help-no-target-directory = trakti CELOn kiel ordinaran dosieron
+install-about =
+    Kopii FONTOn al CELOn aŭ plurajn FONTOjn al ekzistanta
+    DOSIERUJO, agordante permesajn reĝimojn kaj posedanton/grupon
+install-error-chmod-failed = malsukcesis alvoki «chmod» pri { $path }
+install-error-chmod-failed-detailed = { $path }: chmod malsukcesis pro eraro { $error }
+install-error-chown-failed = malsukcesis alvoki «chown» pri { $path }: { $error }
+install-error-backup-failed = malsukcesis fari savkopion de { $from } en { $to }
+install-error-strip-failed = programo «strip» malsukcesis: { $error }
+install-error-strip-abnormal = procezo «strip» finiĝis nenormale, liverinte la elirstaton { $code }
+install-error-omitting-directory = preterpasante dosierujon { $path }
+install-error-not-a-directory = malsukcesis atingi { $path }: Ne estas dosierujo
+install-help-ignored = ignorata
+install-error-dir-needs-arg = { $util_name } kun -d postulas almenaŭ unu argumenton.
+install-help-context = agordi sekurecan kuntekston de dosieroj kaj dosierujoj
+install-help-default-context = apriorigi sekurecan kuntekston de SELinux pri cela dosiero kaj ĉiu kreita dosiero
+install-help-verbose = klarigi tion, kio estas farata
+install-error-invalid-mode = Nevalida reĝima signoĉeno: { $error }
+install-error-same-file = «{ $file1 }» kaj «{ $file2 }» estas sama dosiero
+install-verbose-creating-directory = kreante dosierujon { $path }
+install-verbose-creating-directory-step = install: kreante dosierujon { $path }
+install-error-missing-file-operand = dosiero-argumento mankas
+install-error-failed-to-remove = Malsukcesis forigi ekzistantan dosieron { $path }. Eraro: { $error }
+install-help-target-directory = movi ĉiujn argumentojn FONTO al DOSIERUJO
+install-error-mutually-exclusive-target = Vi ne povas specifi kaj la opcion --target-directory kaj la opcion --no-target-directory
+install-error-mutually-exclusive-compare-preserve = Vi ne povas specifi kaj la opcion --compare kaj la opcion --preserve-timestamps
+install-error-mutually-exclusive-compare-strip = Vi ne povas specifi kaj la opcion --compare kaj la opcion --strip
+install-error-override-directory-failed = ne povas superskribi dosierujon { $dir } per nedosierujo { $file }
+install-help-owner = modifi posedanton (nur por ĉefuzanto)
+install-help-strip = forviŝi simboltabelojn (faras nenion ĉe Windows)
+install-error-missing-destination-operand = mankas cela dosiero-argumento post «{ $path }»
+install-help-strip-program = programo por forviŝi simboltabelojn (faras nenion ĉe Windows)
+install-help-mode = agordi la permesoreĝimon (kiel chmod), anstataŭ rwxr-xr-x
+install-warning-compare-ignored = la opcio --compare (-C) ignoriĝas, kiam vi specifas reĝimon kun bitoj aliaj ol permesobitoj
+install-help-compare = kompari parojn da fontaj kaj celaj dosieroj, kaj kelkfoje ne modifi la celon
+install-help-directory = trakti ĉiujn argumentojn kiel nomojn de dosierujoj; krei ĉiujn komponantojn de la specifitaj dosierujoj
+install-help-group = agordi grupoposedantecon, ne uzante la aktualan grupon de la procezo
+install-help-create-leading = krei ĉiujn komencajn komponantojn de CELO anstataŭ la lasta, poste kopii FONTOn al CELO
+install-help-preserve-timestamps = kopii la atingotempojn kaj modifotempojn de fontaj dosieroj al la respondantaj dosieroj ĉe la celo

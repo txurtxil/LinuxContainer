@@ -1,0 +1,35 @@
+#!/bin/bash
+set -e
+
+echo "[FLUTTER FIX] restoring core dependencies"
+
+cat > pubspec.yaml << 'EOL'
+name: linuxcontainer
+description: Linux Container App
+version: 1.0.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  provider: ^6.1.2
+  archive: ^3.6.1
+  path_provider: ^2.1.6
+  flutter_pty: ^0.4.2
+  logging: ^1.3.0
+  yaml: ^3.1.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+EOL
+
+flutter pub get
+

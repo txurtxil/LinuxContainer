@@ -1,0 +1,2 @@
+# As per #1124249 suggestion.
+dhcpcd-base: executable-not-elf-or-script [usr/libexec/dhcpcd-hooks/*]

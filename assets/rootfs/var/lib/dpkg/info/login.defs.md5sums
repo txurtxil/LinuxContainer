@@ -1,0 +1,12 @@
+fead66d3a0f9f16eb7283f7478b8957a  usr/share/apport/package-hooks/source_shadow.py
+8a53d489edecccc7f10506fbb5afd05a  usr/share/doc/login.defs/NEWS.Debian.gz
+7d4d2bc4b2d9ba927e21531ffadd8bba  usr/share/doc/login.defs/changelog.Debian.gz
+5dbe6658eef36129385e295af7c97522  usr/share/doc/login.defs/copyright
+1ebd963f42f0df141f9c3bebb18f8a68  usr/share/man/de/man5/login.defs.5.gz
+675ac4f796b631380ef4f494ef60c844  usr/share/man/fr/man5/login.defs.5.gz
+7938b129d7c2c9a77ada3566ac57ff66  usr/share/man/it/man5/login.defs.5.gz
+00490117533cea5b97a1c651deb4d037  usr/share/man/ja/man5/login.defs.5.gz
+cde982ca5a0863641784491cfe1dcc18  usr/share/man/man5/login.defs.5.gz
+d814954403a7c08ea9954adc257dd9bf  usr/share/man/ru/man5/login.defs.5.gz
+d9874ec4efd6e7d279ea4907d269f5ea  usr/share/man/uk/man5/login.defs.5.gz
+96672194f7d43eb830a2d07781f83c45  usr/share/man/zh_CN/man5/login.defs.5.gz

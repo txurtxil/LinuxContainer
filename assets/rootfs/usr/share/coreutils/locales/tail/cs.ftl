@@ -1,0 +1,19 @@
+tail-stdin-header = standardní vstup
+tail-usage = tail [PŘÍZNAK]… [SOUBOR]…
+tail-bad-fd = Chybný popisovač souboru
+tail-is-a-directory = Je složka
+tail-no-files-remaining = nezbývají žádné soubory
+tail-become-inaccessible = se stalo nepřístupné
+tail-help-follow-retry = Stejné jako --follow=name --retry
+tail-help-bytes = Počet bajtů k vypsání
+tail-help-lines = Počet řádků k vypsání
+tail-error-invalid-pid = neplatné PID: { $pid }
+tail-error-invalid-number-overflow = neplatný počet: { $arg }
+tail-error-backend-resources-exhausted = prostředky { $backend } vyčerpány
+tail-status-file-truncated = { $file }: soubor zkrácen
+tail-no-such-file-or-directory = Žádný takový soubor nebo složka
+tail-help-follow = Vypisovat soubor tak, jak přirůstá
+tail-warning-following-stdin-ineffective = následovat standardní vstup donekonečna není efektivní
+tail-status-has-become-accessible = { $file } se stalo nepřístupným
+tail-status-directory-containing-watched-file-removed = složka obsahující hlídaný soubor byla odebrána
+tail-status-file-no-such-file = { $file }: { $no_such_file }

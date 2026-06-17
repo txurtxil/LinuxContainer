@@ -1,0 +1,13 @@
+afd8e7c61a8a9f972dec702ad81cb9c1  usr/lib/init/init-d-script
+dc7f545a3b8624718c88225dac429493  usr/lib/init/vars.sh
+7823602db03319f3f260e289dcb72034  usr/lib/lsb/init-functions
+2babf4640663e7e4ab26bb077985ec6d  usr/lib/lsb/init-functions.d/00-verbose
+b1d4350a5122c637cb220ba8b185426a  usr/lib/lsb/init-functions.d/50-ubuntu-logging
+767ebda9a4507fd8f709f6dd0e94dbec  usr/sbin/fstab-decode
+678856666f0cc51280714256030ee0c5  usr/sbin/killall5
+7f825d3d4313430c985681ab259ac20c  usr/share/doc/sysvinit-utils/changelog.Debian.gz
+5864f519613193ca5a34ab98857521b7  usr/share/doc/sysvinit-utils/copyright
+986c02a44ea89b7c3f347238c748f913  usr/share/man/man5/init-d-script.5.gz
+c3efc42f75177a17bc1a8d4bc90160d7  usr/share/man/man8/fstab-decode.8.gz
+33d3b5c4872161e8363887de5de0cca0  usr/share/man/man8/killall5.8.gz
+09b9d301b0b29e8c879887fd04bbab3f  usr/share/man/man8/pidof.8.gz

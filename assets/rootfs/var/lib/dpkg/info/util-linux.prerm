@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+	remove)
+		if command -v update-alternatives >/dev/null 2>&1; then
+			update-alternatives --remove pager /bin/more
+		fi
+		;;
+
+	upgrade|failed-upgrade|deconfigure)
+		;;
+
+esac
+
+# Automatically added by dh_installsystemd/13.31ubuntu1
+if [ -z "$DPKG_ROOT" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+	deb-systemd-invoke stop 'fstrim.service' >/dev/null || true
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.31ubuntu1
+if [ -z "$DPKG_ROOT" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+	deb-systemd-invoke stop 'fstrim.timer' >/dev/null || true
+fi
+# End automatically added section
+

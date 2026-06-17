@@ -1,0 +1,9 @@
+Document: netplan-reference
+Title: Netplan reference
+Author: Lukas Märdian <slyon@ubuntu.com>
+Abstract: Reference of the declarative Netplan YAML configuration.
+Section: System/Administration
+
+Format: HTML
+Index: /usr/share/doc/netplan/netplan.html
+Files: /usr/share/doc/netplan/*.html

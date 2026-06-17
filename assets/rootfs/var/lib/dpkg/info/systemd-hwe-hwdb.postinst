@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    configure)
+        systemd-hwdb --usr update || true
+        udevadm trigger --subsystem-match=input --quiet || true
+        exit 0
+        ;;
+esac
+
+

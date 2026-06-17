@@ -1,0 +1,14 @@
+pathchk-error-empty-file-name = malplena dosiernomo
+pathchk-usage = pathchk [OPCIO]... NOMO...
+pathchk-help-posix = kontroli por la plejparto de POSIX-sistemoj
+pathchk-help-posix-special = kontroli malplenan nomon kaj komencan «-»
+pathchk-help-portability = kontroli por ĉiuj POSIX-sistemo (ekivalente al -p -P)
+pathchk-about = Kontroli, ĉu dosiernomoj estas validaj aŭ porteblaj
+pathchk-error-leading-hyphen = komenca streketo en dosiernoma komponanto { $component }
+pathchk-error-empty-path-not-found = pathchk: «»: Ne ekzistas dosiero aŭ dosierujo
+pathchk-error-nonportable-character = neportebla skribsigno { $character } en dosiernoma komponanto { $component }
+pathchk-error-missing-operand = mankas argumento
+pathchk-error-posix-path-length-exceeded = la dosiernomo { $path } superis la limon { $limit } kun troo { $length }
+pathchk-error-path-length-exceeded = la dosiernomo { $path } superis la limon { $limit } kun troo { $length }
+pathchk-error-name-length-exceeded = la dosiernoma komponanto { $component } superis la limon { $limit } kun troo { $length }
+pathchk-error-posix-name-length-exceeded = la dosiernoma komponanto { $component } superis la limon { $limit } kun troo { $length }

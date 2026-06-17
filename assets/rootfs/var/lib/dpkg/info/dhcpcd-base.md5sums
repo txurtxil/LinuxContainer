@@ -1,0 +1,17 @@
+091300df346d2889014dd2031f53c079  usr/lib/sysusers.d/dhcpcd-base.conf
+a6d395d4440391622e3d9005356d6571  usr/lib/x86_64-linux-gnu/dhcpcd/dev/udev.so
+ddb602ef2ca99c1a1ca6f841c88903d2  usr/libexec/dhcpcd-hooks/01-test
+e12ff750d427e65ea8aa7656c64d1135  usr/libexec/dhcpcd-hooks/20-resolv.conf
+4fbce834599e15dd9631a4e731ec8d0a  usr/libexec/dhcpcd-hooks/30-hostname
+9529b9365863f211b77eaff80c8b5697  usr/libexec/dhcpcd-hooks/50-timesyncd.conf
+849336bc71c61519a936fba2566c13d4  usr/libexec/dhcpcd-run-hooks
+c093ca98aac33ff5e21ac7d986e864a7  usr/sbin/dhcpcd
+7d0eae741adc1ef14fcc6652577e477c  usr/share/doc/dhcpcd-base/NEWS.Debian.gz
+691b1153132e279d741fc6369502ecf2  usr/share/doc/dhcpcd-base/changelog.Debian.gz
+16ba14f6c2e3d599e0d18b41346757d6  usr/share/doc/dhcpcd-base/copyright
+b5415ba6d9148f412d08259718af0a83  usr/share/doc/dhcpcd-base/examples/DHCPv6-PD_dhcpcd.conf
+b733bcde02ab0fd3d68bf794f0e378a4  usr/share/doc/dhcpcd-base/examples/hooks/90-IPv6_debug
+ebb14912b99e4fb04898938e91e34e5e  usr/share/lintian/overrides/dhcpcd-base
+53f0fc03754ad32f15988cd636f5fea0  usr/share/man/man5/dhcpcd.conf.5.gz
+05415d51ed84273a0824a369b844c176  usr/share/man/man8/dhcpcd-run-hooks.8.gz
+9c266f16f3bac6393ff89b9211eac9c8  usr/share/man/man8/dhcpcd.8.gz

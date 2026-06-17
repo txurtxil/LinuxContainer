@@ -1,0 +1,5 @@
+f9871b130f0a67fe64142fe2b2245256  usr/share/doc/systemd-sysv/copyright
+ad01129a5a7747683e374d01dda98f0b  usr/share/lintian/overrides/systemd-sysv
+fd20971494f62e8612c9308588121010  usr/share/man/man1/init.1.gz
+c00da94afdb0ff872e6b1cd9d93aeb29  usr/share/man/man8/poweroff.8.gz
+0e37c3e4086a1337abc3358c24499b1e  usr/share/man/man8/shutdown.8.gz

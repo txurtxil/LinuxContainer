@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+# Automatically added by dh_installsystemd/13.31ubuntu1
+if [ -z "$DPKG_ROOT" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+	deb-systemd-invoke stop 'systemd-hwdb-update.service' 'systemd-udev-load-credentials.service' 'systemd-udev-settle.service' 'systemd-udev-trigger.service' 'systemd-udevd-control.socket' 'systemd-udevd-kernel.socket' 'systemd-udevd-varlink.socket' >/dev/null || true
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.31ubuntu1
+if [ -z "$DPKG_ROOT" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+	deb-systemd-invoke stop 'systemd-udevd.service' >/dev/null || true
+fi
+# End automatically added section
+# Automatically added by dh_installdeb/13.31ubuntu1
+dpkg-maintscript-helper rm_conffile /etc/init.d/udev 254.3-1\~ -- "$@"
+# End automatically added section

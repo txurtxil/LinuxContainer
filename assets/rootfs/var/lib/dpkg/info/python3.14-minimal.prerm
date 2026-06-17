@@ -1,0 +1,42 @@
+#! /bin/sh
+
+set -e
+
+case "$1" in
+    remove)
+	if [ "$DEBIAN_FRONTEND" != noninteractive ]; then
+	    echo "Unlinking and removing bytecode for runtime python3.14"
+	fi
+	for hook in /usr/share/python3/runtime.d/*.rtremove; do
+	    [ -x $hook ] || continue
+	    $hook rtremove python3.14 || continue
+	done
+
+	if command -v update-binfmts >/dev/null; then
+	    update-binfmts --package python3.14 --remove python3.14 /usr/bin/python3.14
+	fi
+
+        ;;
+    upgrade)
+        ;;
+    deconfigure)
+        ;;
+    failed-upgrade)
+        ;;
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+# Automatically added by dh_usrlocal/13.31ubuntu1
+(
+	while read dir; do
+		rmdir "$dir" 2>/dev/null || true
+	done
+) << DATA
+/usr/local/lib/python3.14/dist-packages
+/usr/local/lib/python3.14
+DATA
+# End automatically added section
+

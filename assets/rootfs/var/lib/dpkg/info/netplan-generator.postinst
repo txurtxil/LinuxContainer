@@ -1,0 +1,51 @@
+#!/bin/sh
+
+set -e
+
+# begin-remove-after: released:forky
+# usrmerge transition from netplan.io -> netplan-generator, see https://bugs.debian.org/1060661
+if [ "$1" = configure ] || [ "$1" = abort-upgrade ]; then
+    dpkg-divert --no-rename --divert /lib/systemd/system-generators/netplan.usr-is-merged --remove /lib/systemd/system-generators/netplan
+fi
+# end-remove-after
+
+# Calling the generator after installation to mitigate CVE-2022-4968
+# We avoid calling the generator if the system doesn't have networkd files to be fixed (LP: #2071333)
+if [ "$1" = configure ]; then
+    FILES=$(find /run/systemd/network/ -type f -regex ".*-netplan.*\.\(network\|netdev\)" 2>/dev/null || true)
+    if [ -n "${FILES}" ]; then
+        /usr/libexec/netplan/configure 2>/dev/null || echo "WARNING: Netplan could not re-generate network configuration. Please run 'netplan generate' to see details."
+    fi
+fi
+
+# Automatically added by dh_installsystemd/13.31ubuntu1
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	# The following line should be removed in trixie or trixie+1
+	deb-systemd-helper unmask 'netplan-configure.service' >/dev/null || true
+
+	# was-enabled defaults to true, so new installations run enable.
+	if deb-systemd-helper --quiet was-enabled 'netplan-configure.service'; then
+		# Enables the unit on first installation, creates new
+		# symlinks on upgrades if the unit file has changed.
+		deb-systemd-helper enable 'netplan-configure.service' >/dev/null || true
+	else
+		# Update the statefile to add new symlinks (if any), which need to be
+		# cleaned up on purge. Also remove old symlinks.
+		deb-systemd-helper update-state 'netplan-configure.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.31ubuntu1
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	if [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+		if [ -n "$2" ]; then
+			_dh_action=restart
+		else
+			_dh_action=start
+		fi
+		deb-systemd-invoke $_dh_action 'netplan-configure.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+

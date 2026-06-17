@@ -1,0 +1,6 @@
+781387b794c0f449a9aeb5c1ff22b3fd  usr/lib/x86_64-linux-gnu/libnss_systemd.so.2
+89912755b62155fc422a581b55399022  usr/share/doc/libnss-systemd/NEWS.Debian.gz
+f920c0863d5d67179b83415f9b50c6ed  usr/share/doc/libnss-systemd/changelog.Debian.gz
+f9871b130f0a67fe64142fe2b2245256  usr/share/doc/libnss-systemd/copyright
+d2c3ebf008df478b1e6bbe9da9f863d0  usr/share/lintian/overrides/libnss-systemd
+a45cc34d6af63711f2ab781924b5c043  usr/share/man/man8/nss-systemd.8.gz

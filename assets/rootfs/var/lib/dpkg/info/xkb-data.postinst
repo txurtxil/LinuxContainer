@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+# Automatically added by dh_installdeb/13.28ubuntu1
+dpkg-maintscript-helper dir_to_symlink /usr/share/X11/xkb /usr/share/xkeyboard-config-2 2.46-2\~ -- "$@"
+# End automatically added section

@@ -1,0 +1,9 @@
+2e77b213c9e3965a26878a08d569eb42  usr/bin/vim.tiny
+8fca4b35618057e97c517350bc623d82  usr/share/bug/vim-tiny/presubj
+3bf849d905a93ddc7f7703774131a8f2  usr/share/bug/vim-tiny/script
+9658f4b2959ba8e70ad593132a4be335  usr/share/doc/vim-tiny/changelog.Debian.gz
+b0132d1761afbe98f376354e2f4039f1  usr/share/doc/vim-tiny/copyright
+f381287c7625caed99e744dc236b31f9  usr/share/lintian/overrides/vim-tiny
+43263a985cd7e3073ebf89ee0ee045f2  usr/share/vim/vim91/doc/README.Debian
+50187ea43bfb3b7859ae6b966a1c64bc  usr/share/vim/vim91/doc/help.txt
+a06d844b36edf7241d1719911abc0988  usr/share/vim/vim91/doc/tags

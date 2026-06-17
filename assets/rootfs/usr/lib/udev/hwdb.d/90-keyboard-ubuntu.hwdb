@@ -1,0 +1,4 @@
+# Lenovo Thinkpad T14s Gen 6 (Snapdragon)
+evdev:name:hid-over-i2c 04F3:000D Keyboard:dmi:bvn*:bvr*:bd*:svnLENOVO:pn21N1*:*
+evdev:name:hid-over-i2c 04F3:000D Keyboard:dmi:bvn*:bvr*:bd*:svnLENOVO:pn21N2*:*
+ KEYBOARD_KEY_70072=unknown # Silence spurious F23 key-press report from Fn key

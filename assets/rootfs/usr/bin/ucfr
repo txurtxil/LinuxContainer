@@ -1,0 +1,317 @@
+#!/bin/sh
+
+# make sure we exit on error
+set -e
+
+# Sanitise environment
+while read -r env ; do
+    case "$env" in
+	'') continue ;;
+	OPTIND) ;; # Dash croaks when unsetting OPTIND. See #985478
+	PATH|PWD|TERM) ;;
+	UCF_*) ;;
+	*) unset "$env" ;;
+    esac
+done<<EOF
+$(awk 'BEGIN{for(v in ENVIRON) print v}')
+EOF
+
+# set the version and revision
+progname=$(basename "$0")
+pversion='3.0052ubuntu1'
+######################################################################
+########                                                     #########
+########              Utility functions                      #########
+########                                                     #########
+######################################################################
+for libdir in "$(dirname "$0")" /usr/share/ucf ; do
+    [ -f "${libdir}/ucf_library.sh" ] && \
+	. "${libdir}/ucf_library.sh" && \
+	break
+done
+
+purge_from_registry () {
+    if [ ! -e "$statedir/registry" ]; then
+        echo >&2 "$progname: Internal error: $statedir/registry does not exist"
+        exit 6
+    fi
+
+    if [ "$count" -eq 0 ]; then
+        [ "$VERBOSE" ] &&
+            echo >&2 "$progname: Association already purged. No changes."
+        exit 0
+    fi
+    old_pkg=$(grep "${real_conf_file_bre}" "$statedir/registry" | \
+        awk '{print $1}' )
+    if [ "$pkg" != "$old_pkg"  ]; then
+        echo >&2 "ucfr: Association belongs to $old_pkg, not $pkg"
+        if [ ! "$FORCE" ]; then
+            echo >&2 "ucfr: Aborting"
+            exit 5
+        fi
+    fi
+
+    # OK, so we have something to purge.
+    for i in $(/usr/bin/seq 6 -1 0); do
+	if [ -e "${statedir}/registry.${i}" ]; then
+	    if [ "$docmd" = "YES" ]; then
+		cp -f "${statedir}/registry.${i}"  "${statedir}/registry.$(($i + 1))"
+	    else
+		echo cp -f "${statedir}/registry.${i}" "${statedir}/registry.$(($i + 1))"
+	    fi
+	fi
+    done
+    if [ "$docmd" = "YES" ]; then
+	cp -f "$statedir/registry"  "$statedir/registry.0"
+    else
+	echo cp -f "$statedir/registry"  "$statedir/registry.0"
+    fi
+    if [ "$docmd" = "YES" ]; then
+	 [ "$VERBOSE" ] &&
+	    echo "grep -v ${real_conf_file_bre} $statedir/registry >\\" \
+		 "	$statedir/registry.tmp || true"
+	grep -v "${real_conf_file_bre}" "$statedir/registry" > \
+	    "$statedir/registry.tmp" || true
+	if [ "$docmd" = "YES" ]; then
+	    mv -f "$statedir/registry.tmp"  "$statedir/registry"
+	else
+	    echo mv -f "$statedir/registry.tmp"  "$statedir/registry"
+	fi
+    fi
+}
+
+replace_in_registry () {
+    if [ ! -e "$statedir/registry" ]; then
+        echo >&2 "$progname: Internal error: $statedir/registry does not exist"
+        exit 6
+    fi
+    if [ "$count" -eq 1 ]; then
+        old_pkg=$(grep "${real_conf_file_bre}" "$statedir/registry" | \
+            awk '{print $1;}' )
+
+        if [ "$pkg" != "$old_pkg" ]; then
+            divert_package=$(dpkg-divert --listpackage "$conf_file")
+            if [ -n "$divert_package" ]; then
+                [ "$VERBOSE" ] &&
+                    echo >&2 "$progname: Package $pkg will not take away diverted ${conf_file} from package $divert_package"
+                exit 0
+            else
+                if [ ! "$FORCE" ]; then
+                    echo >&2 "$progname: Attempt from package $pkg  to take ${real_conf_file} away from package $old_pkg"
+                    echo >&2 "ucfr: Aborting."
+                    exit 4
+                fi
+            fi
+        else
+            [ "$VERBOSE" ] &&
+                echo >&2 "$progname: Association already recorded. No changes."
+            exit 0
+        fi
+    fi
+
+    for i in $(/usr/bin/seq 6 -1 0); do
+	if [ -e "${statedir}/registry.${i}" ]; then
+	    if [ "$docmd" = "YES" ]; then
+		cp -f "${statedir}/registry.${i}" \
+		    "${statedir}/registry.$(($i + 1))"
+	    else
+		echo cp -f "${statedir}/registry.${i}" \
+		    "${statedir}/registry.$(($i + 1))"
+	    fi
+	fi
+    done
+    if [ "$docmd" = "YES" ]; then
+	cp -f "$statedir/registry"  "$statedir/registry.0"
+    else
+	echo cp -f "$statedir/registry"  "$statedir/registry.0"
+    fi
+    if [ "$docmd" = "YES" ]; then
+	set +e
+	if [ "$VERBOSE" ]; then
+	    echo "grep -v \"${real_conf_file_bre}\" \"$statedir/registry\"  \\"
+            echo "	$statedir/registry.tmp || true"
+	    echo "echo \"$pkg 	 $real_conf_file\" >> \"$statedir/registry.tmp\""
+	    echo "mv -f  $statedir/registry.tmp $statedir/registry"
+	fi
+	grep -v "${real_conf_file_bre}" "$statedir/registry" > \
+	    "$statedir/registry.tmp" || true
+	echo "$pkg 	 $real_conf_file" >>   "$statedir/registry.tmp"
+	mv -f "$statedir/registry.tmp"  "$statedir/registry"
+    else
+	echo "grep -v \"${real_conf_file_bre}\" \"$statedir/registry\"  \\"
+        echo "	$statedir/registry.tmp || true"
+	echo "echo \"$pkg 	 $real_conf_file\" >> \"$statedir/registry.tmp\""
+	echo "mv -f  $statedir/registry.tmp $statedir/registry"
+    fi
+}
+
+usageversion () {
+        cat >&2 <<END
+Debian GNU/Linux $progname $pversion.
+           Copyright (C) 2002-2020 Manoj Srivastava.
+	   Copyright (C) 2024- Mark Hindley.
+This is free software; see the GNU General Public Licence for copying
+conditions.  There is NO warranty.
+
+Usage: $progname  [options] package_name path_for_configuration_file
+Options:
+     -h,     --help          print this message
+     -f      --force         Force the association, even if another package
+                             used to own the configuration file.
+     -d [n], --debug    [n]  Set the Debug level to N
+     -n,     --no-action     Dry run. No action is actually taken.
+     -v,     --verbose       Make the script verbose
+     -p,     --purge         Remove any reference to the package/file association
+                             from the records
+             --state-dir bar Set the state directory to bar instead of the
+                             default '/var/lib/ucf'. Used mostly for testing.
+END
+
+}
+
+######################################################################
+########                                                     #########
+########              Command line args                      #########
+########                                                     #########
+######################################################################
+#
+# Long term variables#
+#
+docmd='YES'
+# action='withecho'
+action=
+# Unused
+# DEBUG=0
+VERBOSE=''
+statedir='/var/lib/ucf'
+
+handle_file_args() {
+    # We have here a configuration file, which can be a symlink, and may
+    # contain characters that are unsafe in regular expressions
+    pkg=$(vset "$1" "The Package name")
+    conf_file=$(vset "$2" "The Configuration file")
+    real_conf_file=$(vset "$(readlink -q -m "$conf_file")" "The (real) Configuration file")
+
+    case $real_conf_file in
+	/*)
+            : echo fine
+            ;;
+	*)
+            echo >&2 "$progname: Need a fully qualified path for the file \"$conf_file\""
+            # Don't exit with an error for etch'
+            exit 0
+    esac
+
+    real_conf_file_bre="[[:space:]]$(escape_bre "$real_conf_file")"'$'
+}
+
+handle_opts() {
+    # Arguments are from getopt(1) in quoted mode.
+    eval set --  "$*"
+    while [ $# -gt 0 ] ; do
+	case "$1" in
+	    -h|--help) usageversion;                        exit 0  ;;
+	    -n|--no-action) action='echo'; docmd='NO';      shift   ;;
+	    -v|--verbose) VERBOSE=1;                        shift   ;;
+	    -f|--force)   FORCE=1;                          shift   ;;
+	    --state-dir)  opt_state_dir="$2";               shift 2 ;;
+	    -D|-d|--debug|--DEBUG)
+		# d has an optional argument. As we are in quoted mode,
+		# an empty parameter will be generated if its optional
+		# argument is not found.
+		#
+		# Unused, so ignore silently. The distinction between VERBOSE and
+		# DEBUG is a mess and needs reworking.
+		#
+		# case "$2" in
+		# 	"") DEBUG=$(vset 1    "The Debug value")
+		# 	*) DEBUG=$(vset "$2" "The Debug value")
+		# esac
+		shift 2 ;;
+            -p|--purge) PURGE=YES;                         shift   ;;
+	    --)  shift ; handle_file_args "$@";            break   ;;
+	    *) echo >&2 "$progname: Internal error!" ; exit 1 ;;
+	esac
+    done
+    # Need to run as root, or else the
+    if test "$(id -u)" != 0; then
+	if [ "$docmd" = "YES" ]; then
+            echo "$progname: Need to be run as root." >&2
+            echo "$progname: Setting up no action mode." >&2
+            action='echo';
+            docmd='NO';
+	fi
+    fi
+
+    if [ $# != 2 ]; then
+	echo >&2 "$progname: *** ERROR: Need exactly two arguments, got $#";
+	echo >&2 ""
+	usageversion;
+	exit 3 ;
+    fi
+}
+
+# A separate assignment is essential to ensure getopt(1) error status isn't
+# lost.
+UCFR_OPTS="$(getopt -a -o hd::D::fnvp -n "$progname" \
+	    	     --long help,debug::,DEBUG::,force,no-action,purge,verbose,state-dir: \
+            	      -- "$@")"
+handle_opts "$UCFR_OPTS"
+
+# Load site defaults and overrides.
+if [ -f /etc/ucf.conf ]; then
+    . /etc/ucf.conf
+fi
+
+# Command line, env variable, config file, or default
+if [ "$opt_state_dir" ]; then
+    statedir=$(vset "$opt_state_dir" "The State directory")
+elif [ "$UCF_STATE_DIR" ]; then
+    statedir=$(vset "$UCF_STATE_DIR" "The State directory")
+elif [ "$conf_state_dir" ]; then
+    statedir=$(vset "$conf_state_dir" "The State directory")
+else
+    statedir=$(vset '/var/lib/ucf' "The State directory")
+fi
+
+# VERBOSE of 0 is supposed to be the same as not setting VERBOSE
+if [ "$VERBOSE" = "0" ]; then
+    VERBOSE=''
+fi
+
+#
+if [ -e "$statedir/registry" ] && [ ! -w "$statedir/registry" ]; then
+    echo >&2 "$progname: do not have write privilege to the registry data"
+    if [ "$docmd" = "YES" ]; then
+	exit 1
+    fi
+fi
+
+# test and see if this file exists in the database
+if [ ! -d "$statedir" ]; then
+    $action mkdir -p "$statedir"
+fi
+
+if [ ! -f "$statedir/registry" ]; then
+    $action touch "$statedir/registry"
+fi
+
+[ "$VERBOSE" ] &&
+    echo >&2 "$progname: The registry exists"
+
+# sanity check
+count=$(grep --count "${real_conf_file_bre}" "$statedir/registry") || true
+
+if [ "$count" -ge 2 ]; then
+    echo >&2 "$progname: Corrupt registry: Duplicate entries for ${conf_file}"
+    grep "${real_conf_file_bre}" "$statedir/registry"
+    exit "$count"
+fi
+
+if [ "$PURGE" ]; then
+    $action purge_from_registry
+else
+    $action replace_in_registry
+fi
+
+exit 0

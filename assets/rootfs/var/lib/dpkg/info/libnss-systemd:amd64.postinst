@@ -1,0 +1,54 @@
+#!/bin/sh
+
+set -e
+
+# Automatically added by dh_installnss/1.7
+if [ "$1" = "configure" ] && [ -f "${DPKG_ROOT}/etc/nsswitch.conf.nss.${DPKG_MAINTSCRIPT_PACKAGE}-will-install" ] && [ -e "${DPKG_ROOT}/etc/nsswitch.conf" ] ; then
+	if ! grep -q -E  -e '^group:[^#]*\s(systemd)(\s|#|$)' -e '^gshadow:[^#]*\s(systemd)(\s|#|$)' -e '^passwd:[^#]*\s(systemd)(\s|#|$)' -e '^shadow:[^#]*\s(systemd)(\s|#|$)' "${DPKG_ROOT}/etc/nsswitch.conf" ; then
+		# Installing passwd/systemd from libnss-systemd in position after=files,compat
+		sed -E -i "${DPKG_ROOT}/etc/nsswitch.conf" -e '/^passwd:\s[^#]*$/ s/(\s)(files(\s+\[[^]]+\])?|compat(\s+\[[^]]+\])?)(\s|$)/\1\2 systemd /' -e '/^passwd:\s.*#/ s/(\s)(files(\s+\[[^]]+\])?|compat(\s+\[[^]]+\])?)(\s|#)/\1\2 systemd \3/' -e 's/ $//'
+		# Installing group/systemd from libnss-systemd in position after=files,compat
+		sed -E -i "${DPKG_ROOT}/etc/nsswitch.conf" -e '/^group:\s[^#]*$/ s/(\s)(files(\s+\[[^]]+\])?|compat(\s+\[[^]]+\])?)(\s|$)/\1\2 systemd /' -e '/^group:\s.*#/ s/(\s)(files(\s+\[[^]]+\])?|compat(\s+\[[^]]+\])?)(\s|#)/\1\2 systemd \3/' -e 's/ $//'
+		# Installing shadow/systemd from libnss-systemd in position after=files,compat
+		sed -E -i "${DPKG_ROOT}/etc/nsswitch.conf" -e '/^shadow:\s[^#]*$/ s/(\s)(files(\s+\[[^]]+\])?|compat(\s+\[[^]]+\])?)(\s|$)/\1\2 systemd /' -e '/^shadow:\s.*#/ s/(\s)(files(\s+\[[^]]+\])?|compat(\s+\[[^]]+\])?)(\s|#)/\1\2 systemd \3/' -e 's/ $//'
+		# Installing gshadow/systemd from libnss-systemd in position after=files,compat
+		sed -E -i "${DPKG_ROOT}/etc/nsswitch.conf" -e '/^gshadow:\s[^#]*$/ s/(\s)(files(\s+\[[^]]+\])?|compat(\s+\[[^]]+\])?)(\s|$)/\1\2 systemd /' -e '/^gshadow:\s.*#/ s/(\s)(files(\s+\[[^]]+\])?|compat(\s+\[[^]]+\])?)(\s|#)/\1\2 systemd \3/' -e 's/ $//'
+	fi
+	rm "${DPKG_ROOT}/etc/nsswitch.conf.nss.${DPKG_MAINTSCRIPT_PACKAGE}-will-install"
+fi
+# End automatically added section
+
+
+# begin-remove-after: released:forky
+# systemd/251.3-2 (between Debian 11 and 12) added libnss-systemd to the
+# shadow and gshadow databases, not just passwd and group as before, but
+# at the time existing systems were not updated to match.
+# Ensure that it is listed in all four databases, while preserving
+# configuration for any database that already mentions it. (#1118640)
+fix_1118640 () {
+    local nsswitch="${DPKG_ROOT}/etc/nsswitch.conf"
+    local db
+    local line
+
+    for db in passwd group shadow gshadow; do
+        if line="$(grep -E "^$db:"'[^#]*\s(systemd)(\s|#|$)' "$nsswitch")"; then
+            if [ "$DPKG_MAINTSCRIPT_DEBUG" = 1 ]; then
+                echo "$db configuration for libnss-systemd already looks OK: $line" >&2
+            fi
+        else
+            echo "Adding libnss-systemd to $db configuration..." >&2
+            sed -E -i \
+                -e "/^$db:"'\s[^#]*$/ s/$/ systemd/' \
+                -e "/^$db:"'\s.*#/ s/#/ systemd #/' \
+                "$nsswitch"
+        fi
+    done
+}
+# We do this for upgrades from versions where it was not yet fixed
+# (Debian 11, 12 or 13), and also for new installations (which should
+# be a no-op, but there could conceivably be stale configuration
+# still present if an old version was removed but not purged).
+if [ "$1" = configure ] && dpkg --compare-versions "$2" lt 258.1-2~; then
+    fix_1118640
+fi
+# end-remove-after

@@ -1,0 +1,12 @@
+af3df00592915d7f1495757488dd769f  usr/share/doc/python-apt-common/changelog.gz
+4ed7b6862ca422678b17e7d4ed592285  usr/share/doc/python-apt-common/copyright
+296bf521fb0307986eeb05189ba730d3  usr/share/python-apt/templates/blankon.info
+5c3a6a35ec12cc6dacb40db2f9fc1c8e  usr/share/python-apt/templates/blankon.mirrors
+56c8f42d32bca67fe71a9b8be1e238f2  usr/share/python-apt/templates/debian.info
+b0b7dc82b019a872dc8fd99fc7d7d7d2  usr/share/python-apt/templates/debian.mirrors
+f879619edf5f6681b5b0a10ef376ea62  usr/share/python-apt/templates/gnewsense.info
+2a550c541cd5b33dc8a46cd30d4abfce  usr/share/python-apt/templates/gnewsense.mirrors
+e83331f03fef5760fa745bd65fa187e9  usr/share/python-apt/templates/kali.info
+60cf4d7b404adabcac43af44cb768de1  usr/share/python-apt/templates/kali.mirrors
+5e21927ac2b09da3e9a4ba1c7c10e6a0  usr/share/python-apt/templates/ubuntu.info
+386ec88605aa59a9203cea364d60d893  usr/share/python-apt/templates/ubuntu.mirrors

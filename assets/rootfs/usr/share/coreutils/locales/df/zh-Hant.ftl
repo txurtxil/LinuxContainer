@@ -1,0 +1,17 @@
+df-help-print-help = 列印幫助資訊。
+df-error-no-such-file-or-directory = { $path }: 沒有此檔案或目錄
+df-header-filesystem = 檔案系統
+df-header-file = 檔案
+df-header-size = 大小
+df-header-used = 已用
+df-header-use-percent = 已用%
+df-header-mounted-on = 掛載點
+df-header-avail = 可用
+df-header-available = 可用
+df-header-type = 類型
+df-blocks-suffix = -區塊
+df-header-capacity = 容量
+df-help-print-type = 顯示檔案系統類型
+df-usage = df [選項]... [檔案]...
+df-total = 總共
+df-help-kilo = 像是 --block-size=1K

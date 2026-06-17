@@ -1,0 +1,15 @@
+005f95c0b03d90adb69262fd3dec87bf  usr/bin/ucf
+ed60984d560ee2840c557b8c29b005ed  usr/bin/ucfq
+9ed93173a24b9a4adc1b0d18bc1758ad  usr/bin/ucfr
+145cc2991b0eb3b285b314f263bb0cf9  usr/share/doc/ucf/NEWS.Debian.gz
+48638576d781966bd027aabb81657f91  usr/share/doc/ucf/changelog.gz
+a90fd4a791ad8fad9e9bfbb43d7bcd20  usr/share/doc/ucf/copyright
+c9e7cd317dfda997ce397ed542ad8c6b  usr/share/doc/ucf/examples/README.md
+77ca41b3628cae0eab8ce4ace61476a0  usr/share/doc/ucf/examples/postinst
+dffb0ae67ed165164578c51224b644ae  usr/share/doc/ucf/examples/postrm
+afc24abf3f6461b6430cb114f48a8d02  usr/share/lintian/overrides/ucf
+1619fa6b1291fce3694b52ec21e8c263  usr/share/man/man1/ucf.1.gz
+7df06a6b9e0c5476bd8980d90e89fece  usr/share/man/man1/ucfq.1.gz
+d382eb8d8ce3b2e459ee9891d3526a4e  usr/share/man/man1/ucfr.1.gz
+af5d45478a00e67e6fb54a6e13df2ba4  usr/share/man/man5/ucf.conf.5.gz
+49a2dea9a53d0ba298451b6b95758d5b  usr/share/ucf/ucf_library.sh

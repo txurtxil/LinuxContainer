@@ -1,0 +1,23 @@
+#! /bin/sh -e
+
+PREREQ="kernelextras"
+
+prereqs () {
+	echo "$PREREQ"
+}
+
+case $1 in
+prereqs)
+	prereqs
+	exit 0
+	;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+# Console utilities needed for console-setup
+copy_exec /usr/bin/setfont /usr/bin
+copy_exec /usr/bin/kbd_mode /usr/bin
+copy_exec /usr/bin/loadkeys /usr/bin
+
+exit 0

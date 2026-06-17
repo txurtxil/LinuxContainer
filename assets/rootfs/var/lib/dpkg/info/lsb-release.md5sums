@@ -1,0 +1,4 @@
+20b917ef272d19d1dc5ad6117bbccf7d  usr/bin/lsb_release
+65b7d8eb6f30c623a65428284fe7525f  usr/share/doc/lsb-release/changelog.Debian.gz
+1929b8ef4b7264f43e60632f5b68b5bd  usr/share/doc/lsb-release/copyright
+80c453a5efaf95ca81e64677551dd356  usr/share/man/man1/lsb_release.1.gz

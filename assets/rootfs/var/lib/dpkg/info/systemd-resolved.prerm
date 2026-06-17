@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+# Automatically added by dh_installsystemd/13.31ubuntu1
+if [ -z "$DPKG_ROOT" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+	deb-systemd-invoke stop 'systemd-resolved-monitor.socket' 'systemd-resolved-varlink.socket' >/dev/null || true
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.31ubuntu1
+if [ -z "$DPKG_ROOT" ] && [ "$1" = remove ] && [ -d /run/systemd/system ] ; then
+	deb-systemd-invoke stop 'systemd-resolved.service' >/dev/null || true
+fi
+# End automatically added section

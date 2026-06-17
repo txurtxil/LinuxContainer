@@ -1,0 +1,12 @@
+6f613889f5a8f341261a5ae7fa28adcd  usr/lib/cargo/bin/su
+577888db151f3df6abe549c9116154f3  usr/lib/cargo/bin/sudo
+fbe4d3e1f87272dc5d85f36fe6f1ab8c  usr/lib/cargo/bin/visudo
+4663d0f477acd85746999273e07a1cf3  usr/share/apport/package-hooks/source_rust-sudo-rs.py
+5a0debbaed24ff5877a122db170d30d1  usr/share/doc/sudo-rs/Cargo.lock
+d64bf47c02fdfdf776655667a64b6376  usr/share/doc/sudo-rs/README.Debian
+79db3fafe2b3789387607114789808a0  usr/share/doc/sudo-rs/changelog.Debian.gz
+fdd548fbc3f162bf9a69ea933485f17e  usr/share/doc/sudo-rs/copyright
+0f08b4ee7d6b8e9b3369fbe7e90e07fe  usr/share/man/man1/su-rs.1.gz
+9debcbfb3f307758e4bdebb5800c3ae5  usr/share/man/man5/sudoers-rs.5.gz
+3ebf1461310f11fe4b12fc80149c27a7  usr/share/man/man8/sudo-rs.8.gz
+54388b67aee7384c75dd114bb68e848f  usr/share/man/man8/visudo-rs.8.gz

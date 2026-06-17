@@ -1,0 +1,12 @@
+/.
+/usr
+/usr/lib
+/usr/lib/udev
+/usr/lib/udev/hwdb.d
+/usr/lib/udev/hwdb.d/90-hwe-ubuntu.hwdb
+/usr/lib/udev/hwdb.d/90-keyboard-ubuntu.hwdb
+/usr/share
+/usr/share/doc
+/usr/share/doc/systemd-hwe-hwdb
+/usr/share/doc/systemd-hwe-hwdb/changelog.gz
+/usr/share/doc/systemd-hwe-hwdb/copyright

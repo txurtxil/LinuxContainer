@@ -1,0 +1,17 @@
+/.
+/usr
+/usr/lib
+/usr/lib/x86_64-linux-gnu
+/usr/lib/x86_64-linux-gnu/libxml2.so.16.1.2
+/usr/share
+/usr/share/doc
+/usr/share/doc/libxml2-16
+/usr/share/doc/libxml2-16/README.Debian
+/usr/share/doc/libxml2-16/README.md.gz
+/usr/share/doc/libxml2-16/changelog.Debian.gz
+/usr/share/doc/libxml2-16/copyright
+/usr/share/lintian
+/usr/share/lintian/overrides
+/usr/share/lintian/overrides/libxml2-16
+/usr/lib/x86_64-linux-gnu/libxml2.so.16
+/usr/share/doc/libxml2-16/NEWS.gz

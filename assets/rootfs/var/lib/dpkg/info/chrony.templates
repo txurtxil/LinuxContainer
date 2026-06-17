@@ -1,0 +1,12 @@
+Template: chrony/configure_ubuntu_pools_in_sourcesd
+Type: boolean
+Default: true
+Description: Configure Ubuntu NTP pools in /etc/chrony/sources.d/ubuntu-ntp-pools.sources
+ The default Ubuntu NTP pools were moved from /etc/chrony/chrony.conf to an
+ included file in /etc/chrony/sources.d/ubuntu-ntp-pools.sources. The main
+ chrony.conf file shipped by the package no longer contains any NTP pools.
+ If you answer "yes", what was described above will be applied.
+ If you answer "no", then /etc/chrony/sources.d/ubuntu-ntp-pools.sources will
+ NOT be created. If it exists already, it will be REMOVED, and subsequent
+ upgrades will not recreate it.
+ If in doubt, it's recommended that you answer "yes".

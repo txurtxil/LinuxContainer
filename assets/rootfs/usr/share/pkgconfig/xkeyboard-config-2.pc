@@ -1,0 +1,8 @@
+
+datadir=/usr/share
+xkb_root=/usr/share/xkeyboard-config-2
+xkb_base=/usr/share/X11/xkb
+
+Name: XKeyboardConfig
+Description: X Keyboard configuration data
+Version: 2.46

@@ -1,0 +1,6 @@
+85a30cf8ddd11e34415bca8f55f2dd1f  usr/lib/x86_64-linux-gnu/krb5/plugins/preauth/spake.so
+0debbbe540341b8618c7eb6942a39403  usr/lib/x86_64-linux-gnu/libkrb5.so.3.3
+c6e59577f80eff240add64ddc8814dd8  usr/share/doc/libkrb5-3/README.Debian
+6b58fead6683b5cca6d49722cb50f172  usr/share/doc/libkrb5-3/README.gz
+9ccaedcaac156d04b53a8e5f5af7dcfa  usr/share/doc/libkrb5-3/copyright
+b249491ce885ff8013facc9cac4f3714  usr/share/lintian/overrides/libkrb5-3

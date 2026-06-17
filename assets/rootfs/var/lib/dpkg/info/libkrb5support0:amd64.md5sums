@@ -1,0 +1,5 @@
+2b40e4f489cdb56f3556089aafd22276  usr/lib/x86_64-linux-gnu/libkrb5support.so.0.1
+398c208de2453e62273608bec6eaba47  usr/share/doc/libkrb5support0/NEWS.Debian.gz
+2c97370b495d706af05348c1102ef68d  usr/share/doc/libkrb5support0/changelog.Debian.gz
+9ccaedcaac156d04b53a8e5f5af7dcfa  usr/share/doc/libkrb5support0/copyright
+71e724d7c6f7718ac7b23dac682862a0  usr/share/lintian/overrides/libkrb5support0

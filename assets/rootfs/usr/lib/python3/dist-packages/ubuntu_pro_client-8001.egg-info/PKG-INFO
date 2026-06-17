@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: ubuntu-pro-client
+Version: 8001
+Summary: Manage Ubuntu Pro support entitlements
+Home-page: https://ubuntu.com/support
+Author: Ubuntu Server Team
+Author-email: ubuntu-server@lists.ubuntu.com
+License: GPLv3
+License-File: LICENSE.txt
+Requires-Dist: pyyaml
+Provides-Extra: test
+Requires-Dist: mock; extra == "test"
+Requires-Dist: pytest; extra == "test"
+Requires-Dist: pytest-cov; extra == "test"
+Dynamic: author
+Dynamic: author-email
+Dynamic: home-page
+Dynamic: license
+Dynamic: license-file
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: summary

@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+
+    # Query for all the remaining diversions. We may have leftover diversions in two cases:
+    # 1) We don't ship a binary shipped by another coreutil
+    # 2) We now ship the binary but didn't before
+    LC_ALL=C.UTF-8 dpkg-query -S '*.remove-bak' 2>/dev/null |  sed -nr 's/^diversion by coreutils-switch from: (.*)/\1/p' | while read -r name; do
+            # If the file exists we need to remove it. If we ship the binary, it will be installed in its place in the following line
+            rm -f "$name"
+            # We --remove --rename the diversion such that if we actually ship the file now (case 2), our file ends up in the right place.
+            dpkg-divert --package coreutils-switch \
+                        --divert "$name.remove-bak" \
+                        --rename \
+                        --remove \
+                        "$name"
+    done
+fi
+
+
+

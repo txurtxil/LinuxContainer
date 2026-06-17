@@ -1,0 +1,11 @@
+a93b09dfd32277297b986401b3a669c0  usr/bin/dbus-cleanup-sockets
+b1044d5e261a673b7132f60c4c4fcf13  usr/bin/dbus-monitor
+86b25a11256043318261d9d866eb575f  usr/bin/dbus-send
+00f8d08146c79226c54130ee420a4630  usr/bin/dbus-update-activation-environment
+725746522fdf7052586f0dcd846dc248  usr/bin/dbus-uuidgen
+79b2079e7065cfdf074c8584e4755878  usr/share/doc/dbus-bin/copyright
+30caae1a134dbd88c57cf3e71adde55a  usr/share/man/man1/dbus-cleanup-sockets.1.gz
+c60b7c4895e58700066cf7a5c0b5bbfa  usr/share/man/man1/dbus-monitor.1.gz
+ce6dafc8a6ba5d3bc5e9ebb1cefaea52  usr/share/man/man1/dbus-send.1.gz
+371f6d724f8ef10f49fb2722d1a0cd7e  usr/share/man/man1/dbus-update-activation-environment.1.gz
+393f58f9e222ef0a5f113af9b603844c  usr/share/man/man1/dbus-uuidgen.1.gz
