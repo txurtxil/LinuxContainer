@@ -5,6 +5,10 @@ gradle-wrapper.jar
 /gradlew.bat
 /local.properties
 GeneratedPluginRegistrant.java
+<<<<<<< HEAD
+=======
+.cxx/
+>>>>>>> df64946 (LinuxContainer V1 base)
 
 # Remember to never publicly share your keystore.
 # See https://flutter.dev/to/reference-keystore
