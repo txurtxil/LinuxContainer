@@ -8,6 +8,7 @@ android {
     
     namespace = "com.example.linux_container"
     compileSdk = flutter.compileSdkVersion
+    ndkVersion = "28.2.13676358"
     
 
     compileOptions {
@@ -45,7 +46,3 @@ flutter {
     source = "../.."
 }
 
-
-android {
-    ndkVersion = "28.2.13676358"
-}
