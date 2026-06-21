@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
 
-/// Barra de teclas especiales. El teclado del sistema (visiblePassword)
-/// ya envía Ctrl+letra directo. Aquí: Ctrl sticky (para flechas/especiales),
-/// controles directos más usados, navegación y tamaño de fuente.
+/// Barra de teclas especiales. Orden: menú ⋮, controles directos, navegación,
+/// símbolos, fuente, y a la derecha Esc/Ctrl/Tab (Ctrl sticky para flechas).
 class TerminalKeybar extends StatefulWidget {
   final Terminal terminal;
   final VoidCallback? onFontIncrease;
@@ -26,7 +25,6 @@ class _TerminalKeybarState extends State<TerminalKeybar> {
   bool _ctrl = false;
 
   void _toggleCtrl() => setState(() => _ctrl = !_ctrl);
-
   void _clearCtrl() {
     if (_ctrl) setState(() => _ctrl = false);
   }
@@ -56,30 +54,38 @@ class _TerminalKeybarState extends State<TerminalKeybar> {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 4),
         children: [
-          _key('Esc', onTap: () => _sendKey(TerminalKey.escape)),
-          _key('Ctrl', onTap: _toggleCtrl, active: _ctrl),
-          _key('Tab', onTap: () => _sendKey(TerminalKey.tab)),
+          // Menú al principio del todo (izquierda)
+          _key('⋮', onTap: () => widget.onMenu?.call(), highlight: true),
+          _sep(),
+          // Controles directos
           _key('^C', onTap: () => _ctrlChar('c'), accent: true),
           _key('^X', onTap: () => _ctrlChar('x'), accent: true),
           _key('^Z', onTap: () => _ctrlChar('z'), accent: true),
+          _key('^R', onTap: () => _ctrlChar('r'), accent: true),
           _sep(),
+          // Navegación
           _key('↑', onTap: () => _sendKey(TerminalKey.arrowUp)),
           _key('↓', onTap: () => _sendKey(TerminalKey.arrowDown)),
           _key('←', onTap: () => _sendKey(TerminalKey.arrowLeft)),
+          // Esc y Ctrl reubicados a la derecha de la flecha izquierda
+          _key('Esc', onTap: () => _sendKey(TerminalKey.escape)),
+          _key('Ctrl', onTap: _toggleCtrl, active: _ctrl),
           _key('→', onTap: () => _sendKey(TerminalKey.arrowRight)),
+          _key('Tab', onTap: () => _sendKey(TerminalKey.tab)),
           _key('Home', onTap: () => _sendKey(TerminalKey.home)),
           _key('End', onTap: () => _sendKey(TerminalKey.end)),
           _key('PgUp', onTap: () => _sendKey(TerminalKey.pageUp)),
           _key('PgDn', onTap: () => _sendKey(TerminalKey.pageDown)),
           _sep(),
+          // Símbolos
           _key('|', onTap: () => _sendChar('|')),
           _key('/', onTap: () => _sendChar('/')),
           _key('-', onTap: () => _sendChar('-')),
           _key('~', onTap: () => _sendChar('~')),
           _sep(),
+          // Fuente
           _key('A−', onTap: () => widget.onFontDecrease?.call(), highlight: true),
           _key('A+', onTap: () => widget.onFontIncrease?.call(), highlight: true),
-          _key('⋮', onTap: () => widget.onMenu?.call(), highlight: true),
         ],
       ),
     );
