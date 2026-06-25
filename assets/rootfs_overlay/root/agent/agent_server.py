@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uvicorn
-from smolagents import OpenAIServerModel, ToolCallingAgent, ReactJsonAgent, tool
+from smolagents import OpenAIServerModel, ToolCallingAgent, CodeAgent, tool
 
 LLAMA_BASE = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8080")
 
@@ -24,7 +24,7 @@ def _friendly_error(error_msg): return f"Ups, ha habido un problema remoto o de 
 def build_agent():
     model = OpenAIServerModel(model_id="gemma3-4b-it", api_base=f"{LLAMA_BASE}/v1", api_key="not-needed")
     if "8090" in LLAMA_BASE:
-        return ReactJsonAgent(name="DebianAgent_LocalGPU", model=model, tools=[run_bash])
+        return CodeAgent(name="DebianAgent_LocalGPU", model=model, tools=[run_bash])
     else:
         return ToolCallingAgent(name="DebianAgent", model=model, tools=[run_bash])
 
