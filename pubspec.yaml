@@ -23,5 +23,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/rootfs_overlay/root/agent/
+    - assets/rootfs_overlay/usr/local/bin/
     - assets/container/rootfs.tar.xz
     - assets/scripts/lc-menu.sh

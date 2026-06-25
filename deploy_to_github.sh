@@ -4,7 +4,7 @@ set -e
 REPO="txurtxil/LinuxContainer"
 TOKEN_FILE="/home/txurtxil/githubToken"
 APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
-VERSION="v12.8" # Control de versión actualizado
+VERSION="v12.9" # Control de versión actualizado
 
 if [ ! -f "$TOKEN_FILE" ]; then
     echo "❌ Error: Token no encontrado en $TOKEN_FILE"
