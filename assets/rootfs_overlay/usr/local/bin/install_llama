@@ -1,0 +1,29 @@
+#!/bin/bash
+set -e
+echo "====================================================="
+echo " Compilando llama.cpp nativo para Snapdragon (ARM64) "
+echo "====================================================="
+
+echo "[1/4] Instalando dependencias de compilación..."
+apt-get update
+apt-get install -y build-essential cmake git curl python3 python3-pip
+
+echo "[2/4] Clonando repositorio oficial..."
+cd /tmp
+rm -rf llama.cpp
+git clone https://github.com/ggerganov/llama.cpp.git
+cd llama.cpp
+
+echo "[3/4] Compilando binarios (CPU Only / Sin CUDA)..."
+cmake -B build -DGGML_NATIVE=OFF -DGGML_RPC=OFF
+cmake --build build --config Release -j8
+
+echo "[4/4] Instalando y limpiando..."
+cp build/bin/llama-server /usr/local/bin/
+cp build/bin/llama-cli /usr/local/bin/
+chmod +x /usr/local/bin/llama-*
+rm -rf /tmp/llama.cpp
+
+echo "====================================================="
+echo "✅ ¡Llama.cpp compilado e instalado en /usr/local/bin!"
+echo "====================================================="
