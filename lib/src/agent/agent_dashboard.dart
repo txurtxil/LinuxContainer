@@ -1,3 +1,4 @@
+// ignore_for_file: use_build_context_synchronously
 // lib/src/agent/agent_dashboard.dart
 //
 // Panel del Agente Autónomo para XTR Terminal.
@@ -1407,6 +1408,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
                               onTap: () async {
                                 await _ctrl.loadSaved(sc.path);
                                 if (mounted) setState(() {});
+      if (!mounted) return;
                                 Navigator.pop(ctx);
                                 _scrollToBottom();
                                 _snack('Conversación cargada.');
