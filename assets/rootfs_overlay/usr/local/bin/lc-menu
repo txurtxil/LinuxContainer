@@ -1,0 +1,68 @@
+#!/bin/bash
+
+while true; do
+    clear
+    echo "======================================"
+    echo "     LINUX CONTAINER - MENÚ PRINCIPAL"
+    echo "======================================"
+    echo "  1) Iniciar Servidor SSH"
+    echo "  2) Cambiar contraseña de root"
+    echo "  3) Actualizar el sistema (apt update && upgrade)"
+    echo "  4) Salir"
+    echo "  5) Desplegar Llama.cpp (Compilar de 0)"
+    echo "======================================"
+    read -p "Selecciona una opción [1-5]: " opcion
+
+    case $opcion in
+        1)
+            echo "Iniciando SSH..."
+            service ssh start || /etc/init.d/ssh start || echo "Comando SSH no encontrado."
+            read -p "Pulsa Enter para continuar..."
+            ;;
+        2)
+            passwd root
+            read -p "Pulsa Enter para continuar..."
+            ;;
+        3)
+            apt update && apt upgrade -y
+            read -p "Pulsa Enter para continuar..."
+            ;;
+        4)
+            echo "Saliendo del menú..."
+            break
+            ;;
+        5)
+            echo "====================================================="
+            echo " Compilando llama.cpp nativo para Snapdragon (ARM64) "
+            echo "====================================================="
+            echo "[1/4] Instalando dependencias..."
+            apt-get update
+            apt-get install -y build-essential cmake git curl python3 python3-pip
+            
+            echo "[2/4] Clonando repositorio oficial..."
+            cd /tmp
+            rm -rf llama.cpp
+            git clone https://github.com/ggerganov/llama.cpp.git
+            cd llama.cpp
+            
+            echo "[3/4] Compilando binarios (CPU Only)..."
+            cmake -B build -DGGML_NATIVE=OFF -DGGML_RPC=OFF
+            cmake --build build --config Release -j8
+            
+            echo "[4/4] Instalando en el sistema..."
+            cp build/bin/llama-server /usr/local/bin/
+            cp build/bin/llama-cli /usr/local/bin/
+            chmod +x /usr/local/bin/llama-*
+            rm -rf /tmp/llama.cpp
+            
+            echo "====================================================="
+            echo "✅ ¡Llama.cpp compilado e instalado en /usr/local/bin!"
+            echo "====================================================="
+            read -p "Pulsa Enter para volver al menú..."
+            ;;
+        *)
+            echo "Opción no válida."
+            read -p "Pulsa Enter para continuar..."
+            ;;
+    esac
+done
