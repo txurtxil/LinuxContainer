@@ -1,489 +1,654 @@
+// lib/src/terminal/terminal_view.dart
+// TerminalView — Vista principal de la terminal proot con menú contextual
+// Incluye: Setup Inicial, gestión de sesión, accesos rápidos
+
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/scheduler.dart';
-import 'package:xterm/xterm.dart';
-import '../container/container_manager.dart';
-import 'terminal_keybar.dart';
-import 'terminal_session.dart';
-import 'keybar_config.dart';
-import 'keybar_settings_screen.dart';
-import '../agent/agent_dashboard.dart';
-import '../agent/mediapipe_test_screen.dart';
 
-class TerminalScreen extends StatefulWidget {
-  const TerminalScreen({super.key});
+class TerminalView extends StatefulWidget {
+  const TerminalView({super.key});
 
   @override
-  State<TerminalScreen> createState() => _TerminalScreenState();
+  State<TerminalView> createState() => _TerminalViewState();
 }
 
-class _TerminalScreenState extends State<TerminalScreen> {
-  final ContainerManager _manager = ContainerManager();
-  final List<TerminalSession> _sessions = [];
-  int _activeIndex = 0;
-  static const int _maxSessions = 5;
+class _TerminalViewState extends State<TerminalView> {
+  static const _channel = MethodChannel('xtr/main');
 
-  List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
+  final _outputController = ScrollController();
+  final _inputController  = TextEditingController();
+  final _inputFocus       = FocusNode();
+  final _outputLines      = <_OutputLine>[];
 
-  final List<String> _logLines = [];
-  double? _progress = 0.0;
-  bool _spinning = false;
-  bool _booting = true;
-  bool _showAgent = true; // El agente es la pantalla principal por defecto.
-  bool _hasSelection = false;
-  String? _error;
+  bool _rootfsReady     = false;
+  bool _isRunning       = false;
+  bool _setupInProgress = false;
+  String _rootfsPath    = '';
 
-  double _fontSize = 14.0;
-  static const double _minFont = 8.0;
-  static const double _maxFont = 28.0;
-
-  TerminalSession get _active => _sessions[_activeIndex];
+  // Historial de comandos
+  final _history      = <String>[];
+  int   _historyIndex = -1;
 
   @override
   void initState() {
     super.initState();
-    _boot();
-  }
-
-  void _appendLog(String line, {bool spinning = false, double? progress}) {
-    if (!mounted) return;
-    setState(() {
-      _logLines.add(line);
-      _spinning = spinning;
-      if (progress != null) _progress = progress;
-    });
-  }
-
-  Future<void> _boot() async {
-    try {
-      // Carga la configuración del teclado guardada
-      _keybarConfig = await KeybarConfig.load();
-      await _manager.initContainer(log: _appendLog);
-      await Future.delayed(const Duration(milliseconds: 300));
-      if (!mounted) return;
-      _addSession(initial: true);
-      setState(() => _booting = false);
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        WidgetsBinding.instance.endOfFrame.then((_) {
-          if (mounted) _startActiveSession();
-        });
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _booting = false;
-      });
-    }
-  }
-
-  void _addSession({bool initial = false}) {
-    if (_sessions.length >= _maxSessions) {
-      _toast('Máximo $_maxSessions sesiones');
-      return;
-    }
-    final n = _sessions.length + 1;
-    final session = TerminalSession('Sesión $n');
-    session.controller.addListener(_onSelectionChanged);
-    _sessions.add(session);
-    if (!initial) {
-      setState(() => _activeIndex = _sessions.length - 1);
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        WidgetsBinding.instance.endOfFrame.then((_) {
-          if (mounted) _startActiveSession();
-        });
-      });
-    }
-  }
-
-  void _startActiveSession() {
-    final s = _active;
-    if (s.isStarted) return;
-    s.start(columns: s.terminal.viewWidth, rows: s.terminal.viewHeight);
-  }
-
-  void _switchTo(int index) {
-    if (index == _activeIndex) return;
-    setState(() => _activeIndex = index);
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      WidgetsBinding.instance.endOfFrame.then((_) {
-        if (mounted) _startActiveSession();
-      });
-    });
-  }
-
-  void _closeSession(int index) {
-    if (_sessions.length == 1) {
-      _toast('No puedes cerrar la última sesión');
-      return;
-    }
-    final s = _sessions[index];
-    s.controller.removeListener(_onSelectionChanged);
-    s.dispose();
-    setState(() {
-      _sessions.removeAt(index);
-      if (_activeIndex >= _sessions.length) {
-        _activeIndex = _sessions.length - 1;
-      }
-    });
-  }
-
-  void _onSelectionChanged() {
-    final has = _active.controller.selection != null;
-    if (has != _hasSelection && mounted) {
-      setState(() => _hasSelection = has);
-    }
-  }
-
-  void _changeFont(double delta) {
-    setState(() {
-      _fontSize = (_fontSize + delta).clamp(_minFont, _maxFont);
-    });
-  }
-
-  void _copySelection() {
-    final sel = _active.controller.selection;
-    if (sel != null) {
-      final text = _active.terminal.buffer.getText(sel);
-      if (text.isNotEmpty) {
-        Clipboard.setData(ClipboardData(text: text));
-        _active.controller.clearSelection();
-        _toast('Copiado al portapapeles');
-      }
-    }
-  }
-
-  Future<void> _paste() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text;
-    if (text != null && text.isNotEmpty) {
-      _active.terminal.textInput(text);
-    }
-  }
-
-  void _copyScreen() {
-    final buffer = _active.terminal.buffer;
-    final sb = StringBuffer();
-    for (int i = 0; i < _active.terminal.viewHeight; i++) {
-      final line = buffer.lines[buffer.height - _active.terminal.viewHeight + i];
-      sb.writeln(line.toString().trimRight());
-    }
-    Clipboard.setData(ClipboardData(text: sb.toString().trimRight()));
-    _toast('Pantalla copiada al portapapeles');
-  }
-
-  void _toast(String msg) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg), duration: const Duration(seconds: 1)),
-      );
-    }
-  }
-
-  void _openKeybarSettings() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => KeybarSettingsScreen(
-          initial: _keybarConfig,
-          onChanged: (newConfig) {
-            setState(() => _keybarConfig = List.from(newConfig));
-          },
-        ),
-      ),
-    );
-  }
-
-  void _showMenu() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A1A),
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Row(
-                  children: [
-                    const Icon(Icons.tab, color: Colors.lightBlueAccent, size: 18),
-                    const SizedBox(width: 8),
-                    Text('Sesiones (${_sessions.length}/$_maxSessions)', style:
-const TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-              ),
-              ..._sessions.asMap().entries.map((e) {
-                final i = e.key;
-                final s = e.value;
-                final active = i == _activeIndex;
-                return ListTile(
-                  dense: true,
-                  leading: Icon(active ? Icons.radio_button_checked : Icons.radio_button_unchecked, color: active ? Colors.greenAccent : Colors.white38, size: 20),
-                  title: Text(s.name, style: TextStyle(color: active ? Colors.white : Colors.white70)),
-                  trailing: _sessions.length > 1
-                      ? IconButton(icon: const Icon(Icons.close, color: Colors.redAccent, size: 18), onPressed: () { Navigator.pop(ctx); _closeSession(i); })
-                      : null,
-                  onTap: () { Navigator.pop(ctx); _switchTo(i); },
-                );
-              }),
-              if (_sessions.length < _maxSessions)
-                ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.add, color: Colors.greenAccent, size: 20),
-                  title: const Text('Nueva sesión', style: TextStyle(color: Colors.white)),
-                  onTap: () { Navigator.pop(ctx); _addSession(); },
-                ),
-              const Divider(color: Colors.white24),
-              ListTile(
-                leading: const Icon(Icons.smart_toy_outlined, color: Colors.lightBlueAccent),
-                title: const Text('Ir al Agente IA', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Panel del agente autónomo', style: TextStyle(color: Colors.white54)),
-                onTap: () { Navigator.pop(ctx); setState(() => _showAgent = true); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.bolt, color: Colors.amberAccent),
-                title: const Text('Prueba GPU (MediaPipe)', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Fase 1: inferencia on-device en GPU', style: TextStyle(color: Colors.white54)),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const MediaPipeTestScreen()),
-                  );
-                },
-              ),
-              const Divider(color: Colors.white24),
-              ListTile(
-                leading: const Icon(Icons.content_paste, color: Colors.greenAccent),
-                title: const Text('Pegar', style: TextStyle(color: Colors.white)),
-                onTap: () { Navigator.pop(ctx); _paste(); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.copy_all, color: Colors.greenAccent),
-                title: const Text('Copiar pantalla', style: TextStyle(color: Colors.white)),
-                onTap: () { Navigator.pop(ctx); _copyScreen(); },
-              ),
-              const Divider(color: Colors.white24),
-              ListTile(
-                leading: const Icon(Icons.keyboard, color: Colors.greenAccent),
-                title: const Text('Configurar teclado', style: TextStyle(color:
-Colors.white)),
-                subtitle: const Text('Mostrar, ocultar y reordenar teclas', style: TextStyle(color: Colors.white54)),
-                onTap: () { Navigator.pop(ctx); _openKeybarSettings(); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.format_size, color: Colors.greenAccent),
-                title: const Text('Tamaño de fuente', style: TextStyle(color: Colors.white)),
-                subtitle: Text('${_fontSize.toInt()} pt', style: const TextStyle(color: Colors.white54)),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(icon: const Icon(Icons.remove, color: Colors.white), onPressed: () { _changeFont(-1); Navigator.pop(ctx); _showMenu(); }),
-                    IconButton(icon: const Icon(Icons.add, color: Colors.white), onPressed: () { _changeFont(1); Navigator.pop(ctx); _showMenu(); }),
-                  ],
-                ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.cleaning_services, color: Colors.greenAccent),
-                title: const Text('Limpiar pantalla', style: TextStyle(color: Colors.white)),
-                onTap: () { _active.terminal.charInput('l'.codeUnitAt(0), ctrl:
-true); Navigator.pop(ctx); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.restart_alt, color: Colors.amberAccent),
-                title: const Text('Reiniciar sesión actual', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _active.restart(columns: _active.terminal.viewWidth, rows: _active.terminal.viewHeight);
-                },
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
-    );
+    _checkRootfsStatus();
   }
 
   @override
   void dispose() {
-    for (final s in _sessions) {
-      s.controller.removeListener(_onSelectionChanged);
-      s.dispose();
-    }
+    _outputController.dispose();
+    _inputController.dispose();
+    _inputFocus.dispose();
     super.dispose();
   }
 
-  Color _lineColor(String line) {
-    if (line.contains('[ OK ]')) return Colors.greenAccent;
-    if (line.contains('[ .. ]')) return Colors.amberAccent;
-    if (line.contains('[ !! ]')) return Colors.orangeAccent;
-    return Colors.white70;
+  // ── Estado del rootfs ────────────────────────────────────
+  Future<void> _checkRootfsStatus() async {
+    try {
+      final result = await _channel.invokeMethod<Map>('getRootfsStatus');
+      setState(() {
+        _rootfsReady = result?['extracted'] as bool? ?? false;
+        _rootfsPath  = result?['path'] as String? ?? '';
+      });
+
+      if (_rootfsReady) {
+        _addLine('Sistema Debian listo en $_rootfsPath', LineType.info);
+        _addLine('Escribe un comando o usa el menú ☰', LineType.info);
+      } else {
+        _addLine('⚠ Sistema Debian no instalado', LineType.warning);
+        _addLine('Usa el menú ☰ → "Setup Inicial" para configurar', LineType.warning);
+      }
+    } catch (e) {
+      _addLine('Error comprobando rootfs: $e', LineType.error);
+    }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_error != null) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: SingleChildScrollView(
-              child: Text('ERROR:\n$_error', style: const TextStyle(color: Colors.red, fontFamily: 'monospace')),
-            ),
-          ),
-        ),
+  // ── Output lines ─────────────────────────────────────────
+  void _addLine(String text, [LineType type = LineType.output]) {
+    setState(() {
+      _outputLines.add(_OutputLine(text, type));
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_outputController.hasClients) {
+        _outputController.animateTo(
+          _outputController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  // ── Ejecutar comando ─────────────────────────────────────
+  Future<void> _runCommand(String cmd) async {
+    final trimmed = cmd.trim();
+    if (trimmed.isEmpty) return;
+
+    _history.insert(0, trimmed);
+    _historyIndex = -1;
+    _inputController.clear();
+
+    _addLine('❯ $trimmed', LineType.command);
+    setState(() => _isRunning = true);
+
+    try {
+      final output = await _channel.invokeMethod<String>(
+        'runInProot',
+        {'command': trimmed},
       );
+      if (output != null && output.isNotEmpty) {
+        for (final line in output.split('\n')) {
+          if (line.isNotEmpty) _addLine(line);
+        }
+      }
+    } on PlatformException catch (e) {
+      _addLine('Error: ${e.message}', LineType.error);
+    } finally {
+      setState(() => _isRunning = false);
+      _inputFocus.requestFocus();
+    }
+  }
+
+  // ── Setup Inicial ─────────────────────────────────────────
+  Future<void> _runSetupInicial() async {
+    if (_setupInProgress) return;
+
+    // Si rootfs no está extraído, extraerlo primero
+    if (!_rootfsReady) {
+      final confirmed = await _showConfirmDialog(
+        'Primer arranque',
+        'Se descomprimirá el sistema Debian (~500 MB).\nEsto puede tardar 2-3 minutos.',
+      );
+      if (!confirmed) return;
+
+      _addLine('Extrayendo sistema Debian...', LineType.info);
+      setState(() => _setupInProgress = true);
+
+      try {
+        final result = await _channel.invokeMethod<Map>('extractRootfs');
+        final success = result?['success'] as bool? ?? false;
+        if (success) {
+          setState(() => _rootfsReady = true);
+          _addLine('✓ Sistema Debian extraído', LineType.success);
+        } else {
+          _addLine('✗ Error: ${result?["error"]}', LineType.error);
+          setState(() => _setupInProgress = false);
+          return;
+        }
+      } catch (e) {
+        _addLine('✗ Error al extraer: $e', LineType.error);
+        setState(() => _setupInProgress = false);
+        return;
+      }
     }
 
-    if (_booting) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('LinuxContainer · arranque', style: TextStyle(color:
-Colors.white38, fontFamily: 'monospace', fontSize: 12)),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: _logLines.length,
-                    itemBuilder: (ctx, i) => Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 1),
-                      child: Text(
-                        _logLines[i],
-                        style: TextStyle(color: _lineColor(_logLines[i]), fontFamily: 'monospace', fontSize: 13, height: 1.3),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                LinearProgressIndicator(value: _spinning ? null : _progress, backgroundColor: Colors.white10, color: Colors.greenAccent),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
+    // Ejecutar xtr_setup.sh dentro de proot
+    _addLine('', LineType.info);
+    _addLine('═══════════════════════════════════', LineType.info);
+    _addLine('  XTR Terminal — Setup Inicial', LineType.info);
+    _addLine('═══════════════════════════════════', LineType.info);
+    _addLine('Ejecutando configuración del sistema...', LineType.info);
+    _addLine('(apt update, smolagents, agent server)', LineType.info);
+    _addLine('Esto puede tardar 5-10 minutos.', LineType.warning);
+    _addLine('', LineType.info);
 
-    // El agente y la terminal nunca se muestran a la vez: pantalla completa
-    // para cada uno, conmutados por un botón. Así el input del agente tiene
-    // todo el espacio y el teclado no se solapa.
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: _showAgent ? _agentView() : _terminalView(),
+    setState(() { _setupInProgress = true; _isRunning = true; });
+
+    try {
+      // Paso 1: apt update + upgrade
+      _addLine('▶ Actualizando paquetes...', LineType.info);
+      await _runSilentCommand('apt update -q && apt upgrade -y -q 2>&1 | tail -3');
+
+      // Paso 2: Paquetes base
+      _addLine('▶ Instalando herramientas base...', LineType.info);
+      await _runSilentCommand(
+        'DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends '
+        'python3 python3-pip python3-venv python3-dev '
+        'git curl wget ca-certificates build-essential nano 2>&1 | tail -3'
+      );
+
+      // Paso 3: smolagents
+      _addLine('▶ Instalando smolagents...', LineType.info);
+      await _runSilentCommand(
+        'cd /root && python3 -m venv agent-env && '
+        'agent-env/bin/pip install -q --upgrade pip && '
+        'agent-env/bin/pip install -q smolagents fastapi "uvicorn[standard]" httpx openai requests'
+      );
+
+      // Paso 4: Verificar agent_server.py
+      _addLine('▶ Verificando agent server...', LineType.info);
+      final agentCheck = await _channel.invokeMethod<String>(
+        'runInProot',
+        {'command': 'test -f /root/agent_server.py && echo "OK" || echo "MISSING"'},
+      );
+      if (agentCheck?.trim() == 'MISSING') {
+        _addLine('  agent_server.py no encontrado — descargando...', LineType.warning);
+        await _runSilentCommand(
+          'curl -fsSL https://raw.githubusercontent.com/txurtxil/LinuxContainer/main/assets/agent_server.py '
+          '-o /root/agent_server.py 2>&1'
+        );
+      }
+
+      // Paso 5: start_agent.sh
+      await _runSilentCommand(
+        'cat > /root/start_agent.sh << \'EOF\'\n'
+        '#!/bin/bash\n'
+        'source /root/agent-env/bin/activate\n'
+        'cd /root\n'
+        'uvicorn agent_server:app --host 127.0.0.1 --port 8765 --workers 1\n'
+        'EOF\n'
+        'chmod +x /root/start_agent.sh'
+      );
+
+      // Mostrar versiones instaladas
+      final versions = await _channel.invokeMethod<String>(
+        'runInProot',
+        {'command':
+          'echo "Python: $(python3 --version)" && '
+          'echo "smolagents: $(/root/agent-env/bin/pip show smolagents 2>/dev/null | grep Version || echo N/A)" && '
+          'echo "FastAPI: $(/root/agent-env/bin/pip show fastapi 2>/dev/null | grep Version || echo N/A)"'
+        },
+      );
+
+      _addLine('', LineType.info);
+      _addLine('✓ Setup completado', LineType.success);
+      if (versions != null) {
+        for (final v in versions.split('\n')) {
+          if (v.isNotEmpty) _addLine('  $v', LineType.success);
+        }
+      }
+      _addLine('', LineType.info);
+      _addLine('Los modelos GPU (.task) se gestionan', LineType.info);
+      _addLine('desde la pantalla "Prueba GPU" de la app.', LineType.info);
+
+    } catch (e) {
+      _addLine('✗ Error durante el setup: $e', LineType.error);
+    } finally {
+      setState(() { _setupInProgress = false; _isRunning = false; });
+    }
+  }
+
+  Future<void> _runSilentCommand(String cmd) async {
+    try {
+      final output = await _channel.invokeMethod<String>(
+        'runInProot',
+        {'command': cmd},
+      );
+      if (output != null && output.isNotEmpty) {
+        for (final line in output.split('\n')) {
+          if (line.isNotEmpty) _addLine('  $line');
+        }
+      }
+    } on PlatformException catch (e) {
+      _addLine('  ⚠ ${e.message}', LineType.warning);
+    }
+  }
+
+  // ── Menú contextual ───────────────────────────────────────
+  void _showMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _MenuSheet(
+        rootfsReady: _rootfsReady,
+        onSetupInicial: () {
+          Navigator.pop(context);
+          _runSetupInicial();
+        },
+        onClearOutput: () {
+          Navigator.pop(context);
+          setState(() => _outputLines.clear());
+        },
+        onBash: () {
+          Navigator.pop(context);
+          _runCommand('bash --version');
+        },
+        onStartAgent: () {
+          Navigator.pop(context);
+          _runCommand('bash /root/start_agent.sh');
+        },
+        onCheckVersions: () {
+          Navigator.pop(context);
+          _runCommand(
+            'echo "=== Sistema ===" && '
+            'uname -a && '
+            'echo "=== Python ===" && '
+            'python3 --version && '
+            'echo "=== smolagents ===" && '
+            '/root/agent-env/bin/pip show smolagents 2>/dev/null || echo "N/A"'
+          );
+        },
       ),
     );
   }
 
-  Widget _agentView() {
-    return AgentDashboard(
-      // El botón de "ocultar" del dashboard ahora lleva a la terminal.
-      onClose: () => setState(() => _showAgent = false),
-    );
+  Future<bool> _showConfirmDialog(String title, String message) async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: Text(title, style: const TextStyle(color: Colors.white)),
+        content: Text(message, style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.grey)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Continuar', style: TextStyle(color: Color(0xFF00D4FF))),
+          ),
+        ],
+      ),
+    ) ?? false;
   }
 
-  Widget _terminalView() {
-    return Column(
-      children: [
-        // Barra superior de la terminal con botón para volver al Agente.
-        Container(
-          color: const Color(0xFF1A1A1A),
-          padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-          child: Row(
-            children: [
-              IconButton(
-                tooltip: 'Volver al Agente',
-                onPressed: () => setState(() => _showAgent = true),
-                icon: const Icon(Icons.smart_toy_outlined,
-                    color: Colors.lightBlueAccent, size: 22),
-              ),
-              const SizedBox(width: 2),
-              Expanded(
-                child: Text(
-                  _sessions.length > 1
-                      ? '${_active.name} (${_activeIndex + 1}/${_sessions.length})'
-                      : 'Terminal · Debian',
-                  style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 13,
-                      fontFamily: 'monospace'),
-                  overflow: TextOverflow.ellipsis,
+  // ── Build ─────────────────────────────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D0D1A),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: Row(
+          children: [
+            Icon(
+              _rootfsReady ? Icons.terminal : Icons.warning_amber,
+              color: _rootfsReady ? const Color(0xFF00D4FF) : Colors.orange,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              _rootfsReady ? 'Terminal Debian' : 'Terminal — Sin sistema',
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+            ),
+            if (_isRunning) ...[
+              const SizedBox(width: 12),
+              const SizedBox(
+                width: 14, height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Color(0xFF00D4FF),
                 ),
               ),
-              IconButton(
-                tooltip: 'Nueva sesión',
-                onPressed: _sessions.length < _maxSessions ? () => _addSession() : null,
-                icon: const Icon(Icons.add, color: Colors.greenAccent, size: 22),
-              ),
-              IconButton(
-                tooltip: 'Menú',
-                onPressed: _showMenu,
-                icon: const Icon(Icons.more_vert, color: Colors.white70, size: 22),
-              ),
             ],
-          ),
+          ],
         ),
-        Expanded(
-          child: Stack(
-            children: [
-              IndexedStack(
-                index: _activeIndex,
-                children: _sessions.map((s) {
-                  return TerminalView(
-                    s.terminal,
-                    controller: s.controller,
-                    autofocus: true,
-                    backgroundOpacity: 1.0,
-                    deleteDetection: true,
-                    keyboardType: TextInputType.visiblePassword,
-                    textStyle: TerminalStyle(fontSize: _fontSize, fontFamily: 'monospace'),
-                  );
-                }).toList(),
-              ),
-              if (_hasSelection)
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: Material(
-                    color: Colors.green.shade700,
-                    borderRadius: BorderRadius.circular(8),
-                    elevation: 4,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(8),
-                      onTap: _copySelection,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.copy, color: Colors.white, size: 18),
-                            SizedBox(width: 6),
-                            Text('Copiar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                      ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.menu, color: Colors.white70),
+            onPressed: _showMenu,
+            tooltip: 'Menú',
+          ),
+        ],
+      ),
+
+      body: Column(
+        children: [
+          // ── Salida ─────────────────────────────────────────
+          Expanded(
+            child: ListView.builder(
+              controller: _outputController,
+              padding: const EdgeInsets.all(8),
+              itemCount: _outputLines.length,
+              itemBuilder: (_, i) {
+                final line = _outputLines[i];
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 1),
+                  child: Text(
+                    line.text,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      color: line.color,
+                      height: 1.4,
                     ),
                   ),
+                );
+              },
+            ),
+          ),
+
+          // ── Barra de atajos ────────────────────────────────
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              children: [
+                for (final shortcut in ['Tab', 'Ctrl+C', 'ls', 'cd ~', 'pwd', 'clear'])
+                  _ShortcutChip(
+                    label: shortcut,
+                    onTap: () {
+                      if (shortcut == 'clear') {
+                        setState(() => _outputLines.clear());
+                      } else if (shortcut == 'Ctrl+C') {
+                        _addLine('^C', LineType.warning);
+                      } else {
+                        _runCommand(shortcut);
+                      }
+                    },
+                  ),
+              ],
+            ),
+          ),
+
+          // ── Input ─────────────────────────────────────────
+          Container(
+            color: const Color(0xFF1A1A2E),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                const Text(
+                  '❯ ',
+                  style: TextStyle(
+                    color: Color(0xFF00D4FF),
+                    fontFamily: 'monospace',
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-            ],
+                Expanded(
+                  child: TextField(
+                    controller: _inputController,
+                    focusNode: _inputFocus,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontFamily: 'monospace',
+                      fontSize: 14,
+                    ),
+                    decoration: const InputDecoration(
+                      border: InputBorder.none,
+                      hintText: 'comando...',
+                      hintStyle: TextStyle(color: Colors.white30),
+                      isDense: true,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    onSubmitted: _runCommand,
+                    enabled: !_isRunning,
+                    onChanged: (_) => setState(() => _historyIndex = -1),
+                    onEditingComplete: () {},
+                  ),
+                ),
+                // Historial
+                IconButton(
+                  icon: const Icon(Icons.arrow_upward, size: 18, color: Colors.white38),
+                  onPressed: () {
+                    if (_history.isEmpty) return;
+                    setState(() {
+                      _historyIndex = (_historyIndex + 1).clamp(0, _history.length - 1);
+                      _inputController.text = _history[_historyIndex];
+                      _inputController.selection = TextSelection.collapsed(
+                          offset: _inputController.text.length);
+                    });
+                  },
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+                // Enviar
+                IconButton(
+                  icon: const Icon(Icons.send, size: 18, color: Color(0xFF00D4FF)),
+                  onPressed: _isRunning ? null : () => _runCommand(_inputController.text),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+              ],
+            ),
+          ),
+
+          SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Menú bottom sheet ─────────────────────────────────────────
+class _MenuSheet extends StatelessWidget {
+  final bool rootfsReady;
+  final VoidCallback onSetupInicial;
+  final VoidCallback onClearOutput;
+  final VoidCallback onBash;
+  final VoidCallback onStartAgent;
+  final VoidCallback onCheckVersions;
+
+  const _MenuSheet({
+    required this.rootfsReady,
+    required this.onSetupInicial,
+    required this.onClearOutput,
+    required this.onBash,
+    required this.onStartAgent,
+    required this.onCheckVersions,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle
+          Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Setup Inicial — siempre visible y destacado ───
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF00D4FF), Color(0xFF7B2FBE)],
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: ListTile(
+              leading: const Icon(Icons.rocket_launch, color: Colors.white),
+              title: const Text(
+                'Setup Inicial',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              subtitle: Text(
+                rootfsReady
+                  ? 'Instala/actualiza smolagents y herramientas'
+                  : 'Extrae Debian + configura el sistema',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              onTap: onSetupInicial,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+
+          const Divider(color: Colors.white12, height: 24, indent: 16, endIndent: 16),
+
+          // ── Resto de opciones ─────────────────────────────
+          _MenuItem(
+            icon: Icons.play_arrow,
+            label: 'Iniciar agente (puerto 8765)',
+            enabled: rootfsReady,
+            onTap: onStartAgent,
+          ),
+          _MenuItem(
+            icon: Icons.info_outline,
+            label: 'Versiones instaladas',
+            enabled: rootfsReady,
+            onTap: onCheckVersions,
+          ),
+          _MenuItem(
+            icon: Icons.terminal,
+            label: 'Info de bash',
+            enabled: rootfsReady,
+            onTap: onBash,
+          ),
+          _MenuItem(
+            icon: Icons.cleaning_services,
+            label: 'Limpiar pantalla',
+            onTap: onClearOutput,
+          ),
+
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _MenuItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool enabled;
+
+  const _MenuItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(
+        icon,
+        color: enabled ? Colors.white70 : Colors.white24,
+        size: 22,
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          color: enabled ? Colors.white : Colors.white30,
+          fontSize: 14,
+        ),
+      ),
+      onTap: enabled ? onTap : null,
+      dense: true,
+    );
+  }
+}
+
+// ── Chip de atajo ─────────────────────────────────────────────
+class _ShortcutChip extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _ShortcutChip({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(right: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          border: Border.all(color: const Color(0xFF00D4FF30)),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF00D4FF),
+            fontFamily: 'monospace',
+            fontSize: 12,
           ),
         ),
-        TerminalKeybar(
-          terminal: _active.terminal,
-          config: _keybarConfig,
-          onFontIncrease: () => _changeFont(1),
-          onFontDecrease: () => _changeFont(-1),
-          onMenu: _showMenu,
-        ),
-      ],
+      ),
     );
+  }
+}
+
+// ── Modelos de datos ──────────────────────────────────────────
+enum LineType { output, command, info, warning, error, success }
+
+class _OutputLine {
+  final String text;
+  final LineType type;
+  const _OutputLine(this.text, this.type);
+
+  Color get color {
+    switch (type) {
+      case LineType.command: return const Color(0xFF00D4FF);
+      case LineType.info:    return Colors.white54;
+      case LineType.warning: return Colors.orange;
+      case LineType.error:   return Colors.redAccent;
+      case LineType.success: return Colors.greenAccent;
+      case LineType.output:  return Colors.white;
+    }
   }
 }

@@ -23,7 +23,11 @@ android {
         versionName = flutter.versionName
     }
 
-    buildTypes {
+    
+    aaptOptions {
+        noCompress += listOf("gz", "tar", "task")
+    }
+buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
             // R8 necesita reglas extra para las clases internas de MediaPipe.

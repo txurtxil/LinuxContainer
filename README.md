@@ -1,16 +1,30 @@
-# linux_container
+# XTR Terminal
 
-A new Flutter project.
+App Android con agente IA autónomo **100% local y privado**.
 
-## Getting Started
+- **Plataforma:** Samsung Z Fold7 (Snapdragon 8 Elite)
+- **Sistema:** Debian Bookworm arm64 vía proot (sin root)
+- **GPU:** MediaPipe LLM API — Adreno GPU (55+ tok/s)
+- **Package:** `com.example.linux_container`
 
-This project is a starting point for a Flutter application.
+## Setup desde 0 en bc-250
 
-A few resources to get you started if this is your first Flutter project:
+```bash
+# 1. Bootstrap (instala SDK, Flutter, Java)
+bash scripts/00_bootstrap_bc250.sh
+source ~/.bashrc
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+# 2. Preparar rootfs Debian (~15 min, una sola vez)
+bash scripts/01_prepare_rootfs.sh
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+# 3. Build APK
+cd ~/linux_container_build
+./build_and_deploy.sh
+```
+
+## Primera ejecución en el dispositivo
+
+1. Instalar APK
+2. La app extrae Debian automáticamente (~500 MB, 1-3 min)
+3. Menú ☰ → **Setup Inicial** (instala smolagents)
+4. Modelos GPU: pantalla "Prueba GPU" → Importar .task

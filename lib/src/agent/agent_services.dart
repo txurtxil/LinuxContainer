@@ -1,392 +1,369 @@
 // lib/src/agent/agent_services.dart
-//
-// Gestiona el ciclo de vida de los servicios del agente:
-//   - llama-server (:8080)  -> servidor de inferencia LOCAL (Gemma)
-//   - agent-server (:8765)  -> bucle ReAct (smolagents)
-//
-// La FUENTE de inferencia es configurable: el agente puede usar el llama local,
-// un equipo de la LAN, o un proveedor en la nube compatible con OpenAI (Groq,
-// Gemini, etc.). En modo remoto NO se arranca el llama local.
-//
-// La API key se guarda en almacenamiento privado de la app (no en el rootfs) y
-// se inyecta al agente como variable de entorno EFÍMERA al arrancar.
+// Gestión de fuentes LLM para XTR Terminal
+// Gemini actualizado: 3.5-flash (nuevo flagship free), 2.5-flash
+// GPU local: SIEMPRE MediaPipe (puerto 8090) — sin CPU fallback
 
-import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_pty/flutter_pty.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
+// ─────────────────────────────────────────────────────────────
+// Modelos de datos
+// ─────────────────────────────────────────────────────────────
 
-import '../container/container_manager.dart';
+enum LlmSourceType {
+  groq,
+  gemini,
+  cerebras,
+  openRouter,
+  gpuLocal,   // MediaPipe GPU — siempre local
+  custom,
+}
 
-/// Un fichero .gguf encontrado dentro del rootfs.
-class ModelFile {
-  final String prootPath;
-  final String name;
-  final int sizeBytes;
-  ModelFile(this.prootPath, this.name, this.sizeBytes);
+class LlmSource {
+  final LlmSourceType type;
+  final String        name;
+  final String        apiKey;
+  final String        model;
+  final String?       baseUrl; // solo para custom
+  final bool          isEnabled;
 
-  String get sizeLabel {
-    final mb = sizeBytes / (1024 * 1024);
-    if (mb >= 1024) return '${(mb / 1024).toStringAsFixed(1)} GB';
-    return '${mb.toStringAsFixed(0)} MB';
+  const LlmSource({
+    required this.type,
+    required this.name,
+    required this.apiKey,
+    required this.model,
+    this.baseUrl,
+    this.isEnabled = true,
+  });
+
+  LlmSource copyWith({
+    String? apiKey,
+    String? model,
+    String? baseUrl,
+    bool?   isEnabled,
+  }) => LlmSource(
+    type:      type,
+    name:      name,
+    apiKey:    apiKey    ?? this.apiKey,
+    model:     model     ?? this.model,
+    baseUrl:   baseUrl   ?? this.baseUrl,
+    isEnabled: isEnabled ?? this.isEnabled,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'type':      type.name,
+    'name':      name,
+    'apiKey':    apiKey,
+    'model':     model,
+    'baseUrl':   baseUrl,
+    'isEnabled': isEnabled,
+  };
+
+  factory LlmSource.fromJson(Map<String, dynamic> j) => LlmSource(
+    type:      LlmSourceType.values.firstWhere(
+                 (e) => e.name == j['type'],
+                 orElse: () => LlmSourceType.custom),
+    name:      j['name'] as String,
+    apiKey:    j['apiKey'] as String? ?? '',
+    model:     j['model'] as String,
+    baseUrl:   j['baseUrl'] as String?,
+    isEnabled: j['isEnabled'] as bool? ?? true,
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Catálogo de modelos por fuente
+// ─────────────────────────────────────────────────────────────
+
+class ModelCatalog {
+
+  // ── Groq (tool-calling perfecto) ──────────────────────────
+  static const groqModels = [
+    'llama-3.1-8b-instant',     // ← recomendado tool-calling
+    'llama-3.3-70b-versatile',
+    'llama-3.1-70b-versatile',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it',
+  ];
+
+  // ── Gemini (actualizado junio 2026) ───────────────────────
+  // Tier gratuito: gemini-3.5-flash, gemini-2.5-flash,
+  //                gemini-2.5-flash-lite, gemini-3-flash-preview
+  // Pro: solo paid
+  static const geminiModels = [
+    'gemini-3.5-flash',         // ← nuevo flagship (mayo 2026), FREE tier
+    'gemini-2.5-flash',         // ← probado y funcional, FREE tier
+    'gemini-2.5-flash-lite',    // más barato/rápido
+    'gemini-3-flash',           // gen anterior
+    'gemini-3.1-flash-lite',    // económico reciente
+  ];
+
+  // ── Cerebras ──────────────────────────────────────────────
+  static const cerebrasModels = [
+    'llama3.1-8b',
+    'llama3.1-70b',
+    'llama-4-scout-17b-16e-instruct',
+  ];
+
+  // ── OpenRouter ────────────────────────────────────────────
+  static const openRouterModels = [
+    'meta-llama/llama-3.1-8b-instruct:free',
+    'google/gemini-3.5-flash',
+    'google/gemini-2.5-flash',
+    'mistralai/mistral-7b-instruct:free',
+    'anthropic/claude-sonnet-4-6',
+    'deepseek/deepseek-chat',
+  ];
+
+  // ── GPU Local (MediaPipe .task) ────────────────────────────
+  // Sin modelos listados — el usuario importa el .task desde la app
+  // Soporta: gemma3-1b-it-int4.task, gemma3-4b-it-int4.task
+  static const gpuLocalModels = [
+    'gemma3-local-gpu',   // placeholder — el modelo real es el .task cargado
+  ];
+
+  static List<String> forType(LlmSourceType type) {
+    switch (type) {
+      case LlmSourceType.groq:       return groqModels;
+      case LlmSourceType.gemini:     return geminiModels;
+      case LlmSourceType.cerebras:   return cerebrasModels;
+      case LlmSourceType.openRouter: return openRouterModels;
+      case LlmSourceType.gpuLocal:   return gpuLocalModels;
+      case LlmSourceType.custom:     return [];
+    }
   }
 }
 
-/// Control del foreground service nativo (Kotlin) vía MethodChannel.
-class ForegroundService {
-  static const MethodChannel _ch =
-      MethodChannel('linux_container/foreground');
-  static bool _active = false;
+// ─────────────────────────────────────────────────────────────
+// URLs base por fuente
+// ─────────────────────────────────────────────────────────────
 
-  static Future<void> start() async {
-    if (_active) return;
-    _active = true;
-    try {
-      if (await Permission.notification.isDenied) {
-        await Permission.notification.request();
-      }
-      await _ch.invokeMethod('start');
-    } catch (_) {}
-  }
+class ApiEndpoints {
+  static const groq       = 'https://api.groq.com/openai/v1';
+  static const gemini     = 'https://generativelanguage.googleapis.com/v1beta/openai';
+  static const cerebras   = 'https://api.cerebras.ai/v1';
+  static const openRouter = 'https://openrouter.ai/api/v1';
+  static const gpuLocal   = 'http://127.0.0.1:8090/v1'; // MediaPipe NanoHTTPD
 
-  static Future<void> stop() async {
-    if (!_active) return;
-    _active = false;
-    try {
-      await _ch.invokeMethod('stop');
-    } catch (_) {}
+  static String forSource(LlmSource source) {
+    switch (source.type) {
+      case LlmSourceType.groq:       return groq;
+      case LlmSourceType.gemini:     return gemini;
+      case LlmSourceType.cerebras:   return cerebras;
+      case LlmSourceType.openRouter: return openRouter;
+      case LlmSourceType.gpuLocal:   return gpuLocal;
+      case LlmSourceType.custom:     return source.baseUrl ?? '';
+    }
   }
 }
 
-class AgentServices {
-  static final AgentServices _i = AgentServices._();
-  factory AgentServices() => _i;
-  AgentServices._();
+// ─────────────────────────────────────────────────────────────
+// Servicio de persistencia
+// ─────────────────────────────────────────────────────────────
 
-  final ContainerManager _cm = ContainerManager();
+class AgentSourceService extends ChangeNotifier {
 
-  // ---- Fuente de inferencia -------------------------------------------------
-  // 'local' = llama-server local; cualquier otro id = endpoint remoto OpenAI.
+  static const _prefKey        = 'llm_sources_v2';
+  static const _prefActiveKey  = 'llm_active_source';
 
-  String sourceId = 'local';
-  String remoteBaseUrl = '';
-  String remoteModel = '';
-  String remoteApiKey = '';
+  List<LlmSource> _sources     = [];
+  LlmSource?      _activeSource;
 
-  bool get usingRemote => sourceId != 'local';
+  List<LlmSource> get sources       => _sources;
+  LlmSource?      get activeSource  => _activeSource;
 
-  // ---- Modelo local ---------------------------------------------------------
+  // ── Fuentes por defecto ──────────────────────────────────
+  static List<LlmSource> get defaults => [
+    const LlmSource(
+      type:    LlmSourceType.groq,
+      name:    'Groq',
+      apiKey:  '',
+      model:   'llama-3.1-8b-instant',
+    ),
+    const LlmSource(
+      type:    LlmSourceType.gemini,
+      name:    'Gemini',
+      apiKey:  '',
+      model:   'gemini-3.5-flash',       // ← actualizado a 3.5
+    ),
+    const LlmSource(
+      type:    LlmSourceType.cerebras,
+      name:    'Cerebras',
+      apiKey:  '',
+      model:   'llama3.1-8b',
+    ),
+    const LlmSource(
+      type:    LlmSourceType.openRouter,
+      name:    'OpenRouter',
+      apiKey:  '',
+      model:   'meta-llama/llama-3.1-8b-instruct:free',
+    ),
+    const LlmSource(
+      type:    LlmSourceType.gpuLocal,
+      name:    'GPU Local (MediaPipe)',
+      apiKey:  'local',
+      model:   'gemma3-local-gpu',
+    ),
+    const LlmSource(
+      type:    LlmSourceType.custom,
+      name:    'Personalizado',
+      apiKey:  '',
+      model:   '',
+      baseUrl: '',
+    ),
+  ];
 
-  String llamaModelRef = 'unsloth/gemma-4-E2B-it-GGUF:Q4_K_M';
+  // ── Cargar desde SharedPreferences ──────────────────────
+  Future<void> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_prefKey);
 
-  String? llamaLocalModelPath =
-      '/root/models/models--ggml-org--gemma-4-E2B-it-GGUF/snapshots/a1dac71d3ab220618f5a7573a52acdc4baf3ae3b/gemma-4-E2B-it-Q8_0.gguf';
-
-  // ---- Parámetros de inferencia local ---------------------------------------
-
-  int llamaThreads = 6;
-  int llamaCtx = 8192;
-  String kvCacheType = 'q4_0';
-  double temp = 1.0;
-  double topP = 0.95;
-  int topK = 64;
-  int llamaPort = 8080;
-  int agentPort = 8765;
-
-  static const int _minModelBytes = 200 * 1024 * 1024;
-
-  Pty? _llamaPty;
-  Pty? _agentPty;
-
-  final ValueNotifier<List<String>> llamaLog = ValueNotifier<List<String>>([]);
-  final ValueNotifier<List<String>> agentLog = ValueNotifier<List<String>>([]);
-  final ValueNotifier<bool> llamaStarting = ValueNotifier<bool>(false);
-  final ValueNotifier<bool> agentStarting = ValueNotifier<bool>(false);
-
-  bool get llamaLaunched => _llamaPty != null;
-  bool get agentLaunched => _agentPty != null;
-  bool get usingLocalModel =>
-      llamaLocalModelPath != null && llamaLocalModelPath!.trim().isNotEmpty;
-
-  String get currentModelLabel {
-    if (usingRemote) return remoteModel.isNotEmpty ? remoteModel : sourceId;
-    if (usingLocalModel) return llamaLocalModelPath!.split('/').last;
-    return llamaModelRef;
-  }
-
-  static const int _maxLogLines = 250;
-
-  // ---- Config persistente ---------------------------------------------------
-
-  Future<String> _configFilePath() async {
-    final dir = await getApplicationDocumentsDirectory();
-    return '${dir.path}/model_config.json';
-  }
-
-  Future<void> loadModelConfig() async {
-    try {
-      final f = File(await _configFilePath());
-      if (!await f.exists()) return;
-      final data = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
-      final local = data['localPath'] as String?;
-      final ref = data['hfRef'] as String?;
-      llamaLocalModelPath =
-          (local != null && local.isNotEmpty) ? local : null;
-      if (ref != null && ref.isNotEmpty) llamaModelRef = ref;
-      llamaThreads = (data['threads'] as int?) ?? llamaThreads;
-      llamaCtx = (data['ctx'] as int?) ?? llamaCtx;
-      kvCacheType = (data['kv'] as String?) ?? kvCacheType;
-      temp = (data['temp'] as num?)?.toDouble() ?? temp;
-      topP = (data['topP'] as num?)?.toDouble() ?? topP;
-      topK = (data['topK'] as int?) ?? topK;
-      llamaPort = (data['llamaPort'] as int?) ?? llamaPort;
-      agentPort = (data['agentPort'] as int?) ?? agentPort;
-      sourceId = (data['sourceId'] as String?) ?? sourceId;
-      remoteBaseUrl = (data['remoteBaseUrl'] as String?) ?? remoteBaseUrl;
-      remoteModel = (data['remoteModel'] as String?) ?? remoteModel;
-      remoteApiKey = (data['remoteApiKey'] as String?) ?? remoteApiKey;
-    } catch (_) {}
-  }
-
-  Future<void> _save() async {
-    try {
-      final f = File(await _configFilePath());
-      await f.writeAsString(jsonEncode({
-        'localPath': llamaLocalModelPath ?? '',
-        'hfRef': llamaModelRef,
-        'threads': llamaThreads,
-        'ctx': llamaCtx,
-        'kv': kvCacheType,
-        'temp': temp,
-        'topP': topP,
-        'topK': topK,
-        'llamaPort': llamaPort,
-        'agentPort': agentPort,
-        'sourceId': sourceId,
-        'remoteBaseUrl': remoteBaseUrl,
-        'remoteModel': remoteModel,
-        'remoteApiKey': remoteApiKey,
-      }));
-    } catch (_) {}
-  }
-
-  Future<void> saveSettings() => _save();
-
-  Future<void> setLocalModel(String prootPath) async {
-    llamaLocalModelPath = prootPath;
-    sourceId = 'local';
-    await _save();
-  }
-
-  Future<void> setHfModel(String ref) async {
-    llamaModelRef = ref.trim();
-    llamaLocalModelPath = null;
-    sourceId = 'local';
-    await _save();
-  }
-
-  Future<void> setLocalSource() async {
-    sourceId = 'local';
-    await _save();
-  }
-
-  Future<void> setRemoteSource({
-    required String id,
-    required String baseUrl,
-    required String model,
-    required String apiKey,
-  }) async {
-    sourceId = id;
-    remoteBaseUrl = baseUrl.trim();
-    remoteModel = model.trim();
-    remoteApiKey = apiKey.trim();
-    await _save();
-  }
-
-  void resetSettings() {
-    llamaThreads = 6;
-    llamaCtx = 8192;
-    kvCacheType = 'q4_0';
-    temp = 1.0;
-    topP = 0.95;
-    topK = 64;
-    llamaPort = 8080;
-    agentPort = 8765;
-  }
-
-  Future<List<ModelFile>> scanLocalModels() async {
-    final rootfs = _cm.rootfsPath;
-    if (rootfs == null) return [];
-    final modelsDir = Directory('$rootfs/root/models');
-    if (!await modelsDir.exists()) return [];
-    final out = <ModelFile>[];
-    final seen = <String>{};
-    try {
-      await for (final entity
-          in modelsDir.list(recursive: true, followLinks: false)) {
-        final p = entity.path;
-        if (!p.toLowerCase().endsWith('.gguf')) continue;
-        final name = p.split('/').last;
-        if (name.toLowerCase().startsWith('mmproj')) continue;
-        final prootPath = p.substring(rootfs.length);
-        if (!seen.add(prootPath)) continue;
-        int size = 0;
-        try {
-          size = await File(p).length();
-        } catch (_) {}
-        if (size < _minModelBytes) continue;
-        out.add(ModelFile(prootPath, name, size));
+    if (raw != null) {
+      try {
+        final list = (jsonDecode(raw) as List)
+            .map((e) => LlmSource.fromJson(e as Map<String, dynamic>))
+            .toList();
+        _sources = list;
+      } catch (_) {
+        _sources = List.from(defaults);
       }
-    } catch (_) {}
-    out.sort((a, b) => a.name.compareTo(b.name));
-    return out;
-  }
-
-  // ---- Comandos -------------------------------------------------------------
-
-  String _fmt(double d) => d.toStringAsFixed(2);
-
-  String _llamaCommand() {
-    final modelArg = usingLocalModel
-        ? '-m ${llamaLocalModelPath!.trim()}'
-        : '-hf $llamaModelRef';
-    final kvFlag =
-        kvCacheType == 'f16' ? '' : ' -ctk $kvCacheType -ctv $kvCacheType';
-    return 'cd /root/llama.cpp; ./build/bin/llama-server $modelArg '
-            '--host 127.0.0.1 --port $llamaPort -c $llamaCtx -t $llamaThreads -fa on$kvFlag '
-            '--temp ${_fmt(temp)} --top-p ${_fmt(topP)} --top-k $topK '
-        r'& echo $! > /tmp/llama.pid; wait';
-  }
-
-  String _agentCommand() {
-    // La fuente decide a qué endpoint OpenAI apunta el agente.
-    final base = usingRemote ? remoteBaseUrl : 'http://127.0.0.1:$llamaPort/v1';
-    final model = usingRemote ? remoteModel : 'gemma-4-e2b';
-    final key =
-        (usingRemote && remoteApiKey.isNotEmpty) ? remoteApiKey : 'not-needed';
-    // Variables EFÍMERAS: viven solo en el entorno del proceso, no se escriben
-    // a ningún fichero del rootfs.
-    final env = "LLM_BASE_URL='$base' LLM_MODEL='$model' LLM_API_KEY='$key' "
-        "LLAMA_PORT=$llamaPort AGENT_PORT=$agentPort";
-    return 'cd /root/agent; source /root/agent-env/bin/activate; $env python agent_server.py '
-        r'& echo $! > /tmp/agent.pid; wait';
-  }
-
-  // ---- Arranque / parada ----------------------------------------------------
-
-  void startLlama() {
-    if (_llamaPty != null) return;
-    if (usingRemote) {
-      _push(llamaLog, '[lc] Fuente remota activa: no se usa llama local.');
-      return;
-    }
-    if (!_cm.isReady) {
-      _push(llamaLog, '[error] El contenedor Debian aún no está listo.');
-      return;
-    }
-    _push(llamaLog, '[lc] Arrancando llama-server… ($currentModelLabel)');
-    llamaStarting.value = true;
-    final pty = _cm.startProcess(_llamaCommand());
-    _llamaPty = pty;
-    _attach(pty, llamaLog, () {
-      _llamaPty = null;
-      llamaStarting.value = false;
-      _push(llamaLog, '[lc] llama-server finalizó.');
-      _syncForeground();
-    });
-    _syncForeground();
-  }
-
-  void stopLlama() {
-    _push(llamaLog, '[lc] Deteniendo llama-server…');
-    _killService(_llamaPty, '/tmp/llama.pid', 'build/bin/llama-server');
-    _llamaPty = null;
-    llamaStarting.value = false;
-    _syncForeground();
-  }
-
-  void startAgent() {
-    if (_agentPty != null) return;
-    if (!_cm.isReady) {
-      _push(agentLog, '[error] El contenedor Debian aún no está listo.');
-      return;
-    }
-    final src = usingRemote ? 'remoto: $remoteBaseUrl ($remoteModel)' : 'local';
-    _push(agentLog, '[lc] Arrancando agent-server… [fuente: $src]');
-    agentStarting.value = true;
-    final pty = _cm.startProcess(_agentCommand());
-    _agentPty = pty;
-    _attach(pty, agentLog, () {
-      _agentPty = null;
-      agentStarting.value = false;
-      _push(agentLog, '[lc] agent-server finalizó.');
-      _syncForeground();
-    });
-    _syncForeground();
-  }
-
-  void stopAgent() {
-    _push(agentLog, '[lc] Deteniendo agent-server…');
-    _killService(_agentPty, '/tmp/agent.pid', 'agent_server.py');
-    _agentPty = null;
-    agentStarting.value = false;
-    _syncForeground();
-  }
-
-  // ---- Internos -------------------------------------------------------------
-
-  void _syncForeground() {
-    if (llamaLaunched || agentLaunched) {
-      ForegroundService.start();
     } else {
-      ForegroundService.stop();
+      _sources = List.from(defaults);
+    }
+
+    // Restaurar fuente activa
+    final activeType = prefs.getString(_prefActiveKey);
+    if (activeType != null) {
+      _activeSource = _sources.firstWhere(
+        (s) => s.type.name == activeType,
+        orElse: () => _sources.first,
+      );
+    }
+
+    notifyListeners();
+  }
+
+  // ── Guardar ──────────────────────────────────────────────
+  Future<void> _save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefKey, jsonEncode(_sources.map((s) => s.toJson()).toList()));
+    if (_activeSource != null) {
+      await prefs.setString(_prefActiveKey, _activeSource!.type.name);
     }
   }
 
-  void _attach(Pty pty, ValueNotifier<List<String>> log, VoidCallback onExit) {
-    pty.output
-        .cast<List<int>>()
-        .transform(const Utf8Decoder(allowMalformed: true))
-        .listen((data) {
-      for (final line in const LineSplitter().convert(data)) {
-        _push(log, line);
+  // ── Actualizar fuente ────────────────────────────────────
+  Future<void> updateSource(LlmSourceType type, {
+    String? apiKey,
+    String? model,
+    String? baseUrl,
+    bool?   isEnabled,
+  }) async {
+    final idx = _sources.indexWhere((s) => s.type == type);
+    if (idx == -1) return;
+
+    _sources[idx] = _sources[idx].copyWith(
+      apiKey:    apiKey,
+      model:     model,
+      baseUrl:   baseUrl,
+      isEnabled: isEnabled,
+    );
+    await _save();
+    notifyListeners();
+  }
+
+  // ── Seleccionar fuente activa ────────────────────────────
+  Future<void> setActive(LlmSourceType type) async {
+    _activeSource = _sources.firstWhere(
+      (s) => s.type == type,
+      orElse: () => _sources.first,
+    );
+    await _save();
+    notifyListeners();
+  }
+
+  // ── Obtener URL base + headers para una fuente ───────────
+  static Map<String, String> headersFor(LlmSource source) {
+    final base = {
+      'Content-Type': 'application/json',
+    };
+
+    switch (source.type) {
+      case LlmSourceType.groq:
+      case LlmSourceType.cerebras:
+      case LlmSourceType.openRouter:
+        return {...base, 'Authorization': 'Bearer ${source.apiKey}'};
+
+      case LlmSourceType.gemini:
+        // Gemini usa OpenAI-compatible con Bearer
+        return {...base, 'Authorization': 'Bearer ${source.apiKey}'};
+
+      case LlmSourceType.gpuLocal:
+        // Sin auth — servidor local
+        return base;
+
+      case LlmSourceType.custom:
+        if (source.apiKey.isNotEmpty) {
+          return {...base, 'Authorization': 'Bearer ${source.apiKey}'};
+        }
+        return base;
+    }
+  }
+
+  // ── Test de conexión ─────────────────────────────────────
+  Future<({bool ok, String message})> testSource(LlmSource source) async {
+    try {
+      if (source.type == LlmSourceType.gpuLocal) {
+        // Para GPU local, verificamos el endpoint de health
+        final url = Uri.parse('${ApiEndpoints.gpuLocal}/models');
+        final resp = await http.get(url).timeout(const Duration(seconds: 5));
+        if (resp.statusCode == 200) {
+          return (ok: true, message: 'MediaPipe GPU activo ✓');
+        }
+        return (ok: false, message: 'MediaPipe no responde (¿modelo cargado?)');
       }
-    }, onError: (_) {}, cancelOnError: false);
-    pty.exitCode.then((_) => onExit());
-  }
 
-  void _killService(Pty? held, String pidFile, String pattern) {
-    try {
-      held?.kill();
-    } catch (_) {}
-    if (!_cm.isReady) return;
-    final cleanup = r'P=$(cat ' +
-        pidFile +
-        r' 2>/dev/null); if [ -n "$P" ]; then kill $P 2>/dev/null; sleep 0.4; kill -9 $P 2>/dev/null; fi; pkill -9 -f "' +
-        pattern +
-        r'" 2>/dev/null; rm -f ' +
-        pidFile +
-        r'; exit 0';
-    try {
-      final p = _cm.startProcess(cleanup);
-      Future.delayed(const Duration(seconds: 3), () {
-        try {
-          p.kill();
-        } catch (_) {}
+      final baseUrl = ApiEndpoints.forSource(source);
+      if (baseUrl.isEmpty) {
+        return (ok: false, message: 'URL base no configurada');
+      }
+
+      final url  = Uri.parse('$baseUrl/chat/completions');
+      final body = jsonEncode({
+        'model': source.model,
+        'messages': [{'role': 'user', 'content': 'ping'}],
+        'max_tokens': 5,
       });
-    } catch (_) {}
-  }
 
-  void _push(ValueNotifier<List<String>> log, String line) {
-    final updated = List<String>.from(log.value)..add(line);
-    while (updated.length > _maxLogLines) {
-      updated.removeAt(0);
+      final resp = await http.post(
+        url,
+        headers: headersFor(source),
+        body: body,
+      ).timeout(const Duration(seconds: 10));
+
+      if (resp.statusCode == 200) {
+        return (ok: true, message: 'Conexión OK ✓');
+      }
+      return (ok: false, message: 'HTTP ${resp.statusCode}');
+    } catch (e) {
+      return (ok: false, message: e.toString().split('\n').first);
     }
-    log.value = updated;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helper: detectar si una fuente es GPU local
+// (usado en agent_server.py para bypass de tool-calling)
+// ─────────────────────────────────────────────────────────────
+
+extension LlmSourceExt on LlmSource {
+  bool get isGpuLocal => type == LlmSourceType.gpuLocal;
+  bool get supportsToolCalling => !isGpuLocal;
+
+  String get displayModel {
+    if (type == LlmSourceType.gpuLocal) return 'GPU MediaPipe (.task)';
+    return model;
   }
 }
