@@ -421,25 +421,6 @@ async def health():
     }
 
 
-@app.post("/run", response_model=AgentResponse)
-async def run_task(req: AgentRequest):
-    """Endpoint principal — ejecuta una tarea en el agente."""
-    if not req.task.strip():
-        raise HTTPException(status_code=400, detail="task no puede estar vacío")
-
-    log.info(
-        "Tarea recibida | fuente: %s | modelo: %s | gpu_local: %s",
-        req.llm_base_url[:40] if req.llm_base_url else "auto",
-        req.llm_model,
-        _is_gpu_local(req),
-    )
-
-    if _is_gpu_local(req):
-        return await _direct_chat_gpu(req)
-    else:
-        return await _run_agent(req)
-
-
 @app.post("/chat", response_model=AgentResponse)
 async def chat(req: AgentRequest):
     """Alias de /run para compatibilidad."""
