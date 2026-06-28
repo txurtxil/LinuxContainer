@@ -470,12 +470,11 @@ async def run_streaming(req: AgentRequest):
         else:
             result = await _run_agent(req)
 
-        # Emitir como SSE
-        yield f"data: {_json.dumps({'type': 'answer', 'text': result.answer})}\n\n"
+        # Emitir en formato que espera Flutter agent_chat.dart
         if result.thoughts:
             for t in result.thoughts:
-                yield f"data: {_json.dumps({'type': 'thought', 'text': t})}\n\n"
-        yield f"data: {_json.dumps({'type': 'done'})}\n\n"
+                yield f"data: {_json.dumps({'type': 'step', 'thought': t})}\n\n"
+        yield f"data: {_json.dumps({'type': 'final', 'answer': result.answer})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
