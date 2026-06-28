@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -474,6 +475,29 @@ async def gpu_status():
 # ─────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────
+
+@app.post("/run")
+async def run_streaming(req: AgentRequest):
+    """Endpoint SSE para el cliente Flutter — emite data: {...} líneas."""
+    import json as _json
+    if not req.task.strip():
+        raise HTTPException(status_code=400, detail="task no puede estar vacio")
+
+    async def generate():
+        if _is_gpu_local(req):
+            result = await _direct_chat_gpu(req)
+        else:
+            result = await _run_agent(req)
+
+        # Emitir como SSE
+        yield f"data: {_json.dumps({'type': 'answer', 'text': result.answer})}\n\n"
+        if result.thoughts:
+            for t in result.thoughts:
+                yield f"data: {_json.dumps({'type': 'thought', 'text': t})}\n\n"
+        yield f"data: {_json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
 
 if __name__ == "__main__":
     import uvicorn
