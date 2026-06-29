@@ -100,10 +100,14 @@ class ContainerManager {
   /// Devuelve el Pty para poder leer su salida y matarlo (pty.kill()).
   /// Usado por los servicios (llama-server, agent-server).
   Pty startProcess(String command, {int rows = 24, int columns = 80}) {
+    // Proceso NO interactivo: bash -c directo, SIN --login.
+    // --login ejecutaria .bashrc que lanza el menu lc-menu y bloquea el comando.
+    final env = _baseEnv();
+    env['LC_NO_MENU'] = '1';
     return Pty.start(
       _prootPath!,
-      arguments: _baseArgs(['/bin/bash', '--login', '-c', command]),
-      environment: _baseEnv(),
+      arguments: _baseArgs(['/bin/bash', '-c', command]),
+      environment: env,
       rows: rows,
       columns: columns,
     );

@@ -1,165 +1,177 @@
 #!/bin/bash
 # ============================================================
-# XTR Terminal — Preparar rootfs Debian arm64 para bundlear
-# en assets/ de la APK
-#
-# Requisitos en bc-250:
-#   sudo apt install debootstrap qemu-user-static
-#
+# XTR Terminal — Preparar rootfs Debian arm64
 # RESULTADO: android/app/src/main/assets/rootfs.tar.gz
-#            (~150-200 MB comprimido, ~500 MB descomprimido)
-#
-# Ejecutar desde: ~/linux_container_build/
 # ============================================================
-set -e
-CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+set -euo pipefail
+CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 log()  { echo -e "${CYAN}[ROOTFS]${NC} $1"; }
 ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+err()  { echo -e "${RED}[ERR]${NC} $1"; exit 1; }
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ROOTFS_DIR="/tmp/xtr_rootfs_build"
 ASSETS_DIR="$PROJECT_DIR/android/app/src/main/assets"
 OUTPUT="$ASSETS_DIR/rootfs.tar.gz"
 
-# ── Comprobar si ya existe un rootfs precompilado ────────────
-# Si ya tienes un rootfs en el dispositivo o lo has exportado,
-# puedes saltarte el debootstrap y usarlo directamente:
-#
-#   tar czf /tmp/rootfs_export.tar.gz -C /ruta/al/rootfs .
-#   cp /tmp/rootfs_export.tar.gz $OUTPUT
-#
-# Descomenta las 3 líneas siguientes si ya tienes el tar:
-# EXISTING_ROOTFS="/ruta/a/tu/rootfs.tar.gz"
-# cp "$EXISTING_ROOTFS" "$OUTPUT"
-# exit 0
+log "Proyecto: $PROJECT_DIR"
+log "Output:   $OUTPUT"
+echo ""
 
-# ── 1. Instalar dependencias ─────────────────────────────────
-log "Instalando debootstrap y qemu-user-static..."
-sudo apt install -y debootstrap qemu-user-static binfmt-support > /dev/null 2>&1
-sudo update-binfmts --enable qemu-aarch64 > /dev/null 2>&1 || true
-ok "Dependencias listas"
+# ── 1. Instalar debootstrap ───────────────────────────────────
+log "Paso 1/7 — Instalando debootstrap..."
+sudo apt-get install -y debootstrap || err "No se pudo instalar debootstrap"
+ok "debootstrap: $(debootstrap --version 2>/dev/null | head -1)"
 
-# ── 2. Crear rootfs mínimo Debian Bookworm arm64 ────────────
+# ── Localizar qemu-aarch64 (little-endian, sin _be) ──────────
+log "Localizando qemu-aarch64..."
+QEMU_BIN=""
+for candidate in \
+    /usr/bin/qemu-aarch64-static \
+    /usr/bin/qemu-aarch64; do
+  if [ -f "$candidate" ] && [[ "$candidate" != *"_be"* ]]; then
+    QEMU_BIN="$candidate"
+    break
+  fi
+done
+
+[ -n "$QEMU_BIN" ] || err "No se encontró qemu-aarch64. Instala: sudo apt install qemu-user"
+ok "qemu encontrado: $QEMU_BIN"
+
+# Dentro del rootfs siempre debe llamarse qemu-aarch64-static
+QEMU_DEST_NAME="qemu-aarch64-static"
+
+# ── 2. Limpiar directorio previo ─────────────────────────────
 if [ -d "$ROOTFS_DIR" ]; then
-  warn "Directorio $ROOTFS_DIR ya existe — eliminando..."
+  warn "Limpiando rootfs anterior..."
   sudo rm -rf "$ROOTFS_DIR"
 fi
+sudo mkdir -p "$ROOTFS_DIR"
 
-log "Ejecutando debootstrap (Debian Bookworm arm64)..."
-log "Esto tarda 5-15 minutos dependiendo de tu conexión..."
+# ── 3. Debootstrap fase 1 ────────────────────────────────────
+log "Paso 2/7 — debootstrap fase 1 (3-5 min)..."
 sudo debootstrap \
   --arch=arm64 \
   --foreign \
-  --include=apt,apt-utils,curl,wget,ca-certificates,gnupg,lsb-release \
+  --include=apt,apt-utils,curl,wget,ca-certificates \
   bookworm \
   "$ROOTFS_DIR" \
   http://deb.debian.org/debian/
+ok "Fase 1 completada"
 
-# Segunda fase con qemu
-sudo cp /usr/bin/qemu-aarch64-static "$ROOTFS_DIR/usr/bin/" 2>/dev/null || true
-sudo chroot "$ROOTFS_DIR" /debootstrap/debootstrap --second-stage
-ok "Debootstrap completado"
+# ── 4. Copiar qemu al rootfs ─────────────────────────────────
+log "Paso 3/7 — Copiando qemu al rootfs..."
+sudo mkdir -p "$ROOTFS_DIR/usr/bin"
+sudo cp "$QEMU_BIN" "$ROOTFS_DIR/usr/bin/$QEMU_DEST_NAME"
+sudo chmod +x "$ROOTFS_DIR/usr/bin/$QEMU_DEST_NAME"
+ok "Copiado como /usr/bin/$QEMU_DEST_NAME"
 
-# ── 3. Configuración básica del rootfs ───────────────────────
-log "Configurando rootfs..."
+# Registrar el intérprete con binfmt_misc si es posible
+sudo update-binfmts --enable qemu-aarch64 2>/dev/null || true
 
-# sources.list
-sudo tee "$ROOTFS_DIR/etc/apt/sources.list" > /dev/null << 'EOF'
+# ── 5. Debootstrap fase 2 ────────────────────────────────────
+log "Paso 4/7 — debootstrap fase 2 (3-5 min)..."
+sudo chroot "$ROOTFS_DIR" "/usr/bin/$QEMU_DEST_NAME" \
+  /bin/bash /debootstrap/debootstrap --second-stage
+ok "Fase 2 completada — Debian Bookworm arm64 base lista"
+
+# ── 6. Configurar rootfs ─────────────────────────────────────
+log "Paso 5/7 — Configurando sistema base..."
+
+sudo tee "$ROOTFS_DIR/etc/apt/sources.list" > /dev/null << 'SRCLIST'
 deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
 deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
 deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
-EOF
+SRCLIST
 
-# hostname
 echo "xtr-terminal" | sudo tee "$ROOTFS_DIR/etc/hostname" > /dev/null
-
-# resolv.conf
-sudo tee "$ROOTFS_DIR/etc/resolv.conf" > /dev/null << 'EOF'
+sudo tee "$ROOTFS_DIR/etc/resolv.conf" > /dev/null << 'RESOLV'
 nameserver 8.8.8.8
 nameserver 1.1.1.1
-EOF
+RESOLV
 
-# Instalar paquetes base dentro del rootfs
-sudo chroot "$ROOTFS_DIR" /bin/bash << 'CHROOT'
+log "Instalando Python y herramientas (5-8 min)..."
+sudo chroot "$ROOTFS_DIR" "/usr/bin/$QEMU_DEST_NAME" /bin/bash << 'CHROOT'
+set -e
 export DEBIAN_FRONTEND=noninteractive
-apt update -q
-apt install -y --no-install-recommends \
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+echo "--- apt update ---"
+apt-get update -q
+echo "--- Instalando paquetes ---"
+apt-get install -y --no-install-recommends \
   python3 python3-pip python3-venv python3-dev \
   git curl wget ca-certificates \
-  build-essential cmake \
-  nano vim \
-  procps htop \
-  openssh-client \
-  locales \
-  2>/dev/null
-# Configurar locale
+  build-essential nano procps locales
+echo "--- Locale ---"
 echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
-locale-gen > /dev/null 2>&1
-# Limpiar cache apt para reducir tamaño
-apt clean
+locale-gen
+echo "--- Limpiando cache ---"
+apt-get clean
 rm -rf /var/lib/apt/lists/*
+echo "--- OK ---"
 CHROOT
-ok "Paquetes base instalados en rootfs"
+ok "Paquetes base instalados"
 
-# ── 4. Instalar smolagents en el rootfs ──────────────────────
-log "Instalando smolagents en el rootfs..."
-sudo chroot "$ROOTFS_DIR" /bin/bash << 'CHROOT'
+# ── 7. Instalar smolagents ────────────────────────────────────
+log "Paso 6/7 — Instalando smolagents (5-10 min)..."
+sudo chroot "$ROOTFS_DIR" "/usr/bin/$QEMU_DEST_NAME" /bin/bash << 'CHROOT'
+set -e
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 cd /root
+echo "--- Creando venv ---"
 python3 -m venv agent-env
-source agent-env/bin/activate
-pip install --quiet --upgrade pip
-pip install --quiet \
-  smolagents \
-  fastapi \
-  uvicorn \
-  httpx \
-  openai \
-  requests
-deactivate
+echo "--- pip install ---"
+agent-env/bin/pip install --upgrade pip --quiet
+agent-env/bin/pip install \
+  smolagents "fastapi>=0.111.0" "uvicorn[standard]" \
+  httpx openai requests --quiet
+echo "--- smolagents: $(agent-env/bin/pip show smolagents | grep Version) ---"
 CHROOT
-ok "smolagents instalado en /root/agent-env"
+ok "smolagents instalado"
 
-# ── 5. Copiar agent_server.py al rootfs ──────────────────────
-AGENT_SERVER_SRC="$PROJECT_DIR/assets/agent_server.py"
-if [ -f "$AGENT_SERVER_SRC" ]; then
-  sudo cp "$AGENT_SERVER_SRC" "$ROOTFS_DIR/root/agent_server.py"
-  ok "agent_server.py copiado al rootfs"
-else
-  warn "No se encontró $AGENT_SERVER_SRC — el setup inicial lo instalará"
-fi
+# Copiar ficheros al rootfs
+for f in agent_server.py xtr_setup.sh; do
+  SRC="$PROJECT_DIR/assets/$f"
+  if [ -f "$SRC" ]; then
+    sudo cp "$SRC" "$ROOTFS_DIR/root/$f"
+    sudo chmod +x "$ROOTFS_DIR/root/$f" 2>/dev/null || true
+    ok "Copiado: $f"
+  else
+    warn "$f no encontrado en assets/ — se instalará desde Setup Inicial"
+  fi
+done
 
-# ── 6. Copiar script de setup inicial ────────────────────────
-sudo cp "$PROJECT_DIR/assets/xtr_setup.sh" "$ROOTFS_DIR/root/xtr_setup.sh" 2>/dev/null || true
-sudo chmod +x "$ROOTFS_DIR/root/xtr_setup.sh" 2>/dev/null || true
+sudo tee "$ROOTFS_DIR/root/start_agent.sh" > /dev/null << 'STARTSH'
+#!/bin/bash
+source /root/agent-env/bin/activate
+cd /root
+exec uvicorn agent_server:app --host 127.0.0.1 --port 8765 --workers 1
+STARTSH
+sudo chmod +x "$ROOTFS_DIR/root/start_agent.sh"
 
-# ── 7. Eliminar qemu-static (no necesario en ARM real) ───────
-sudo rm -f "$ROOTFS_DIR/usr/bin/qemu-aarch64-static"
+# Eliminar qemu del rootfs final (el ARM real no lo necesita)
+sudo rm -f "$ROOTFS_DIR/usr/bin/$QEMU_DEST_NAME"
 
-# ── 8. Comprimir rootfs ──────────────────────────────────────
+# ── 8. Comprimir ─────────────────────────────────────────────
+log "Paso 7/7 — Comprimiendo rootfs (2-5 min)..."
 mkdir -p "$ASSETS_DIR"
-log "Comprimiendo rootfs → $OUTPUT"
-log "Esto puede tardar varios minutos..."
 sudo tar czf "$OUTPUT" \
-  --exclude="$ROOTFS_DIR/proc/*" \
-  --exclude="$ROOTFS_DIR/sys/*" \
-  --exclude="$ROOTFS_DIR/dev/*" \
-  --exclude="$ROOTFS_DIR/run/*" \
+  --exclude="./proc" \
+  --exclude="./sys" \
+  --exclude="./dev" \
+  --exclude="./run" \
+  --exclude="./tmp" \
   -C "$ROOTFS_DIR" .
 
-SIZE=$(du -sh "$OUTPUT" | cut -f1)
-ok "rootfs.tar.gz generado: $SIZE"
-
-# ── 9. Limpiar ───────────────────────────────────────────────
+sudo chown "$(whoami):$(whoami)" "$OUTPUT"
 sudo rm -rf "$ROOTFS_DIR"
-ok "Limpieza completada"
 
+SIZE=$(du -sh "$OUTPUT" | cut -f1)
 echo ""
-log "=== IMPORTANTE ==="
-echo "rootfs bundleado en: $OUTPUT ($SIZE)"
+ok "══════════════════════════════════════"
+ok "  rootfs.tar.gz generado: $SIZE"
+ok "  $OUTPUT"
+ok "══════════════════════════════════════"
 echo ""
-echo "Añade a android/app/build.gradle.kts (en android block):"
-echo "  aaptOptions { noCompress += listOf(\"gz\") }"
-echo ""
-echo "El APK será ~$SIZE más grande."
-echo "Si supera 200 MB considera usar Android App Bundle (AAB)."
+log "Siguiente: cd $PROJECT_DIR && ./build_and_deploy.sh"

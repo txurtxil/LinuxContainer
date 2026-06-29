@@ -1,14 +1,19 @@
 package com.example.linux_container
 
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.util.Log
 import android.widget.Toast
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.*
 import java.io.*
@@ -16,308 +21,314 @@ import java.util.zip.GZIPInputStream
 
 class MainActivity : FlutterActivity() {
 
-    companion object {
-        private const val TAG = "XTR"
-        private const val CHANNEL_MAIN      = "xtr/main"
-        private const val CHANNEL_MEDIAPIPE = "xtr/mediapipe"
-        private const val CHANNEL_MP_STREAM = "xtr/mediapipe/stream"
+    private val NATIVE_PATHS     = "linux_container/native_paths"
+    private val FOREGROUND       = "linux_container/foreground"
+    private val MEDIAPIPE        = "xtr/mediapipe"
+    private val MEDIAPIPE_STREAM = "xtr/mediapipe/stream"
+    private val CHANNEL_MAIN     = "xtr/main"
 
-        // Directorio base de datos de la app (no requiere permisos extra)
-        // /data/data/com.example.linux_container/files/
-        private const val PREFS_NAME       = "xtr_prefs"
-        private const val PREF_ROOTFS_DONE = "rootfs_extracted"
-        private const val ROOTFS_ASSET     = "rootfs.tar.gz"
-    }
+    private val REQUEST_IMPORT = 4711
+    private var pendingImport: MethodChannel.Result? = null
+    private var mpSink: EventChannel.EventSink? = null
 
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    // Directorio donde se extrae el rootfs
+    // Prefs para saber si el rootfs ya fue extraído
+    private val PREFS_NAME       = "xtr_prefs"
+    private val PREF_ROOTFS_DONE = "rootfs_extracted"
+    private val ROOTFS_ASSET     = "rootfs.tar.gz"
+
     private val rootfsDir: File get() = File(filesDir, "debian")
 
-    // ── Flutter engine ───────────────────────────────────────
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
 
-        // Canal principal
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_MAIN)
+        // ── Canal original: ruta de libs nativas (proot) ─────
+        MethodChannel(messenger, NATIVE_PATHS)
+            .setMethodCallHandler { call, result ->
+                if (call.method == "getNativeLibraryDir") {
+                    result.success(applicationContext.applicationInfo.nativeLibraryDir)
+                } else {
+                    result.notImplemented()
+                }
+            }
+
+        // ── Canal original: foreground service del agente ────
+        MethodChannel(messenger, FOREGROUND)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-
-                    // ── Estado del rootfs ────────────────────
-                    "getRootfsStatus" -> {
-                        result.success(mapOf(
-                            "extracted" to isRootfsExtracted(),
-                            "path"      to rootfsDir.absolutePath
-                        ))
+                    "start" -> {
+                        val i = Intent(this, AgentForegroundService::class.java)
+                        i.action = AgentForegroundService.ACTION_START
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i)
+                        else startService(i)
+                        result.success(true)
                     }
-
-                    // ── Extraer rootfs (llamado desde Flutter) ─
-                    "extractRootfs" -> {
-                        extractRootfsAsync(result)
+                    "stop" -> {
+                        val i = Intent(this, AgentForegroundService::class.java)
+                        i.action = AgentForegroundService.ACTION_STOP
+                        startService(i)
+                        result.success(true)
                     }
-
-                    // ── Ejecutar comando en proot ────────────
-                    "runInProot" -> {
-                        val cmd = call.argument<String>("command") ?: ""
-                        runInProot(cmd, result)
-                    }
-
-                    // ── Ruta del rootfs ─────────────────────
-                    "getRootfsPath" -> {
-                        result.success(rootfsDir.absolutePath)
-                    }
-
-                    // ── Info del sistema ─────────────────────
-                    "getSystemInfo" -> {
-                        result.success(mapOf(
-                            "rootfsPath"  to rootfsDir.absolutePath,
-                            "filesDir"    to filesDir.absolutePath,
-                            "extracted"   to isRootfsExtracted()
-                        ))
-                    }
-
                     else -> result.notImplemented()
                 }
             }
 
-        // Canal MediaPipe (delega a MediaPipeEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_MEDIAPIPE)
+        // ── Canal original: MediaPipe ─────────────────────────
+        MethodChannel(messenger, MEDIAPIPE)
             .setMethodCallHandler { call, result ->
-                MediaPipeEngine.handleMethodCall(this, call, result)
+                when (call.method) {
+                    "load" -> {
+                        val path = call.argument<String>("path")
+                        val gpu  = call.argument<Boolean>("gpu") ?: true
+                        if (path == null) { result.error("ARG", "Falta 'path'", null); return@setMethodCallHandler }
+                        Thread {
+                            val err = MediaPipeEngine.load(applicationContext, path, gpu)
+                            runOnUiThread { if (err == null) result.success(true) else result.error("LOAD", err, null) }
+                        }.start()
+                    }
+                    "generate" -> {
+                        val prompt = call.argument<String>("prompt")
+                        if (prompt == null) { result.error("ARG", "Falta 'prompt'", null); return@setMethodCallHandler }
+                        Thread { runGenerate(prompt, result) }.start()
+                    }
+                    "unload" -> { MediaPipeEngine.close(); result.success(true) }
+                    "importModel" -> {
+                        if (pendingImport != null) { result.error("BUSY", "Importación en curso", null); return@setMethodCallHandler }
+                        pendingImport = result
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                        }
+                        try { startActivityForResult(intent, REQUEST_IMPORT) }
+                        catch (e: Exception) { pendingImport = null; result.error("PICK", e.message, null) }
+                    }
+                    "serverStart" -> {
+                        val port = call.argument<Int>("port") ?: 8090
+                        val path = call.argument<String>("path")
+                        val gpu  = call.argument<Boolean>("gpu") ?: true
+                        Thread {
+                            var err: String? = null
+                            if (path != null && !MediaPipeEngine.isLoaded)
+                                err = MediaPipeEngine.load(applicationContext, path, gpu)
+                            if (err == null && !MediaPipeEngine.isLoaded)
+                                err = "El modelo no está cargado."
+                            if (err == null) err = MediaPipeServer.start(port)
+                            val e = err
+                            runOnUiThread { if (e == null) result.success(true) else result.error("SERVER", e, null) }
+                        }.start()
+                    }
+                    "serverStop"   -> { MediaPipeServer.stop(); result.success(true) }
+                    "serverStatus" -> result.success(mapOf(
+                        "running"     to MediaPipeServer.isRunning,
+                        "port"        to MediaPipeServer.port,
+                        "modelLoaded" to MediaPipeEngine.isLoaded,
+                        "modelPath"   to (MediaPipeEngine.loadedPath ?: "")
+                    ))
+                    else -> result.notImplemented()
+                }
+            }
+
+        // ── Canal original: stream de tokens MediaPipe ────────
+        EventChannel(messenger, MEDIAPIPE_STREAM)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) { mpSink = events }
+                override fun onCancel(arguments: Any?) { mpSink = null }
+            })
+
+        // ── Canal nuevo: gestión del rootfs bundleado ─────────
+        MethodChannel(messenger, CHANNEL_MAIN)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getRootfsStatus" -> result.success(mapOf(
+                        "extracted" to isRootfsExtracted(),
+                        "path"      to rootfsDir.absolutePath
+                    ))
+                    "extractRootfs"  -> extractRootfsAsync(result)
+                    "getRootfsPath"  -> result.success(rootfsDir.absolutePath)
+                    "getSystemInfo"  -> result.success(mapOf(
+                        "rootfsPath" to rootfsDir.absolutePath,
+                        "filesDir"   to filesDir.absolutePath,
+                        "extracted"  to isRootfsExtracted(),
+                        "nativeLibDir" to applicationContext.applicationInfo.nativeLibraryDir
+                    ))
+                    // runInProot ya no se usa desde Kotlin — lo hace Dart via native_paths
+                    else -> result.notImplemented()
+                }
             }
     }
 
-    // ── onCreate: verificar rootfs en primer arranque ────────
+    // ── onCreate: diálogo de primer arranque ──────────────────
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (!isRootfsExtracted()) {
-            // Mostrar diálogo y extraer — Flutter aún no está listo para recibir
-            // notificaciones, así que guardamos el estado y Flutter lo consulta
-            showFirstRunDialog()
-        }
+        // El rootfs lo gestiona ContainerBootstrap.dart (sistema original)
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+        MediaPipeServer.stop()
+        MediaPipeEngine.close()
         mainScope.cancel()
+        super.onDestroy()
     }
 
-    // ── Primer arranque: diálogo + extracción automática ─────
-    private fun showFirstRunDialog() {
-        Handler(Looper.getMainLooper()).postDelayed({
-            AlertDialog.Builder(this)
-                .setTitle("XTR Terminal — Primera ejecución")
-                .setMessage(
-                    "Se va a descomprimir el sistema Debian (~500 MB).\n\n" +
-                    "Este proceso tarda 1-3 minutos y sólo ocurre una vez."
-                )
-                .setCancelable(false)
-                .setPositiveButton("Comenzar") { _, _ ->
-                    extractRootfsAsync(null)
-                }
-                .show()
-        }, 1500) // esperar a que Flutter cargue la UI
-    }
-
-    // ── Extraer rootfs desde assets ──────────────────────────
+    // ── Extracción del rootfs ─────────────────────────────────
     private fun extractRootfsAsync(result: MethodChannel.Result?) {
         mainScope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    doExtractRootfs()
-                }
+                withContext(Dispatchers.IO) { doExtractRootfs() }
                 result?.success(mapOf("success" to true, "path" to rootfsDir.absolutePath))
-                Toast.makeText(
-                    this@MainActivity,
-                    "Sistema Debian listo ✓",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(this@MainActivity, "Sistema Debian listo ✓", Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
-                Log.e(TAG, "Error extrayendo rootfs", e)
+                Log.e("XTR", "Error extrayendo rootfs", e)
                 result?.success(mapOf("success" to false, "error" to e.message))
-                Toast.makeText(
-                    this@MainActivity,
-                    "Error al extraer sistema: ${e.message}",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
 
     private fun doExtractRootfs() {
-        Log.i(TAG, "Iniciando extracción de rootfs...")
-
-        // Verificar que el asset existe
+        Log.i("XTR", "Extrayendo rootfs desde assets...")
         val assetFiles = assets.list("") ?: emptyArray()
-        if (ROOTFS_ASSET !in assetFiles) {
-            throw IOException(
-                "Asset '$ROOTFS_ASSET' no encontrado. " +
-                "Ejecuta 01_prepare_rootfs.sh en bc-250 primero."
-            )
-        }
-
-        // Limpiar directorio previo si existe incompleto
-        if (rootfsDir.exists() && !isRootfsExtracted()) {
-            Log.w(TAG, "Rootfs incompleto encontrado — limpiando...")
-            rootfsDir.deleteRecursively()
-        }
-
+        if (ROOTFS_ASSET !in assetFiles) throw IOException("'$ROOTFS_ASSET' no está en los assets de la APK.")
+        if (rootfsDir.exists() && !isRootfsExtracted()) rootfsDir.deleteRecursively()
         rootfsDir.mkdirs()
 
-        // Abrir el .tar.gz desde assets
-        assets.open(ROOTFS_ASSET).use { assetStream ->
-            GZIPInputStream(BufferedInputStream(assetStream, 65536)).use { gzip ->
-                extractTar(gzip, rootfsDir)
+        // Usar tar del sistema si está disponible (más rápido y robusto)
+        val tarBin = listOf("/system/bin/tar", "/system/xbin/tar", "/usr/bin/tar")
+            .firstOrNull { File(it).exists() }
+
+        if (tarBin != null) {
+            // Extraer el asset a un fichero temporal y luego usar tar
+            val tmpFile = File(cacheDir, "rootfs_tmp.tar.gz")
+            assets.open(ROOTFS_ASSET).use { inp ->
+                FileOutputStream(tmpFile).use { out -> inp.copyTo(out) }
+            }
+            rootfsDir.mkdirs()
+            val proc = ProcessBuilder(tarBin, "xzf", tmpFile.absolutePath, "-C", rootfsDir.absolutePath)
+                .redirectErrorStream(true)
+                .start()
+            val log = proc.inputStream.bufferedReader().readText()
+            val exit = proc.waitFor()
+            tmpFile.delete()
+            if (exit != 0) throw IOException("tar falló (exit $exit): $log")
+        } else {
+            // Fallback: parser TAR en Kotlin
+            assets.open(ROOTFS_ASSET).use { assetStream ->
+                GZIPInputStream(BufferedInputStream(assetStream, 65536)).use { gzip ->
+                    extractTarKotlin(gzip, rootfsDir)
+                }
             }
         }
 
-        // Marcar como completado
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putBoolean(PREF_ROOTFS_DONE, true)
-            .apply()
-
-        Log.i(TAG, "Rootfs extraído correctamente en ${rootfsDir.absolutePath}")
+            .edit().putBoolean(PREF_ROOTFS_DONE, true).apply()
+        Log.i("XTR", "Rootfs extraído en ${rootfsDir.absolutePath}")
     }
 
-    // ── Parser TAR mínimo (sin dependencias externas) ────────
-    private fun extractTar(input: InputStream, destDir: File) {
+    private fun extractTarKotlin(input: InputStream, destDir: File) {
         val header = ByteArray(512)
-        var totalBytes = 0L
-
         while (true) {
-            var bytesRead = 0
-            while (bytesRead < 512) {
-                val n = input.read(header, bytesRead, 512 - bytesRead)
-                if (n == -1) return
-                bytesRead += n
-            }
-
-            // Fin de archivo TAR: dos bloques de ceros
+            var n = 0
+            while (n < 512) { val r = input.read(header, n, 512 - n); if (r == -1) return; n += r }
             if (header.all { it == 0.toByte() }) return
-
-            val name     = header.decodeString(0, 100).trimEnd('\u0000')
-            val sizeOct  = header.decodeString(124, 12).trim().trimEnd('\u0000')
+            val name     = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000')
+            val sizeOct  = String(header, 124, 12, Charsets.US_ASCII).trim().trimEnd('\u0000')
             val typeFlag = header[156].toInt().toChar()
-
             if (name.isEmpty()) continue
             val fileSize = if (sizeOct.isBlank()) 0L else sizeOct.toLong(8)
-
-            val outFile = File(destDir, name).canonicalFile
-            if (!outFile.absolutePath.startsWith(destDir.absolutePath)) {
-                // Path traversal — skip
-                skipBytes(input, fileSize)
-                continue
-            }
-
+            val outFile  = File(destDir, name).canonicalFile
+            if (!outFile.absolutePath.startsWith(destDir.absolutePath)) { skipBytes(input, fileSize); continue }
             when (typeFlag) {
                 '0', '\u0000' -> {
-                    // Fichero regular
                     outFile.parentFile?.mkdirs()
                     FileOutputStream(outFile).use { fos ->
-                        val buf = ByteArray(32768)
-                        var remaining = fileSize
-                        while (remaining > 0) {
-                            val toRead = minOf(buf.size.toLong(), remaining).toInt()
-                            val n = input.read(buf, 0, toRead)
-                            if (n == -1) break
-                            fos.write(buf, 0, n)
-                            remaining -= n
-                            totalBytes += n
-                        }
+                        val buf = ByteArray(32768); var rem = fileSize
+                        while (rem > 0) { val r = input.read(buf, 0, minOf(buf.size.toLong(), rem).toInt()); if (r == -1) break; fos.write(buf, 0, r); rem -= r }
                     }
-                    // Alinear al siguiente bloque de 512
-                    val padding = (512 - (fileSize % 512)) % 512
-                    skipBytes(input, padding)
+                    skipBytes(input, (512 - (fileSize % 512)) % 512)
                 }
                 '2' -> {
-                    // Enlace simbólico
-                    val linkTarget = header.decodeString(157, 100).trimEnd('\u0000')
-                    try {
-                        outFile.parentFile?.mkdirs()
-                        Runtime.getRuntime().exec(
-                            arrayOf("ln", "-sf", linkTarget, outFile.absolutePath)
-                        ).waitFor()
-                    } catch (_: Exception) {}
+                    val target = String(header, 157, 100, Charsets.US_ASCII).trimEnd('\u0000')
+                    try { outFile.parentFile?.mkdirs(); Runtime.getRuntime().exec(arrayOf("ln", "-sf", target, outFile.absolutePath)).waitFor() } catch (_: Exception) {}
                     skipBytes(input, fileSize)
                 }
-                '5' -> {
-                    // Directorio
-                    outFile.mkdirs()
-                    skipBytes(input, fileSize)
-                }
-                else -> {
-                    skipBytes(input, fileSize)
-                    val padding = (512 - (fileSize % 512)) % 512
-                    skipBytes(input, padding)
-                }
-            }
-
-            if (totalBytes > 0 && totalBytes % (50 * 1024 * 1024) == 0L) {
-                Log.i(TAG, "Extrayendo... ${totalBytes / (1024 * 1024)} MB")
+                '5' -> { outFile.mkdirs() }
+                else -> { skipBytes(input, fileSize); skipBytes(input, (512 - (fileSize % 512)) % 512) }
             }
         }
     }
 
     private fun skipBytes(input: InputStream, count: Long) {
-        var remaining = count
-        val buf = ByteArray(32768)
-        while (remaining > 0) {
-            val n = input.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
-            if (n == -1) break
-            remaining -= n
-        }
+        var rem = count; val buf = ByteArray(32768)
+        while (rem > 0) { val r = input.read(buf, 0, minOf(buf.size.toLong(), rem).toInt()); if (r == -1) break; rem -= r }
     }
 
-    private fun ByteArray.decodeString(offset: Int, length: Int): String {
-        return String(this, offset, length, Charsets.US_ASCII)
-    }
+    private fun isRootfsExtracted(): Boolean =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_ROOTFS_DONE, false) &&
+        rootfsDir.exists() && File(rootfsDir, "bin/bash").exists()
 
-    // ── Verificar si el rootfs está extraído ─────────────────
-    private fun isRootfsExtracted(): Boolean {
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        return prefs.getBoolean(PREF_ROOTFS_DONE, false) &&
-               rootfsDir.exists() &&
-               File(rootfsDir, "bin/bash").exists()
-    }
-
-    // ── Ejecutar comando dentro de proot ─────────────────────
-    private fun runInProot(command: String, result: MethodChannel.Result) {
-        mainScope.launch {
-            try {
-                val output = withContext(Dispatchers.IO) {
-                    executeProot(command)
+    // ── MediaPipe: generate con streaming ────────────────────
+    private fun runGenerate(prompt: String, result: MethodChannel.Result) {
+        val sb = StringBuilder()
+        val startNs = System.nanoTime()
+        var firstNs = 0L
+        val err = MediaPipeEngine.generate(prompt) { token, done ->
+            if (firstNs == 0L) firstNs = System.nanoTime()
+            if (token.isNotEmpty()) sb.append(token)
+            runOnUiThread {
+                mpSink?.success(mapOf("partial" to token, "done" to done))
+                if (done) {
+                    val genSecs  = (System.nanoTime() - firstNs) / 1e9
+                    val ttftSecs = (firstNs - startNs) / 1e9
+                    val toks     = MediaPipeEngine.sizeInTokens(sb.toString())
+                    val tps      = if (genSecs > 0) toks / genSecs else 0.0
+                    mpSink?.success(mapOf(
+                        "stats" to true,
+                        "tps"   to tps,
+                        "ttft"  to ttftSecs,
+                        "toks"  to toks
+                    ))
                 }
-                result.success(output)
+            }
+        }
+        runOnUiThread { if (err != null) result.error("GEN", err, null) else result.success(sb.toString()) }
+    }
+
+    // ── Import modelo .task ───────────────────────────────────
+    private fun queryName(uri: Uri): String? {
+        return try {
+            contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+            }
+        } catch (_: Exception) { null }
+    }
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_IMPORT) {
+            val pending = pendingImport ?: return
+            pendingImport = null
+            if (resultCode != Activity.RESULT_OK || data?.data == null) {
+                pending.error("CANCEL", "Importación cancelada", null)
+                return
+            }
+            val uri = data.data!!
+            val name = queryName(uri) ?: "model.task"
+            val modelsDir = java.io.File(
+                getExternalFilesDir(null), "models"
+            ).also { it.mkdirs() }
+            val destFile = java.io.File(modelsDir, name)
+            try {
+                contentResolver.openInputStream(uri)?.use { inp ->
+                    destFile.outputStream().use { out -> inp.copyTo(out) }
+                }
+                pending.success(destFile.absolutePath)
             } catch (e: Exception) {
-                result.error("PROOT_ERROR", e.message, null)
+                pending.error("COPY", e.message, null)
             }
         }
     }
 
-    private fun executeProot(command: String): String {
-        val prootBin = File(filesDir, "usr/bin/proot")
-        val rootPath = rootfsDir.absolutePath
-
-        // Usar proot si está disponible, sino intentar con el del sistema
-        val prootCmd = if (prootBin.exists()) prootBin.absolutePath else "proot"
-
-        val fullCmd = arrayOf(
-            prootCmd,
-            "--rootfs=$rootPath",
-            "--bind=/proc",
-            "--bind=/dev",
-            "--bind=/sys",
-            "--pwd=/root",
-            "/bin/bash", "-c", command
-        )
-
-        val process = Runtime.getRuntime().exec(fullCmd)
-        val stdout  = process.inputStream.bufferedReader().readText()
-        val stderr  = process.errorStream.bufferedReader().readText()
-        process.waitFor()
-
-        return if (stderr.isNotBlank() && stdout.isBlank()) stderr else stdout
-    }
 }

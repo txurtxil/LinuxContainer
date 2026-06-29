@@ -8,6 +8,7 @@
 // - Configuración: parámetros de inferencia + puertos.
 // - Chat con pasos ReAct en streaming (SSE).
 
+import 'mediapipe_test_screen.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -83,7 +84,7 @@ const List<_Provider> _providers = [
     id: 'gemini',
     label: 'Gemini · gratis',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-    models: ['gemini-2.5-flash', 'gemini-3-flash', 'gemini-2.0-flash-lite'],
+    models: ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
     keyHint: 'AIza...',
     note:
         'Gratis y muy generoso (1500 req/día). OJO: en la capa gratis Google '
@@ -115,6 +116,14 @@ const List<_Provider> _providers = [
     models: ['grok-3-fast', 'grok-4.3', 'grok-code-fast-1'],
     keyHint: 'xai-...',
     note: 'De pago (sin capa gratuita). Necesita créditos en tu cuenta xAI.',
+  ),
+  _Provider(
+    id: 'gpu_local',
+    label: 'GPU Local 🔥',
+    baseUrl: 'http://127.0.0.1:8090/v1',
+    models: ['gemma3-local'],
+    note: 'MediaPipe en GPU Adreno — 100% local y privado. '
+        'Carga un modelo .task desde la pantalla GPU antes de arrancar.',
   ),
   _Provider(
     id: 'custom',
@@ -161,9 +170,12 @@ class _AgentDashboardState extends State<AgentDashboard> {
         _pollHealth();
       }
     });
-    _pollHealth();
+    // Dar tiempo a uvicorn para arrancar antes del primer check
+    Future.delayed(const Duration(seconds: 8), () {
+      if (mounted) _pollHealth();
+    });
     _healthTimer =
-        Timer.periodic(const Duration(seconds: 4), (_) => _pollHealth());
+        Timer.periodic(const Duration(seconds: 5), (_) => _pollHealth());
     _svc.llamaStarting.addListener(_onSvc);
     _svc.agentStarting.addListener(_onSvc);
   }
@@ -221,7 +233,13 @@ class _AgentDashboardState extends State<AgentDashboard> {
       _scrollToBottom();
       return;
     }
-    _ctrl.send(text, _svc.agentPort);
+    _ctrl.send(
+      text,
+      _svc.agentPort,
+      baseUrl: _svc.effectiveBaseUrl,
+      model: _svc.effectiveModel,
+      apiKey: _svc.effectiveApiKey,
+    );
     _input.clear();
     _scrollToBottom();
   }
@@ -308,7 +326,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
       child: Row(
         children: [
           Expanded(
-            child: _svc.usingRemote
+            child: (_svc.sourceId != 'local')
                 ? _remoteSourceCard()
                 : _serviceCard(
                     name: 'llama-server',
@@ -807,6 +825,8 @@ class _AgentDashboardState extends State<AgentDashboard> {
 
   // ---- Fuente + modelo ------------------------------------------------------
 
+  // ignore: use_build_context_synchronously
+  void openModelSheet() => _showModelSheet();
   void _showModelSheet() {
     String selSource = _svc.sourceId;
     final baseUrlCtrl = TextEditingController(text: _svc.remoteBaseUrl);
@@ -919,6 +939,25 @@ class _AgentDashboardState extends State<AgentDashboard> {
     String selSource,
   ) {
     return [
+      if (selSource == 'gpu_local') ...[
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.bolt, color: Colors.orangeAccent),
+          label: const Text('Gestionar modelo .task y servidor GPU',
+              style: TextStyle(color: Colors.orangeAccent)),
+          style: OutlinedButton.styleFrom(
+            side: const BorderSide(color: Colors.orangeAccent),
+            minimumSize: const Size(double.infinity, 48),
+          ),
+          onPressed: () {
+            Navigator.pop(ctx);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const MediaPipeTestScreen()),
+            );
+          },
+        ),
+        const SizedBox(height: 16),
+      ],
       if (prov.note.isNotEmpty)
         Container(
           margin: const EdgeInsets.only(bottom: 16),

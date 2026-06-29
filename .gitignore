@@ -15,3 +15,9 @@ android/key.properties
 *.iml
 *.g.dart
 *.freezed.dart
+
+# Build artifacts
+build/
+.dart_tool/
+android/app/src/main/assets/rootfs.tar.xz
+*.apk

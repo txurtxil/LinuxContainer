@@ -113,7 +113,7 @@ help-lc() {
 }
 
 # Lanzar el menú de primer arranque (solo una vez; 'q' en el menú lo desactiva)
-if [ -z "$LC_MENU_SHOWN" ] && [ ! -f "$HOME/.lc_setup_done" ] && [ -t 1 ]; then
+if [ -z "$LC_NO_MENU" ] && [ -z "$LC_MENU_SHOWN" ] && [ ! -f "$HOME/.lc_setup_done" ] && [ -t 1 ]; then
   export LC_MENU_SHOWN=1
   [ -x /usr/local/bin/lc-menu ] && /usr/local/bin/lc-menu
 else
@@ -143,7 +143,7 @@ fi
 
     // 2. .bashrc (se reescribe al subir de versión del marcador).
     final bashrc = File('$rootfsPath/root/.bashrc');
-    final marker = File('$rootfsPath/root/.lc_bashrc_v3');
+    final marker = File('$rootfsPath/root/.lc_bashrc_v4');
     if (!await marker.exists()) {
       await bashrc.writeAsString(_bashrc);
       await marker.writeAsString('ok');

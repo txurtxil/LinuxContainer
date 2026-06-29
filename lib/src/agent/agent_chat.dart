@@ -77,13 +77,24 @@ class AgentApi {
     }
   }
 
-  static Stream<Map<String, dynamic>> run(String prompt, int agentPort) async* {
+  static Stream<Map<String, dynamic>> run(
+    String prompt,
+    int agentPort, {
+    String baseUrl = '',
+    String model = '',
+    String apiKey = '',
+  }) async* {
     final client = HttpClient();
     try {
       final req =
           await client.postUrl(Uri.parse('http://$kAgentHost:$agentPort/run'));
       req.headers.contentType = ContentType.json;
-      req.add(utf8.encode(jsonEncode({'prompt': prompt})));
+      req.add(utf8.encode(jsonEncode({
+        'task': prompt,
+        if (baseUrl.isNotEmpty) 'llm_base_url': baseUrl,
+        if (model.isNotEmpty) 'llm_model': model,
+        if (apiKey.isNotEmpty) 'llm_api_key': apiKey,
+      })));
       final resp = await req.close();
       await for (final line in resp
           .transform(utf8.decoder)
@@ -173,12 +184,18 @@ class AgentController {
     }
   }
 
-  void send(String prompt, int agentPort) {
+  void send(
+    String prompt,
+    int agentPort, {
+    String baseUrl = '',
+    String model = '',
+    String apiKey = '',
+  }) {
     if (running.value) return;
     _append(ChatBlock('user', prompt));
     running.value = true;
     _saveCurrent();
-    _sub = AgentApi.run(prompt, agentPort).listen(
+    _sub = AgentApi.run(prompt, agentPort, baseUrl: baseUrl, model: model, apiKey: apiKey).listen(
       _ingest,
       onDone: () {
         running.value = false;
