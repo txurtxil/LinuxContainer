@@ -21,3 +21,4 @@ build/
 .dart_tool/
 android/app/src/main/assets/rootfs.tar.xz
 *.apk
+android/app/src/main/assets/rootfs.tar.gz
