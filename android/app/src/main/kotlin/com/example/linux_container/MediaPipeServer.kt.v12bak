@@ -46,7 +46,7 @@ object MediaPipeServer {
     }
 
     private fun modelId(): String =
-        InferenceEngine.loadedPath?.substringAfterLast('/') ?: "mediapipe-local"
+        MediaPipeEngine.loadedPath?.substringAfterLast('/') ?: "mediapipe-local"
 
     private class Server(port: Int) : NanoHTTPD("127.0.0.1", port) {
 
@@ -89,7 +89,7 @@ object MediaPipeServer {
             val topK = req.optInt("top_k", 40)
             val prompt = buildGemmaPrompt(messages)
 
-            if (!InferenceEngine.isLoaded) {
+            if (!MediaPipeEngine.isLoaded) {
                 return json(Response.Status.INTERNAL_ERROR,
                     errObj("El modelo no está cargado en el motor."))
             }
@@ -143,13 +143,13 @@ object MediaPipeServer {
         private fun blockingChat(
             prompt: String, temp: Float, topK: Int, topP: Float
         ): Response {
-            val (err, text) = InferenceEngine.generateBlocking(prompt, temp, topK, topP)
+            val (err, text) = MediaPipeEngine.generateBlocking(prompt, temp, topK, topP)
             if (err != null) return json(Response.Status.INTERNAL_ERROR, errObj(err))
             val msg = JSONObject().put("role", "assistant").put("content", text)
             val choice = JSONObject().put("index", 0).put("message", msg)
                 .put("finish_reason", "stop")
-            val pt = InferenceEngine.sizeInTokens(prompt)
-            val ct = InferenceEngine.sizeInTokens(text)
+            val pt = MediaPipeEngine.sizeInTokens(prompt)
+            val ct = MediaPipeEngine.sizeInTokens(text)
             val usage = JSONObject().put("prompt_tokens", pt)
                 .put("completion_tokens", ct).put("total_tokens", pt + ct)
             val resp = JSONObject()
@@ -171,7 +171,7 @@ object MediaPipeServer {
             val id = "chatcmpl-local"
             Thread {
                 try {
-                    val err = InferenceEngine.generate(prompt, temp, topK, topP) { token, done ->
+                    val err = MediaPipeEngine.generate(prompt, temp, topK, topP) { token, done ->
                         if (token.isNotEmpty()) {
                             val delta = JSONObject().put("content", token)
                             val choice = JSONObject().put("index", 0).put("delta", delta)

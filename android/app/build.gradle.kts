@@ -54,6 +54,8 @@ kotlin {
 dependencies {
     // Inferencia LLM on-device en GPU/CPU (motor de la Fase C, como Edge Gallery).
     implementation("com.google.mediapipe:tasks-genai:0.10.27")
+    // LiteRT-LM (v1.3) — motor nuevo para Gemma 4 y formato .litertlm
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.13.1")
     // Servidor HTTP local (OpenAI-compatible) — ligero y compatible con Android.
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 }
