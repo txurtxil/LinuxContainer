@@ -6,6 +6,8 @@
 
 `v1.3` · Flutter + Kotlin · proot Debian arm64 · MediaPipe + LiteRT-LM (GPU Adreno)
 
+[[License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 </div>
 
 ---
