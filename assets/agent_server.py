@@ -321,7 +321,12 @@ async def _run_agent(req: AgentRequest) -> AgentResponse:
         if context:
             task_with_context = f"Contexto previo:\n{context}\n\nTarea actual: {req.task}"
 
-        agent = ToolCallingAgent(
+        # CodeAgent: basado en texto puro, funciona con cualquier servidor
+        # de chat simple (MediaPipe/LiteRT-LM local no soportan tool-calling
+        # estructurado). ToolCallingAgent: para backends remotos con function-
+        # calling real (Groq, OpenAI-compatible serios).
+        AgentClass = CodeAgent if _is_gpu_local(req) else ToolCallingAgent
+        agent = AgentClass(
             tools=TOOLS,
             model=model,
             max_steps=MAX_STEPS,
@@ -465,10 +470,9 @@ async def run_streaming(req: AgentRequest):
         raise HTTPException(status_code=400, detail="task no puede estar vacio")
 
     async def generate():
-        if _is_gpu_local(req):
-            result = await _direct_chat_gpu(req)
-        else:
-            result = await _run_agent(req)
+        # Ambas fuentes pasan por el agente con tools; _run_agent decide
+        # internamente CodeAgent (local) vs ToolCallingAgent (remoto).
+        result = await _run_agent(req)
 
         # Emitir en formato que espera Flutter agent_chat.dart
         if result.thoughts:
