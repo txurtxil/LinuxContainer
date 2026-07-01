@@ -55,6 +55,12 @@ object LiteRtEngine {
                 modelPath = modelPath,
                 backend = backend,
                 cacheDir = context.cacheDir.path,
+                // Limita el KV-cache (contexto) para no agotar la RAM.
+                // Gemma 4 puede usar hasta 32K tokens por defecto; con 2048
+                // sobra para tareas de un turno y baja mucho el consumo.
+                // Si esto provoca un error de forma de tensor al generar,
+                // quita esta linea (vuelve al default del modelo).
+                maxNumTokens = 2048,
             )
             val e = Engine(config)
             e.initialize()
