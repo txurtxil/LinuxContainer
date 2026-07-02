@@ -58,7 +58,7 @@ app.add_middleware(
 GPU_LOCAL_PORT    = 8090
 GPU_LOCAL_BASE    = f"http://127.0.0.1:{GPU_LOCAL_PORT}/v1"
 AGENT_PORT        = 8765
-MAX_STEPS         = 4
+MAX_STEPS         = 6
 MAX_TOKENS        = 2048
 
 # ── Modelos de request/response ──────────────────────────────
@@ -523,9 +523,13 @@ async def _run_light_agent(req: AgentRequest):
         {"role": "user", "content": req.task},
     ]
 
+    last_result = None
     for step in range(MAX_STEPS):
         try:
             raw = await _light_call_model(req, messages)
+            for _tok in ("<end_of_turn>", "<eos>", "<|im_end|>", "</s>"):
+                raw = raw.replace(_tok, "")
+            raw = raw.strip()
         except httpx.HTTPStatusError as e:
             # ERROR REAL al chat (no generico)
             yield {"type": "step", "thought":
@@ -560,6 +564,7 @@ async def _run_light_agent(req: AgentRequest):
         yield {"type": "step", "thought": f"\U0001f527 {tool}({args[:120]})"}
 
         result = _light_exec_tool(tool, args)
+        last_result = result
         yield {"type": "step", "thought": f"\u2192 {result[:400]}"}
 
         # Alimentar el resultado de vuelta al modelo
@@ -567,8 +572,11 @@ async def _run_light_agent(req: AgentRequest):
         messages.append({"role": "user", "content": f"Resultado de {tool}:\n{result}\n\nContinua."})
 
     # Agotados los pasos
-    yield {"type": "final", "answer":
-           f"No pude completar la tarea en {MAX_STEPS} pasos. Prueba a reformularla o dividirla."}
+    yield {"type": "final", "answer": (
+        f"Se alcanzo el limite de {MAX_STEPS} pasos. Ultimo resultado obtenido:\n{last_result}"
+        if last_result else
+        f"No pude completar la tarea en {MAX_STEPS} pasos. Prueba a reformularla o dividirla."
+    )}
 
 
 # ─────────────────────────────────────────────────────────────
