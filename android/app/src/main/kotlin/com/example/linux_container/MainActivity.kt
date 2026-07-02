@@ -29,6 +29,8 @@ class MainActivity : FlutterActivity() {
 
     private val REQUEST_IMPORT = 4711
     private var pendingImport: MethodChannel.Result? = null
+    private val REQUEST_TEST_IMAGE = 4712
+    private var pendingTestImage: MethodChannel.Result? = null
     private var mpSink: EventChannel.EventSink? = null
 
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -103,6 +105,25 @@ class MainActivity : FlutterActivity() {
                         }
                         try { startActivityForResult(intent, REQUEST_IMPORT) }
                         catch (e: Exception) { pendingImport = null; result.error("PICK", e.message, null) }
+                    }
+                    "testImage" -> {
+                        if (pendingTestImage != null) { result.error("BUSY", "Selección en curso", null); return@setMethodCallHandler }
+                        pendingTestImage = result
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "image/*"
+                        }
+                        try { startActivityForResult(intent, REQUEST_TEST_IMAGE) }
+                        catch (e: Exception) { pendingTestImage = null; result.error("PICK", e.message, null) }
+                    }
+                    "testImageGeneration" -> {
+                        val modelPath = call.argument<String>("modelPath")
+                        val imagePath = call.argument<String>("imagePath")
+                        if (modelPath == null || imagePath == null) { result.error("ARG", "Falta modelPath o imagePath", null); return@setMethodCallHandler }
+                        Thread {
+                            val (err, text) = LiteRtEngine.testImageSupport(applicationContext, modelPath, imagePath)
+                            runOnUiThread { if (err == null) result.success(text) else result.error("IMGTEST", err, null) }
+                        }.start()
                     }
                     "serverStart" -> {
                         val port = call.argument<Int>("port") ?: 8090

@@ -8,6 +8,8 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
+import com.google.ai.edge.litertlm.Content
+import com.google.ai.edge.litertlm.Contents
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.locks.ReentrantLock
 
@@ -147,5 +149,40 @@ object LiteRtEngine {
         }
         engine = null
         loadedPath = null
+    }
+
+    /**
+     * TEST AISLADO: comprueba si esta version de litertlm-android soporta
+     * imagenes con el modelo actual. Crea su propio Engine TEMPORAL (no
+     * toca el motor de produccion usado por el chat de texto), hace UNA
+     * generacion con imagen, y lo cierra. Devuelve (error, texto).
+     */
+    fun testImageSupport(context: Context, modelPath: String, imagePath: String): Pair<String?, String> {
+        return try {
+            val testConfig = EngineConfig(
+                modelPath = modelPath,
+                backend = Backend.GPU(),
+                visionBackend = Backend.GPU(),
+                cacheDir = context.cacheDir.path,
+                maxNumTokens = 4096,
+            )
+            val testEngine = Engine(testConfig)
+            testEngine.initialize()
+            try {
+                testEngine.createConversation().use { conversation ->
+                    val response = conversation.sendMessage(
+                        Contents.of(
+                            Content.Text("Describe brevemente esta imagen."),
+                            Content.ImageFile(imagePath),
+                        )
+                    )
+                    Pair(null, response.toString())
+                }
+            } finally {
+                testEngine.close()
+            }
+        } catch (e: Throwable) {
+            Pair("ERROR: ${e.javaClass.simpleName}: ${e.message}", "")
+        }
     }
 }

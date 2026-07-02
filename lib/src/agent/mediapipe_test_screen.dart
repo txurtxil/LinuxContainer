@@ -47,6 +47,9 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
   String _output = '';
   String _stats = '';
   String? _modelsDir;
+  String? _testImagePath;
+  bool _testingImage = false;
+  String _imageTestResult = '';
 
   bool _serverRunning = false;
   bool _serverBusy = false;
@@ -257,6 +260,52 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
       await _scanModels();
     } catch (e) {
       setState(() => _status = 'Error borrando: $e');
+    }
+  }
+
+  Future<void> _useFixedTestImage() async {
+    const fixedPath = '/storage/emulated/0/Android/data/com.example.linux_container/files/test_images/test.jpg';
+    final exists = await File(fixedPath).exists();
+    setState(() {
+      _testImagePath = exists ? fixedPath : null;
+      _imageTestResult = exists
+          ? 'Imagen de prueba encontrada (via adb push).'
+          : 'No encontrada. Antes ejecuta: adb push imagen.jpg \'\$fixedPath\'';
+    });
+  }
+
+  Future<void> _pickTestImage() async {
+    try {
+      final path = await _method.invokeMethod<String>('testImage');
+      setState(() {
+        _testImagePath = path;
+        _imageTestResult = path != null ? 'Imagen lista: ${path.split('/').last}' : '';
+      });
+    } on PlatformException catch (e) {
+      setState(() => _imageTestResult = 'Error eligiendo imagen: ${e.message}');
+    }
+  }
+
+  Future<void> _runImageTest() async {
+    if (_selected == null || _testImagePath == null) return;
+    setState(() {
+      _testingImage = true;
+      _imageTestResult = 'Probando soporte de imagen (puede tardar)...';
+    });
+    try {
+      final result = await _method.invokeMethod<String>('testImageGeneration', {
+        'modelPath': _selected,
+        'imagePath': _testImagePath,
+      });
+      setState(() {
+        _testingImage = false;
+        _imageTestResult = '✅ FUNCIONA: $result';
+      });
+    } on PlatformException catch (e) {
+      setState(() {
+        _testingImage = false;
+        _imageTestResult = '❌ ${e.code}: ${e.message}';
+      });
     }
   }
 
@@ -655,6 +704,52 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: 24),
+            _label('🧪 Test experimental: soporte de imagen'),
+            const SizedBox(height: 4),
+            const Text(
+              'Comprueba si esta version soporta imagenes con Gemma 4, sin afectar al chat de texto.',
+              style: TextStyle(color: _textLo, fontSize: 11.5, height: 1.4),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _useFixedTestImage,
+                    icon: const Icon(Icons.usb, size: 16, color: _accent),
+                    label: const Text('Usar imagen (adb push)',
+                        style: TextStyle(color: _accent, fontSize: 12.5)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _accent,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: (_selected == null || _testImagePath == null || _testingImage)
+                        ? null
+                        : _runImageTest,
+                    icon: _testingImage
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.science_outlined, size: 16),
+                    label: const Text('Probar', style: TextStyle(fontSize: 12.5)),
+                  ),
+                ),
+              ],
+            ),
+            if (_imageTestResult.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: _box(),
+                child: SelectableText(_imageTestResult,
+                    style: const TextStyle(color: _textHi, fontSize: 13, height: 1.4)),
+              ),
+            ],
             const SizedBox(height: 24),
           ],
         ),
