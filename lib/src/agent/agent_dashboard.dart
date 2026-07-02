@@ -246,6 +246,67 @@ class _AgentDashboardState extends State<AgentDashboard> {
 
   void _stop() => _ctrl.stop();
 
+  Future<void> _sshTemplate(String taskTemplate) async {
+    final hostCtrl = TextEditingController();
+    final host = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _C.card,
+        title: const Text('Host remoto', style: TextStyle(color: _C.textHi)),
+        content: TextField(
+          controller: hostCtrl,
+          autofocus: true,
+          style: const TextStyle(color: _C.textHi, fontFamily: 'monospace'),
+          decoration: const InputDecoration(
+            hintText: 'usuario@ip (ej: txurtxil@192.168.10.2)',
+            hintStyle: TextStyle(color: _C.off),
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, hostCtrl.text.trim()),
+            child: const Text('Usar'),
+          ),
+        ],
+      ),
+    );
+    if (host == null || host.trim().isEmpty) return;
+    _input.text = taskTemplate.replaceAll('{host}', host.trim());
+  }
+
+  Widget _sshChips() {
+    Widget chip(String label, String task) => ActionChip(
+          label: Text(label, style: const TextStyle(color: _C.textHi, fontSize: 12)),
+          backgroundColor: _C.card,
+          side: const BorderSide(color: _C.border),
+          onPressed: () => _sshTemplate(task),
+        );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            chip('🩺 Salud remota',
+                'Usa ssh_exec para conectarte a {host}. Comprueba memoria (free -m), '
+                'carga (uptime o cat /proc/loadavg) y disco (df -h /). Dame un resumen breve.'),
+            const SizedBox(width: 8),
+            chip('🐳 Docker',
+                'Usa ssh_exec para conectarte a {host} y ejecuta docker ps. '
+                'Dime que contenedores estan activos y su estado.'),
+            const SizedBox(width: 8),
+            chip('🥧 Mantenimiento RPi',
+                'Usa ssh_exec para conectarte a {host}. Comprueba temperatura '
+                '(vcgencmd measure_temp si existe), espacio en disco (df -h /) '
+                'y actualizaciones pendientes (apt list --upgradable). Resume el estado.'),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ---- UI -------------------------------------------------------------------
 
   @override
@@ -257,6 +318,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
           _header(),
           _serviceRow(),
           const Divider(height: 1, color: _C.border),
+          _sshChips(),
           Expanded(child: _chatList()),
           _inputBar(),
         ],
