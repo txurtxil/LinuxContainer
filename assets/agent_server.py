@@ -540,11 +540,6 @@ async def _run_light_agent(req: AgentRequest):
         {"role": "system", "content": _LIGHT_SYSTEM},
         {"role": "user", "content": req.task},
     ]
-
-    last_result = None
-    last_action = None
-    tools_used = 0
-    warned_no_tools = False
     last_result = None
     last_action = None
     tools_used = 0
@@ -554,9 +549,6 @@ async def _run_light_agent(req: AgentRequest):
     for step in range(MAX_STEPS):
         try:
             raw = await _light_call_model(req, messages)
-            for _tok in ("<end_of_turn>", "<eos>", "<|im_end|>", "</s>"):
-                raw = raw.replace(_tok, "")
-            raw = raw.strip()
             for _tok in ("<end_of_turn>", "<eos>", "<|im_end|>", "</s>"):
                 raw = raw.replace(_tok, "")
             raw = raw.strip()
@@ -575,18 +567,26 @@ async def _run_light_agent(req: AgentRequest):
         parsed = _light_parse(raw)
 
         if parsed["kind"] == "final":
-            if tools_used == 0 and not warned_no_tools:
+            missing = expected_tools - tools_used_names
+            if (tools_used == 0 or missing) and not warned_no_tools:
                 warned_no_tools = True
                 messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content":
-                    "No has ejecutado ninguna ACCION todavia en esta "
-                    "conversacion. Si tu tarea requiere crear, leer, "
-                    "escribir o ejecutar algo, hazlo ahora con ACCION "
-                    "real (no des nada por hecho). Si de verdad no "
-                    "necesitas ninguna herramienta, repite tu FINAL."
-                })
-                yield {"type": "step", "thought":
-                       "\u26a0 Posible respuesta sin ejecutar herramientas. Pidiendo confirmacion..."}
+                if missing:
+                    aviso = (
+                        "Tu tarea menciona " + ", ".join(sorted(missing)) +
+                        ", pero no la has usado todavia con una ACCION real. "
+                        "Usala ahora antes de decir FINAL."
+                    )
+                else:
+                    aviso = (
+                        "No has ejecutado ninguna ACCION todavia en esta "
+                        "conversacion. Si tu tarea requiere crear, leer, "
+                        "escribir o ejecutar algo, hazlo ahora con ACCION "
+                        "real (no des nada por hecho). Si de verdad no "
+                        "necesitas ninguna herramienta, repite tu FINAL."
+                    )
+                messages.append({"role": "user", "content": aviso})
+                yield {"type": "step", "thought": "\u26a0 " + aviso[:150]}
                 continue
             if parsed.get("thought"):
                 yield {"type": "step", "thought": parsed["thought"]}
@@ -621,6 +621,7 @@ async def _run_light_agent(req: AgentRequest):
         last_result = result
         last_action = (tool, args)
         tools_used += 1
+        tools_used_names.add(tool)
         yield {"type": "step", "thought": f"\u2192 {result[:400]}"}
 
         messages.append({"role": "assistant", "content": raw})
