@@ -17,6 +17,7 @@ import 'package:flutter/services.dart';
 import 'agent_services.dart';
 import 'agent_chat.dart';
 
+import 'ssh_connections.dart';
 class _C {
   static const bg = Color(0xFF1C1C1E);
   static const card = Color(0xFF2C2C2E);
@@ -318,7 +319,24 @@ class _AgentDashboardState extends State<AgentDashboard> {
           _header(),
           _serviceRow(),
           const Divider(height: 1, color: _C.border),
-          _sshChips(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () => showSshLauncher(context, _input),
+                icon: const Icon(Icons.dns, size: 16, color: _C.accent),
+                label: const Text('Conexiones SSH',
+                    style: TextStyle(color: _C.accent, fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: _C.border),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+          ),
           Expanded(child: _chatList()),
           _inputBar(),
         ],
