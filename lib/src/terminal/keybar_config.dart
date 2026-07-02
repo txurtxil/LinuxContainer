@@ -86,6 +86,7 @@ class KeyCatalog {
         KeyConfigItem('ctrlX', true),
         KeyConfigItem('ctrlZ', true),
         KeyConfigItem('ctrlR', true),
+        KeyConfigItem('ctrlL', true),
         KeyConfigItem('up', true),
         KeyConfigItem('down', true),
         KeyConfigItem('left', true),
@@ -102,7 +103,6 @@ class KeyCatalog {
         KeyConfigItem('fontInc', true),
         // El resto del catálogo, oculto por defecto:
         KeyConfigItem('ctrlD', false),
-        KeyConfigItem('ctrlL', false),
         KeyConfigItem('ctrlA', false),
         KeyConfigItem('ctrlE', false),
         KeyConfigItem('ctrlK', false),
