@@ -217,8 +217,26 @@ def http_request(method: str, url: str, body: str = "") -> str:
             kwargs["content"] = body
         with httpx.Client() as client:
             resp = client.request(method, url, **kwargs)
-        out = f"HTTP {resp.status_code}\n{resp.text}"
-        return out[:3000] if len(out) > 3000 else out
+        body_text = resp.text
+        try:
+            data = json.loads(body_text)
+            if isinstance(data, dict):
+                lines = []
+                for k, v in data.items():
+                    if isinstance(v, (dict, list)):
+                        kind = "objeto" if isinstance(v, dict) else "lista"
+                        lines.append(f"\"{k}\": <{kind}, {len(v)} elementos>")
+                    else:
+                        lines.append(f"\"{k}\": {json.dumps(v, ensure_ascii=False)}")
+                summary = "{\n  " + ",\n  ".join(lines) + "\n}"
+            elif isinstance(data, list):
+                summary = f"[lista con {len(data)} elementos]\n" + json.dumps(data[:5], ensure_ascii=False)
+            else:
+                summary = json.dumps(data, ensure_ascii=False)
+        except Exception:
+            summary = body_text
+        out = f"HTTP {resp.status_code}\n{summary}"
+        return out[:1500] if len(out) > 1500 else out
     except httpx.TimeoutException:
         return "Error: la peticion tardo demasiado (timeout 15s)"
     except Exception as e:
