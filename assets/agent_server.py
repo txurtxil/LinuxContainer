@@ -684,6 +684,14 @@ def _light_exec_tool(tool_name: str, args: str) -> str:
                 host, command = args.split("|||", 1)
                 host = host.strip()
                 command = command.strip()
+            else:
+                m = re.match(r"^(\S+@[\w.\-]+(?::\d+)?)\s+(.+)$", args.strip())
+                if m:
+                    host = m.group(1)
+                    command = m.group(2)
+                else:
+                    return "Error: ssh_exec necesita 'usuario@host|||comando'"
+            if True:
                 if _is_dangerous_bash(command):
                     return ("\u26d4 Comando SSH remoto bloqueado por seguridad "
                             "(parece destructivo). Si el usuario de verdad lo "
