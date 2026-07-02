@@ -4,9 +4,13 @@
 
 **Terminal Linux + agente de IA autónomo, 100% local por GPU, en el Samsung Galaxy Z Fold7.**
 
-`v1.3` · Flutter + Kotlin · proot Debian arm64 · MediaPipe + LiteRT-LM (GPU Adreno)
+`v1.3.2` · Flutter + Kotlin · proot Debian arm64 · MediaPipe + LiteRT-LM (GPU Adreno)
 
-[[License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[
+
+![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
+
+](LICENSE)
 
 </div>
 
@@ -14,64 +18,68 @@
 
 ## ¿Qué es?
 
-Una app Android que junta una **terminal Debian completa** (vía proot, sin root) con un **agente de IA autónomo** ([smolagents](https://github.com/huggingface/smolagents)) que razona y ejecuta herramientas reales (bash, ficheros) usando un LLM que corre **enteramente en la GPU del teléfono** — sin nube, sin cuentas, funciona en modo avión.
+Una app Android que junta una **terminal Debian completa** (vía proot, sin root) con un **agente de IA autónomo** que razona, ejecuta comandos reales y llama a APIs/servidores externos — usando un LLM que corre **enteramente en la GPU del teléfono**. Sin nube, sin cuentas, funciona en modo avión.
 
 ## Capacidades
 
-- **Agente ReAct**: piensa, usa herramientas (`run_bash`, `write_file`, `read_file`, `make_dir`, `list_files`), itera hasta resolver.
-- **Inferencia local por GPU** (Adreno) con dos motores y **detección automática de formato**:
-  - `.task` → **MediaPipe** (Gemma 3, Gemma 3n)
-  - `.litertlm` → **LiteRT-LM** (Gemma 4, multimodal, function calling)
-- **Servidor OpenAI-compatible** local (`127.0.0.1:8090`).
-- **Fuentes remotas** opcionales: Groq, Gemini, Cerebras, OpenRouter, xAI, LAN/personalizado.
-- Terminal con centro de control (`lc-menu`), hasta 5 sesiones, setup del agente en un toque.
+**Inferencia local por GPU** con dos motores y detección automática de formato:
+- `.task` → **MediaPipe** (Gemma 3, Gemma 3n)
+- `.litertlm` → **LiteRT-LM** (Gemma 4, multimodal)
+
+**Agente ReAct ligero** (diseñado para modelos pequeños locales, prompt de sistema ~300 tokens):
+- `run_bash` — ejecuta comandos reales en el Debian
+- `read_file` / `write_file` / `make_dir` / `list_files` — gestión de ficheros
+- `http_request` — llama a cualquier API HTTP (GET/POST/PUT/DELETE/PATCH), resume JSON automáticamente para no saturar el contexto
+- `ssh_exec` — ejecuta comandos en otros servidores por SSH, autenticación por clave (genera su propio par de claves la primera vez, sin contraseñas)
+
+**Guardarraíles de seguridad**: bloquea comandos destructivos (`rm -rf /`, `mkfs`, `dd` sobre disco, `docker system prune -a --volumes`, `shutdown`/`reboot`) y escritura en rutas protegidas del sistema (`/etc`, `/boot`, `/bin`...).
+
+**Fuentes remotas** opcionales: Groq, Gemini, Cerebras, OpenRouter, xAI, LAN/personalizado — usan `ToolCallingAgent` con function-calling real.
 
 ## Modelos soportados
 
-**Formato `.task` (MediaPipe)** — del más ligero al más potente:
-
-| Modelo | Tamaño | Velocidad Fold7 |
+| Formato | Motor | Modelos |
 |---|---|---|
-| Gemma 3 270M int8 | ~0.3 GB | ⚡⚡⚡⚡⚡ |
-| **Gemma 3 1B int4** ⭐ | ~0.9 GB | ~55 tok/s · TTFT 0.15s |
-| Gemma 3n E2B int4 | ~3 GB | ⚡⚡⚡ multimodal |
-| Gemma 3n E4B int4 | ~4.4 GB | ⚡⚡ multimodal |
+| `.task` | MediaPipe | Gemma 3 1B/270M, Gemma 3n E2B/E4B |
+| `.litertlm` | LiteRT-LM | Gemma 3 1B, **Gemma 4 E2B/E4B** |
 
-**Formato `.litertlm` (LiteRT-LM)** — Gemma 4, lo último on-device:
+Repos: [litert-community](https://huggingface.co/litert-community) en Hugging Face (requiere aceptar licencia Gemma).
 
-| Modelo | Repo Hugging Face | Notas |
-|---|---|---|
-| **Gemma 4 E2B** 🚀 | [litert-community/gemma-4-E2B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) | Texto+imagen+audio, cuantización mixta 2/4/8-bit, function calling |
-| **Gemma 4 E4B** | [litert-community/gemma-4-E4B-it-litert-lm](https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm) | El más capaz, multimodal, reasoning |
-| Gemma 3 1B | [litert-community/Gemma3-1B-IT](https://huggingface.co/litert-community/Gemma3-1B-IT) | Verificado en Adreno ✓ |
+## Arquitectura del agente
 
-> 💡 Fold7 tiene 12 GB RAM. Usa `int4`/E2B para el día a día; E4B cabe pero va más lento. Requiere login + aceptar licencia Gemma en Hugging Face.
+Chat (Flutter) ──SSE──► agent_server.py (:8765)
+│
+¿fuente = GPU Local?
+┌─────────┴─────────┐
+Sí                   No
+│                    │
+Agente ReAct ligero      smolagents
+(texto plano, sin        ToolCallingAgent
+function-calling)       (function-calling
+│             real vía API)
+▼
+127.0.0.1:8090 (GPU Adreno)
 
-## Arquitectura
-Flutter UI ──channels──► Kotlin (InferenceEngine router)
-│ PTY                      ├─ MediaPipeEngine (.task)
-▼                         └─ LiteRtEngine (.litertlm)
-proot Debian arm64                    │ GPU Adreno
-└─ agent_server.py (:8765)          ▼
-└─ smolagents ──OpenAI──► 127.0.0.1:8090 (servidor GPU local)
+
+El agente ligero existe porque los servidores de inferencia locales (MediaPipe/LiteRT-LM) no implementan function-calling estructurado — el protocolo es texto plano (`PIENSO`/`ACCION`/`ARGS`/`FINAL`) parseado por regex, con guardarraíles contra bucles y alucinaciones de "tarea completada" sin ejecutar nada.
 
 ## Uso rápido
 
-1. Instala el APK (ver [Releases](../../releases)).
-2. Terminal → menú → **Setup Agente IA** (instala Python + smolagents).
-3. **Prueba GPU** → importa un modelo `.task` o `.litertlm` → Cargar → Iniciar servidor.
-4. **Agente** → fuente **GPU Local 🔥** → arranca agent-server → escribe tu tarea.
+1. Instala el APK ([Releases](../../releases)).
+2. Terminal → menú → **Setup Agente IA**.
+3. **Prueba GPU** → importa un modelo `.task`/`.litertlm` → Cargar → Iniciar servidor.
+4. **Agente** → **GPU Local 🔥** → arranca agent-server → escribe tu tarea.
+5. Para SSH: la primera vez que uses `ssh_exec`, el agente te dará su clave pública — añádela al `authorized_keys` del servidor destino.
 
 ## Stack
 
-Flutter · Kotlin (`tasks-genai:0.10.27`, `litertlm-android:0.13.1`, `nanohttpd:2.3.1`) · proot Debian Bookworm arm64 · Python 3.11 + smolagents + FastAPI · Android SDK 35 / NDK 27 / Java 17 · Snapdragon 8 Elite / Adreno.
+Flutter · Kotlin (`tasks-genai:0.10.27`, `litertlm-android:0.13.1`) · proot Debian Bookworm arm64 · Python 3.11 + smolagents + FastAPI + httpx · Android SDK 35 / NDK 27 / Java 17 · Snapdragon 8 Elite / Adreno.
 
 ## Estado
 
-**v1.3 — Migración a LiteRT-LM completa** ✅
-`.task` (MediaPipe) y `.litertlm` (LiteRT-LM) funcionando con router automático. Ambos motores coexisten.
+**v1.3.2 — Agente con automatización real, verificado end-to-end** ✅
 
-**Roadmap**: function calling nativo de LiteRT-LM → integración Home Assistant, MQTT y Leapmotor B10.
+**Roadmap**: integración Home Assistant (ya viable con `http_request`), scheduler para tareas autónomas sin intervención, tool MQTT, function-calling nativo de LiteRT-LM (v1.5).
 
 ---
 
