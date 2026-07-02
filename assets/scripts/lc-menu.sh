@@ -217,6 +217,75 @@ cfg_timezone() {
     echo -e "${C_RED}✗ Zona no válida${C_RESET}"
 }
 
+# ── Backup / restaurar clave SSH del agente ───────────────────
+ssh_key_backup() {
+  header
+  echo -e "  ${C_MAG}❯ Backup clave SSH${C_RESET}"
+  hr
+  if [ ! -f /root/.ssh/id_ed25519 ]; then
+    echo -e "${C_YEL}⚠ No hay clave SSH generada todavia.${C_RESET}"
+    echo -e "  Se crea automaticamente la primera vez que el agente usa ssh_exec."
+    pause; return
+  fi
+  echo -e "  Tu clave PRIVADA (guardala en un sitio seguro, NO la compartas):"
+  hr
+  cat /root/.ssh/id_ed25519
+  hr
+  echo -e "  ${C_DIM}Copia todo el bloque de arriba (boton 'Copiar pantalla' del menu${C_RESET}"
+  echo -e "  ${C_DIM}de la terminal) y guardalo en un gestor de contrasenas o nota segura.${C_RESET}"
+  echo -e "  ${C_DIM}Con esto podras restaurarla tras una reinstalacion sin volver a${C_RESET}"
+  echo -e "  ${C_DIM}autorizarla de nuevo en cada servidor.${C_RESET}"
+  pause
+}
+
+ssh_key_restore() {
+  header
+  echo -e "  ${C_MAG}❯ Restaurar clave SSH${C_RESET}"
+  hr
+  if [ -f /root/.ssh/id_ed25519 ]; then
+    echo -e "${C_YEL}⚠ Ya existe una clave SSH en este sistema.${C_RESET}"
+    read -rp "$(echo -e "  Sobreescribirla? ${C_YEL}[s/N]${C_RESET} ")" ow
+    [[ "$ow" != "s" && "$ow" != "S" ]] && return
+  fi
+  echo -e "  Pega tu clave PRIVADA completa (usa el boton 'Pegar' del menu"
+  echo -e "  de la terminal), y termina con una linea vacia + Ctrl+D:"
+  hr
+  mkdir -p /root/.ssh
+  cat > /root/.ssh/id_ed25519
+  chmod 600 /root/.ssh/id_ed25519
+  ssh-keygen -y -f /root/.ssh/id_ed25519 > /root/.ssh/id_ed25519.pub 2>/dev/null
+  if [ -s /root/.ssh/id_ed25519.pub ]; then
+    echo -e "${C_GRN}✓ Clave restaurada. Publica derivada correctamente:${C_RESET}"
+    cat /root/.ssh/id_ed25519.pub
+    echo -e "${C_DIM}Si esta clave ya estaba autorizada en tus servidores antes,${C_RESET}"
+    echo -e "${C_DIM}deberia funcionar ya sin pasos adicionales.${C_RESET}"
+  else
+    echo -e "${C_RED}✗ La clave pegada no parece valida. Intentalo de nuevo.${C_RESET}"
+    rm -f /root/.ssh/id_ed25519 /root/.ssh/id_ed25519.pub
+  fi
+  pause
+}
+
+# ── Submenu: backup clave SSH ──────────────────────────────────
+ssh_key_menu() {
+  while true; do
+    header
+    echo -e "  ${C_MAG}❯ Backup clave SSH${C_RESET}"
+    hr
+    echo -e "  ${C_YEL}1${C_RESET})  Ver / copiar clave actual"
+    echo -e "  ${C_YEL}2${C_RESET})  Restaurar clave desde backup"
+    hr
+    echo -e "  ${C_CYN}v${C_RESET})  Volver"
+    echo ""
+    read -rp "$(echo -e "${C_B}❯ ${C_RESET}")" opt
+    case "$opt" in
+      1) ssh_key_backup ;;
+      2) ssh_key_restore ;;
+      v|V) return ;;
+    esac
+  done
+}
+
 # ── Menú principal ────────────────────────────────────────────
 main_menu() {
   while true; do
@@ -225,6 +294,7 @@ main_menu() {
     echo -e "  ${C_MAG}1${C_RESET})  ${C_B}Setup Agente IA${C_RESET}  ${C_DIM}(Python + smolagents + agent-server)${C_RESET}"
     echo -e "  ${C_YEL}2${C_RESET})  ${C_B}Paquetes extra${C_RESET}   ${C_DIM}(red, editores, SSH, ngrok...)${C_RESET}"
     echo -e "  ${C_YEL}3${C_RESET})  ${C_B}Sistema${C_RESET}          ${C_DIM}(actualizar, info, DNS, zona horaria)${C_RESET}"
+    echo -e "  ${C_YEL}4${C_RESET})  ${C_B}Backup clave SSH${C_RESET}  ${C_DIM}(ver / restaurar tras reinstalar)${C_RESET}"
     hr
     echo -e "  ${C_GRN}s${C_RESET})  Ir al shell"
     echo -e "  ${C_RED}q${C_RESET})  Salir ${C_DIM}(no mostrar al inicio)${C_RESET}"
@@ -234,6 +304,7 @@ main_menu() {
       1) setup_agent ;;
       2) menu_packages ;;
       3) menu_system ;;
+      4) ssh_key_menu ;;
       s|S) clear; echo -e "${C_GRN}▸ Shell. Escribe ${C_B}lc-menu${C_RESET}${C_GRN} para volver.${C_RESET}"; echo ""; return 0 ;;
       q|Q) touch "$MARKER"; clear; echo -e "${C_DIM}Menú desactivado. Escribe ${C_B}lc-menu${C_RESET}${C_DIM} para reabrirlo.${C_RESET}"; echo ""; return 0 ;;
     esac
