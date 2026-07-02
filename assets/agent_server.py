@@ -440,7 +440,8 @@ _LIGHT_SYSTEM = (
     "PIENSO: (una frase)\n"
     "FINAL: (tu respuesta)\n\n"
     "Reglas: usa solo las herramientas listadas con su nombre exacto. "
-    "Una accion por turno. No inventes resultados. Se conciso."
+    "UNA SOLA accion por respuesta: escribe PIENSO, ACCION y ARGS, y PARA. "
+    "No escribas mas texto ni otra ACCION despues de ARGS. No inventes resultados. Se conciso."
 )
 
 
@@ -459,7 +460,7 @@ def _light_parse(text: str) -> dict:
     m_tool = re.search(r"ACCI[O\u00d3]N:\s*(\w+)", text, re.IGNORECASE)
     if m_tool:
         tool = m_tool.group(1).strip()
-        m_args = re.search(r"ARGS:\s*(.*)", text, re.IGNORECASE | re.DOTALL)
+        m_args = re.search(r"ARGS:\s*(.*?)(?=\n(?:PIENSO|ACCI[O\u00d3]N|FINAL):|\Z)", text, re.IGNORECASE | re.DOTALL)
         args = m_args.group(1).strip() if m_args else ""
         return {"kind": "action", "thought": thought, "tool": tool, "args": args}
 
