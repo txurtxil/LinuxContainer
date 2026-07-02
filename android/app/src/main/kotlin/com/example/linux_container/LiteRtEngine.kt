@@ -56,11 +56,12 @@ object LiteRtEngine {
                 backend = backend,
                 cacheDir = context.cacheDir.path,
                 // Limita el KV-cache (contexto) para no agotar la RAM.
-                // Gemma 4 puede usar hasta 32K tokens por defecto; con 2048
-                // sobra para tareas de un turno y baja mucho el consumo.
+                // 3072 da margen al system prompt de CodeAgent (tools +
+                // formato ReAct, ~2649 tokens) sin volver al problema de
+                // memoria que causaba 32K por defecto (TTFT 34s + OOM).
                 // Si esto provoca un error de forma de tensor al generar,
-                // quita esta linea (vuelve al default del modelo).
-                maxNumTokens = 2048,
+                // prueba 2048 o quita la linea (default del modelo).
+                maxNumTokens = 4096,
             )
             val e = Engine(config)
             e.initialize()

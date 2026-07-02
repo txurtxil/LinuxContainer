@@ -57,7 +57,7 @@ app.add_middleware(
 GPU_LOCAL_PORT    = 8090
 GPU_LOCAL_BASE    = f"http://127.0.0.1:{GPU_LOCAL_PORT}/v1"
 AGENT_PORT        = 8765
-MAX_STEPS         = 8
+MAX_STEPS         = 4
 MAX_TOKENS        = 2048
 
 # ── Modelos de request/response ──────────────────────────────
@@ -187,7 +187,10 @@ def list_files(path: str = "/root") -> str:
             marker  = "/" if is_dir else ""
             size_str = f"  ({size} B)" if not is_dir else ""
             lines.append(f"{'📁' if is_dir else '📄'} {item}{marker}{size_str}")
-        return "\n".join(lines) if lines else "(vacío)"
+        out = "\n".join(lines) if lines else "(vacío)"
+        if len(out) > 2000:
+            out = out[:2000] + f"\n... ({len(lines)} items en total, salida truncada)"
+        return out
     except Exception as e:
         return f"Error listando directorio: {e}"
 
