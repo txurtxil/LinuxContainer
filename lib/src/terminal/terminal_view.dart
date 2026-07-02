@@ -33,7 +33,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _hasSelection = false;
   String? _error;
 
-  double _fontSize = 14.0;
+  double _fontSize = 12.0;
   static const double _minFont = 8.0;
   static const double _maxFont = 28.0;
 
@@ -237,24 +237,6 @@ const TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.bold)),
                 ),
               const Divider(color: Colors.white24),
               ListTile(
-                leading: const Icon(Icons.smart_toy_outlined, color: Colors.lightBlueAccent),
-                title: const Text('Ir al Agente IA', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Panel del agente autónomo', style: TextStyle(color: Colors.white54)),
-                onTap: () { Navigator.pop(ctx); setState(() => _showAgent = true); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.bolt, color: Colors.amberAccent),
-                title: const Text('Prueba GPU (MediaPipe)', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Fase 1: inferencia on-device en GPU', style: TextStyle(color: Colors.white54)),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const MediaPipeTestScreen()),
-                  );
-                },
-              ),
-              const Divider(color: Colors.white24),
-              ListTile(
                 leading: const Icon(Icons.content_paste, color: Colors.greenAccent),
                 title: const Text('Pegar', style: TextStyle(color: Colors.white)),
                 onTap: () { Navigator.pop(ctx); _paste(); },
@@ -271,16 +253,6 @@ const TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.bold)),
 Colors.white)),
                 subtitle: const Text('Mostrar, ocultar y reordenar teclas', style: TextStyle(color: Colors.white54)),
                 onTap: () { Navigator.pop(ctx); _openKeybarSettings(); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.psychology, color: Colors.purpleAccent, size: 20),
-                title: const Text('5)  Configuración IA',
-                    style: TextStyle(color: Colors.white, fontSize: 13)),
-                dense: true,
-                onTap: () {
-                  Navigator.pop(ctx);
-                  setState(() => _showAgent = true);
-                },
               ),
               ListTile(
                 leading: const Icon(Icons.format_size, color: Colors.greenAccent),

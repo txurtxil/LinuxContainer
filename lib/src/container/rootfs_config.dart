@@ -29,7 +29,7 @@ eval "$(dircolors -b 2>/dev/null)" 2>/dev/null || true
 alias ls='ls --color=auto'
 alias ll='ls -lah --color=auto'
 alias la='ls -A --color=auto'
-alias l='ls -CF --color=auto'
+alias l='ls -la --color=auto'
 alias lt='ls -lahtr --color=auto'
 alias grep='grep --color=auto'
 alias egrep='egrep --color=auto'
@@ -59,6 +59,13 @@ alias ports='netstat -tulanp 2>/dev/null'
 alias myip='curl -s ifconfig.me; echo'
 alias now='date "+%Y-%m-%d %H:%M:%S"'
 alias reload='source ~/.bashrc'
+
+# Atajos del agente XTR (workflow real de desarrollo/depuracion)
+alias agentstart='cd /root && source agent-env/bin/activate && python3 agent_server.py'
+alias agentkill='pkill -9 -f agent_server.py'
+alias agentlog='tail -n 50 /tmp/agent.log 2>/dev/null || echo "sin log en /tmp/agent.log"'
+alias apy='/root/agent-env/bin/python3'
+alias apip='/root/agent-env/bin/pip'
 
 # Operaciones de archivos más seguras
 alias cp='cp -i'
