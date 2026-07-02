@@ -718,6 +718,7 @@ async def _run_light_agent(req: AgentRequest):
     tools_used = 0
     tools_used_names = set()
     warned_no_tools = False
+    repeat_warned = False
     expected_tools = {t.name for t in TOOLS if t.name in req.task}
     for step in range(MAX_STEPS):
         try:
@@ -780,6 +781,15 @@ async def _run_light_agent(req: AgentRequest):
         yield {"type": "step", "thought": f"\U0001f527 {tool}({args[:120]})"}
 
         if (tool, args) == last_action:
+            if repeat_warned:
+                yield {"type": "step", "thought":
+                       "\u26a0 Sigue repitiendo la misma accion tras el aviso. Terminando con el ultimo resultado real."}
+                yield {"type": "final", "answer": (
+                    str(last_result) if last_result else
+                    "El agente se quedo repitiendo la misma accion sin poder avanzar."
+                )}
+                return
+            repeat_warned = True
             yield {"type": "step", "thought":
                    "\u26a0 Repitiendo la misma accion que ya fallo. Cambiando de enfoque..."}
             messages.append({"role": "assistant", "content": raw})
@@ -793,6 +803,7 @@ async def _run_light_agent(req: AgentRequest):
         result = _light_exec_tool(tool, args)
         last_result = result
         last_action = (tool, args)
+        repeat_warned = False
         tools_used += 1
         tools_used_names.add(tool)
         yield {"type": "step", "thought": f"\u2192 {result[:400]}"}
