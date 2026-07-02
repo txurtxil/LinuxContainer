@@ -248,7 +248,65 @@ def http_request(method: str, url: str, body: str = "") -> str:
         return f"Error en la peticion HTTP: {e}"
 
 
-TOOLS = [run_bash, write_file, read_file, make_dir, list_files, http_request]
+@tool
+def ssh_exec(host: str, command: str) -> str:
+    """
+    Ejecuta un comando remoto por SSH usando autenticacion por clave
+    publica (nunca contrasena). La primera vez que se usa genera
+    automaticamente un par de claves si no existe.
+    Args:
+        host: Host remoto, formato usuario@ip o usuario@ip:puerto
+        command: Comando a ejecutar en el host remoto
+    Returns:
+        Salida del comando remoto. Si la clave aun no esta autorizada
+        en el servidor destino, devuelve la clave publica para que el
+        usuario la anada a ~/.ssh/authorized_keys del host remoto.
+    """
+    import subprocess
+    key_path = "/root/.ssh/id_ed25519"
+    pub_path = key_path + ".pub"
+    try:
+        if not os.path.exists(key_path):
+            os.makedirs("/root/.ssh", exist_ok=True)
+            subprocess.run(
+                ["ssh-keygen", "-t", "ed25519", "-f", key_path, "-N", ""],
+                capture_output=True, text=True, timeout=15,
+            )
+        pub_key = ""
+        if os.path.exists(pub_path):
+            with open(pub_path) as f:
+                pub_key = f.read().strip()
+
+        port = "22"
+        target = host
+        if ":" in host.split("@")[-1]:
+            target, port = host.rsplit(":", 1)
+
+        ssh_cmd = [
+            "ssh", "-i", key_path, "-p", port,
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=10",
+            target, command,
+        ]
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
+        output = (result.stdout + result.stderr).strip()
+
+        if result.returncode != 0 and ("Permission denied" in output or "publickey" in output or not output):
+            return (
+                "Error: no se pudo autenticar por clave. Anade esta clave "
+                "publica al fichero ~/.ssh/authorized_keys del servidor "
+                f"destino:\n{pub_key}\n\nSalida SSH: {output[:500]}"
+            )
+
+        return output[:3000] if len(output) > 3000 else output
+    except subprocess.TimeoutExpired:
+        return "Error: la conexion SSH tardo demasiado (timeout 30s)."
+    except Exception as e:
+        return f"Error ejecutando SSH: {e}"
+
+
+TOOLS = [run_bash, write_file, read_file, make_dir, list_files, http_request, ssh_exec]
 
 # ─────────────────────────────────────────────────────────────
 # Detección de GPU local
@@ -505,7 +563,8 @@ _LIGHT_TOOLS_BRIEF = """Herramientas disponibles:
 - write_file: escribe un fichero. ARGS = ruta|||contenido (ruta, tres barras, contenido).
 - make_dir: crea un directorio. ARGS = la ruta.
 - list_files: lista ficheros. ARGS = la ruta (vacio = /root).
-- http_request: llama a una API HTTP. ARGS = METODO|||URL o METODO|||URL|||BODY_JSON (ej: GET|||http://192.168.1.50:8123/api/states)."""
+- http_request: llama a una API HTTP. ARGS = METODO|||URL o METODO|||URL|||BODY_JSON (ej: GET|||http://192.168.1.50:8123/api/states).
+- ssh_exec: ejecuta un comando en otro servidor por SSH. ARGS = usuario@host|||comando (ej: txurtxil@z1|||uptime)."""
 
 _LIGHT_SYSTEM = (
     "Eres XTR, un agente que ejecuta tareas en un sistema Debian Linux local.\n\n"
@@ -601,6 +660,18 @@ def _light_exec_tool(tool_name: str, args: str) -> str:
             if not url:
                 return "Error: http_request necesita 'METODO|||URL' o 'METODO|||URL|||BODY'"
             return fn(method, url, body)
+        if tool_name == "ssh_exec":
+            if "|||" in args:
+                host, command = args.split("|||", 1)
+                host = host.strip()
+                command = command.strip()
+                if _is_dangerous_bash(command):
+                    return ("\u26d4 Comando SSH remoto bloqueado por seguridad "
+                            "(parece destructivo). Si el usuario de verdad lo "
+                            "necesita, que se conecte el mismo por SSH desde "
+                            "la terminal.")
+                return fn(host, command)
+            return "Error: ssh_exec necesita 'usuario@host|||comando'"
         return fn(args.strip())
     except Exception as e:
         return f"Error ejecutando {tool_name}: {e}"
