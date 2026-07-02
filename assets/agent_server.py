@@ -16,6 +16,7 @@ NOTA: llama.cpp / CPU inference ELIMINADO.
       Inferencia local SIEMPRE via GPU MediaPipe (puerto 8090).
 """
 
+import re
 import os
 import json
 import logging
@@ -413,6 +414,163 @@ def _friendly_error(msg: str) -> AgentResponse:
     return AgentResponse(answer=text, error=True)
 
 # ─────────────────────────────────────────────────────────────
+# Agente ReAct ligero (SOLO para GPU local / modelos pequeños)
+# Prompt de sistema ~300 tokens vs ~2600 de CodeAgent.
+# Formato de texto plano: PIENSO / ACCION / ARGS / FINAL
+# ─────────────────────────────────────────────────────────────
+
+_TOOL_MAP = {t.name: t for t in TOOLS}
+
+_LIGHT_TOOLS_BRIEF = """Herramientas disponibles:
+- run_bash: ejecuta un comando bash en Debian. ARGS = el comando.
+- read_file: lee un fichero. ARGS = la ruta.
+- write_file: escribe un fichero. ARGS = ruta|||contenido (ruta, tres barras, contenido).
+- make_dir: crea un directorio. ARGS = la ruta.
+- list_files: lista ficheros. ARGS = la ruta (vacio = /root)."""
+
+_LIGHT_SYSTEM = (
+    "Eres XTR, un agente que ejecuta tareas en un sistema Debian Linux local.\n\n"
+    + _LIGHT_TOOLS_BRIEF +
+    "\n\nResponde SIEMPRE en uno de estos dos formatos exactos:\n\n"
+    "Si necesitas una herramienta:\n"
+    "PIENSO: (una frase)\n"
+    "ACCION: (nombre exacto de la herramienta)\n"
+    "ARGS: (el argumento)\n\n"
+    "Cuando tengas la respuesta final:\n"
+    "PIENSO: (una frase)\n"
+    "FINAL: (tu respuesta)\n\n"
+    "Reglas: usa solo las herramientas listadas con su nombre exacto. "
+    "Una accion por turno. No inventes resultados. Se conciso."
+)
+
+
+def _light_parse(text: str) -> dict:
+    """Parsea la salida del modelo: final / action / unparseable."""
+    thought = ""
+    m_think = re.search(r"PIENSO:\s*(.+?)(?=\n(?:ACCION|ACCI\u00d3N|FINAL):|$)",
+                        text, re.IGNORECASE | re.DOTALL)
+    if m_think:
+        thought = m_think.group(1).strip()
+
+    m_final = re.search(r"FINAL:\s*(.+)", text, re.IGNORECASE | re.DOTALL)
+    if m_final:
+        return {"kind": "final", "thought": thought, "answer": m_final.group(1).strip()}
+
+    m_tool = re.search(r"ACCI[O\u00d3]N:\s*(\w+)", text, re.IGNORECASE)
+    if m_tool:
+        tool = m_tool.group(1).strip()
+        m_args = re.search(r"ARGS:\s*(.*)", text, re.IGNORECASE | re.DOTALL)
+        args = m_args.group(1).strip() if m_args else ""
+        return {"kind": "action", "thought": thought, "tool": tool, "args": args}
+
+    return {"kind": "unparseable", "raw": text.strip()}
+
+
+def _light_exec_tool(tool_name: str, args: str) -> str:
+    """Ejecuta una tool con el argumento parseado."""
+    fn = _TOOL_MAP.get(tool_name)
+    if fn is None:
+        return f"Error: herramienta '{tool_name}' no existe. Disponibles: {', '.join(_TOOL_MAP.keys())}"
+    try:
+        if tool_name == "write_file":
+            if "|||" in args:
+                path, content = args.split("|||", 1)
+                return fn(path.strip(), content)
+            return "Error: write_file necesita 'ruta|||contenido'"
+        elif tool_name == "list_files":
+            return fn(args.strip() or "/root")
+        else:
+            return fn(args.strip())
+    except Exception as e:
+        return f"Error ejecutando {tool_name}: {e}"
+
+
+async def _light_call_model(req: AgentRequest, messages: list) -> str:
+    """Una llamada al servidor GPU MediaPipe. Devuelve el texto generado."""
+    payload = {
+        "model": "gemma",
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
+        "temperature": 0.4,
+        "stream": False,
+    }
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            f"{GPU_LOCAL_BASE}/chat/completions",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+
+async def _run_light_agent(req: AgentRequest):
+    """
+    Bucle ReAct ligero. Es un GENERADOR ASINCRONO que emite eventos dict
+    para el streaming SSE: {'type':'step',...} y {'type':'final',...}.
+    """
+    import json as _json
+
+    if not await _is_gpu_server_alive():
+        yield {"type": "final", "answer":
+               "\u26a0 El servidor GPU no esta activo. Carga un modelo en 'Prueba GPU'."}
+        return
+
+    messages = [
+        {"role": "system", "content": _LIGHT_SYSTEM},
+        {"role": "user", "content": req.task},
+    ]
+
+    for step in range(MAX_STEPS):
+        try:
+            raw = await _light_call_model(req, messages)
+        except httpx.HTTPStatusError as e:
+            # ERROR REAL al chat (no generico)
+            yield {"type": "step", "thought":
+                   f"\u26a0 Error del modelo (HTTP {e.response.status_code}): {e.response.text[:300]}"}
+            yield {"type": "final", "answer":
+                   f"El modelo devolvio un error: {e.response.text[:200]}"}
+            return
+        except Exception as e:
+            yield {"type": "step", "thought": f"\u26a0 Error: {str(e)[:300]}"}
+            yield {"type": "final", "answer": f"Error al contactar el modelo: {str(e)[:200]}"}
+            return
+
+        parsed = _light_parse(raw)
+
+        if parsed["kind"] == "final":
+            if parsed.get("thought"):
+                yield {"type": "step", "thought": parsed["thought"]}
+            yield {"type": "final", "answer": parsed["answer"]}
+            return
+
+        if parsed["kind"] == "unparseable":
+            # El modelo no siguio el formato: devolvemos su texto como respuesta.
+            yield {"type": "final", "answer": parsed["raw"]}
+            return
+
+        # Es una accion: ejecutar la tool
+        thought = parsed.get("thought", "")
+        tool = parsed["tool"]
+        args = parsed["args"]
+        if thought:
+            yield {"type": "step", "thought": thought}
+        yield {"type": "step", "thought": f"\U0001f527 {tool}({args[:120]})"}
+
+        result = _light_exec_tool(tool, args)
+        yield {"type": "step", "thought": f"\u2192 {result[:400]}"}
+
+        # Alimentar el resultado de vuelta al modelo
+        messages.append({"role": "assistant", "content": raw})
+        messages.append({"role": "user", "content": f"Resultado de {tool}:\n{result}\n\nContinua."})
+
+    # Agotados los pasos
+    yield {"type": "final", "answer":
+           f"No pude completar la tarea en {MAX_STEPS} pasos. Prueba a reformularla o dividirla."}
+
+
+# ─────────────────────────────────────────────────────────────
 # Endpoints FastAPI
 # ─────────────────────────────────────────────────────────────
 
@@ -473,11 +631,16 @@ async def run_streaming(req: AgentRequest):
         raise HTTPException(status_code=400, detail="task no puede estar vacio")
 
     async def generate():
-        # Ambas fuentes pasan por el agente con tools; _run_agent decide
-        # internamente CodeAgent (local) vs ToolCallingAgent (remoto).
-        result = await _run_agent(req)
+        if _is_gpu_local(req):
+            # Agente ligero: prompt corto, sin CodeAgent, evita
+            # desbordar el contexto de modelos pequeños locales.
+            async for event in _run_light_agent(req):
+                yield f"data: {_json.dumps(event)}\n\n"
+            return
 
-        # Emitir en formato que espera Flutter agent_chat.dart
+        # Fuentes remotas: smolagents con ToolCallingAgent (soportan
+        # function-calling real de verdad, p.ej. Groq).
+        result = await _run_agent(req)
         if result.thoughts:
             for t in result.thoughts:
                 yield f"data: {_json.dumps({'type': 'step', 'thought': t})}\n\n"
