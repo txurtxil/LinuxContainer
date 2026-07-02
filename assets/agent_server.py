@@ -545,9 +545,18 @@ async def _run_light_agent(req: AgentRequest):
     last_action = None
     tools_used = 0
     warned_no_tools = False
+    last_result = None
+    last_action = None
+    tools_used = 0
+    tools_used_names = set()
+    warned_no_tools = False
+    expected_tools = {t.name for t in TOOLS if t.name in req.task}
     for step in range(MAX_STEPS):
         try:
             raw = await _light_call_model(req, messages)
+            for _tok in ("<end_of_turn>", "<eos>", "<|im_end|>", "</s>"):
+                raw = raw.replace(_tok, "")
+            raw = raw.strip()
             for _tok in ("<end_of_turn>", "<eos>", "<|im_end|>", "</s>"):
                 raw = raw.replace(_tok, "")
             raw = raw.strip()
