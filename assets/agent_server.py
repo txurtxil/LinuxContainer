@@ -58,7 +58,7 @@ app.add_middleware(
 GPU_LOCAL_PORT    = 8090
 GPU_LOCAL_BASE    = f"http://127.0.0.1:{GPU_LOCAL_PORT}/v1"
 AGENT_PORT        = 8765
-MAX_STEPS         = 6
+MAX_STEPS         = 8
 MAX_TOKENS        = 2048
 
 # ── Modelos de request/response ──────────────────────────────
@@ -443,7 +443,12 @@ _LIGHT_SYSTEM = (
     "o ejecutado algo si no lo has hecho antes con una ACCION real. "
     "Usa solo las herramientas listadas con su nombre exacto. "
     "UNA SOLA accion por respuesta: escribe PIENSO, ACCION y ARGS, y PARA. "
-    "No escribas mas texto ni otra ACCION despues de ARGS. Se conciso."
+    "No escribas mas texto ni otra ACCION despues de ARGS. "
+    "Cada run_bash debe ser UN comando simple, sin comillas anidadas ni "
+    "$(...) complejos. Si necesitas varios datos, ejecuta varios run_bash "
+    "simples por separado. Para escribir un fichero, compon tu el texto "
+    "final y pasalo a write_file directamente, no lo construyas con echo. "
+    "Se conciso."
 )
 
 
@@ -537,6 +542,7 @@ async def _run_light_agent(req: AgentRequest):
     ]
 
     last_result = None
+    last_action = None
     tools_used = 0
     warned_no_tools = False
     for step in range(MAX_STEPS):
@@ -591,12 +597,23 @@ async def _run_light_agent(req: AgentRequest):
             yield {"type": "step", "thought": thought}
         yield {"type": "step", "thought": f"\U0001f527 {tool}({args[:120]})"}
 
+        if (tool, args) == last_action:
+            yield {"type": "step", "thought":
+                   "\u26a0 Repitiendo la misma accion que ya fallo. Cambiando de enfoque..."}
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({"role": "user", "content":
+                f"Ya intentaste exactamente esto y fallo: {tool}({args[:200]}). "
+                "NO lo repitas igual. Usa UN comando bash simple (sin comillas "
+                "anidadas ni $(...) complejos) o compon el texto tu mismo y "
+                "usa write_file directamente."})
+            continue
+
         result = _light_exec_tool(tool, args)
         last_result = result
+        last_action = (tool, args)
         tools_used += 1
         yield {"type": "step", "thought": f"\u2192 {result[:400]}"}
 
-        # Alimentar el resultado de vuelta al modelo
         messages.append({"role": "assistant", "content": raw})
         messages.append({"role": "user", "content": f"Resultado de {tool}:\n{result}\n\nContinua."})
 
