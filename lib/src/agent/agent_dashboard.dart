@@ -643,29 +643,46 @@ class _AgentDashboardState extends State<AgentDashboard> {
                                     color: _C.off, fontSize: 12, height: 1.4),
                               ),
                             ),
-                          _cfgLabel('Inferencia (local)'),
-                          const SizedBox(height: 10),
-                          _cfgStepper('Hilos (-t)', threads, 1, 8, 1,
-                              (v) => setS(() => threads = v)),
-                          const SizedBox(height: 8),
-                          _cfgChips(
-                              'Contexto (-c)',
-                              const ['4096', '8192', '16384'],
-                              nCtx.toString(),
-                              (v) => setS(() => nCtx = int.parse(v))),
-                          const SizedBox(height: 8),
-                          _cfgChips(
-                              'KV cache',
-                              const ['q4_0', 'q8_0', 'f16'],
-                              kv,
-                              (v) => setS(() => kv = v)),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'q4_0 = más rápido · q8_0 = equilibrio · f16 = sin cuantizar',
-                            style: TextStyle(
-                                color: _C.off, fontSize: 11.5, height: 1.4),
-                          ),
-                          const SizedBox(height: 22),
+                          if (_svc.sourceId == 'local') ...[
+                            _cfgLabel('Inferencia (local · llama.cpp)'),
+                            const SizedBox(height: 10),
+                            _cfgStepper('Hilos (-t)', threads, 1, 8, 1,
+                                (v) => setS(() => threads = v)),
+                            const SizedBox(height: 8),
+                            _cfgChips(
+                                'Contexto (-c)',
+                                const ['4096', '8192', '16384'],
+                                nCtx.toString(),
+                                (v) => setS(() => nCtx = int.parse(v))),
+                            const SizedBox(height: 8),
+                            _cfgChips(
+                                'KV cache',
+                                const ['q4_0', 'q8_0', 'f16'],
+                                kv,
+                                (v) => setS(() => kv = v)),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'q4_0 = más rápido · q8_0 = equilibrio · f16 = sin cuantizar',
+                              style: TextStyle(
+                                  color: _C.off, fontSize: 11.5, height: 1.4),
+                            ),
+                            const SizedBox(height: 22),
+                          ] else
+                            Container(
+                              margin: const EdgeInsets.only(bottom: 16),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: _C.cardAlt,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: _C.border),
+                              ),
+                              child: const Text(
+                                'Hilos, contexto y KV cache son propios de llama.cpp '
+                                '(fuente "Local"). Con GPU Local o fuentes remotas no aplican.',
+                                style: TextStyle(
+                                    color: _C.off, fontSize: 12, height: 1.4),
+                              ),
+                            ),
                           _cfgLabel('Muestreo'),
                           const SizedBox(height: 6),
                           _cfgSlider('Temperature', temp, 0.0, 2.0, 40,
@@ -686,8 +703,10 @@ class _AgentDashboardState extends State<AgentDashboard> {
                                 color: _C.off, fontSize: 11.5, height: 1.4),
                           ),
                           const SizedBox(height: 10),
-                          _cfgPortField('llama-server', llamaPortCtrl),
-                          const SizedBox(height: 10),
+                          if (_svc.sourceId == 'local') ...[
+                            _cfgPortField('llama-server', llamaPortCtrl),
+                            const SizedBox(height: 10),
+                          ],
                           _cfgPortField('agent-server', agentPortCtrl),
                           const SizedBox(height: 22),
                           SizedBox(
