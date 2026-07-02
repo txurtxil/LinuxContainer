@@ -263,9 +263,22 @@ def ssh_exec(host: str, command: str) -> str:
         usuario la anada a ~/.ssh/authorized_keys del host remoto.
     """
     import subprocess
+    import shutil
     key_path = "/root/.ssh/id_ed25519"
     pub_path = key_path + ".pub"
     try:
+        if shutil.which("ssh") is None or shutil.which("ssh-keygen") is None:
+            subprocess.run(["apt-get", "update", "-q"], capture_output=True, timeout=60)
+            inst = subprocess.run(
+                ["apt-get", "install", "-y", "--no-install-recommends", "openssh-client"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if shutil.which("ssh") is None:
+                return (
+                    "Error: no se pudo instalar openssh-client automaticamente. "
+                    "Instalalo a mano: apt install -y openssh-client\n"
+                    f"{inst.stderr[-300:]}"
+                )
         if not os.path.exists(key_path):
             os.makedirs("/root/.ssh", exist_ok=True)
             subprocess.run(
