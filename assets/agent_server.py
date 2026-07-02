@@ -197,7 +197,7 @@ def list_files(path: str = "/root") -> str:
 
 
 @tool
-def http_request(method: str, url: str, body: str = "") -> str:
+def http_request(method: str, url: str, body: str = "", auth_header: str = "") -> str:
     """
     Realiza una peticion HTTP (GET, POST, PUT, DELETE, PATCH) a una URL.
     Util para conectar con APIs como Home Assistant, webhooks, etc.
@@ -205,6 +205,8 @@ def http_request(method: str, url: str, body: str = "") -> str:
         method: Metodo HTTP (GET, POST, PUT, DELETE, PATCH)
         url: URL completa incluyendo protocolo (http:// o https://)
         body: Cuerpo de la peticion en JSON (opcional, solo POST/PUT/PATCH)
+        auth_header: Valor completo de la cabecera Authorization, opcional
+                     (ej: "Bearer eyJhbGciOi...")
     Returns:
         Codigo de estado y cuerpo de la respuesta (truncado)
     """
@@ -212,7 +214,10 @@ def http_request(method: str, url: str, body: str = "") -> str:
         method = method.strip().upper()
         if method not in ("GET", "POST", "PUT", "DELETE", "PATCH"):
             return f"Error: metodo '{method}' no soportado. Usa GET, POST, PUT, DELETE o PATCH."
-        kwargs = {"headers": {"Content-Type": "application/json"}, "timeout": 15.0}
+        headers = {"Content-Type": "application/json"}
+        if auth_header.strip():
+            headers["Authorization"] = auth_header.strip()
+        kwargs = {"headers": headers, "timeout": 15.0}
         if body and method in ("POST", "PUT", "PATCH"):
             kwargs["content"] = body
         with httpx.Client() as client:
@@ -576,7 +581,7 @@ _LIGHT_TOOLS_BRIEF = """Herramientas disponibles:
 - write_file: escribe un fichero. ARGS = ruta|||contenido (ruta, tres barras, contenido).
 - make_dir: crea un directorio. ARGS = la ruta.
 - list_files: lista ficheros. ARGS = la ruta (vacio = /root).
-- http_request: llama a una API HTTP. ARGS = METODO|||URL o METODO|||URL|||BODY_JSON (ej: GET|||http://192.168.1.50:8123/api/states).
+- http_request: llama a una API HTTP. ARGS = METODO|||URL, METODO|||URL|||BODY_JSON, o METODO|||URL|||BODY_JSON|||Bearer TOKEN para APIs con autenticacion (ej Home Assistant).
 - ssh_exec: ejecuta un comando en otro servidor por SSH. ARGS = usuario@host|||comando (ej: txurtxil@z1|||uptime)."""
 
 _LIGHT_SYSTEM = (
@@ -670,9 +675,10 @@ def _light_exec_tool(tool_name: str, args: str) -> str:
             method = parts[0].strip() if len(parts) > 0 else "GET"
             url = parts[1].strip() if len(parts) > 1 else ""
             body = parts[2] if len(parts) > 2 else ""
+            auth_header = parts[3].strip() if len(parts) > 3 else ""
             if not url:
                 return "Error: http_request necesita 'METODO|||URL' o 'METODO|||URL|||BODY'"
-            return fn(method, url, body)
+            return fn(method, url, body, auth_header)
         if tool_name == "ssh_exec":
             if "|||" in args:
                 host, command = args.split("|||", 1)
@@ -791,7 +797,13 @@ async def _run_light_agent(req: AgentRequest):
         args = parsed["args"]
         if thought:
             yield {"type": "step", "thought": thought}
-        yield {"type": "step", "thought": f"\U0001f527 {tool}({args[:120]})"}
+        display_args = args
+        if tool == "http_request":
+            _dparts = args.split("|||")
+            if len(_dparts) > 3 and _dparts[3].strip():
+                _dparts[3] = "***oculto***"
+                display_args = "|||".join(_dparts)
+        yield {"type": "step", "thought": f"\U0001f527 {tool}({display_args[:120]})"}
 
         if (tool, args) == last_action:
             if repeat_warned:
