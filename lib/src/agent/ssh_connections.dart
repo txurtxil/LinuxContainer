@@ -141,6 +141,8 @@ Future<void> showSshLauncher(
   var hosts = loaded.hosts;
   var templates = loaded.templates;
   SshHost? selectedHost;
+  var multiMode = false;
+  final selectedIds = <String>{};
 
   if (!context.mounted) return;
 
@@ -277,7 +279,23 @@ Future<void> showSshLauncher(
         }
 
         void useTemplate(SshTemplate t) {
-          inputCtrl.text = t.taskTemplate.replaceAll('{host}', selectedHost!.userAtHost);
+          if (multiMode && selectedIds.length > 1) {
+            final chosen = hosts.where((h) => selectedIds.contains(h.id)).toList();
+            final singleTask = t.taskTemplate.replaceAll('{host}', '{host}');
+            final listado = chosen.map((h) => '- ${h.label} (${h.userAtHost})').join('\n');
+            inputCtrl.text =
+                'Aplica esta comprobacion a CADA UNO de estos servidores, uno '
+                'por uno, usando ssh_exec por separado para cada host. Al final '
+                'dame un resumen con el estado de cada uno.\n\n'
+                'Servidores:\n$listado\n\n'
+                'Comprobacion a aplicar en cada host (sustituye {host} por el '
+                'usuario@ip de cada servidor de la lista): $singleTask';
+          } else {
+            final h = selectedIds.isNotEmpty
+                ? hosts.firstWhere((x) => x.id == selectedIds.first, orElse: () => selectedHost!)
+                : selectedHost!;
+            inputCtrl.text = t.taskTemplate.replaceAll('{host}', h.userAtHost);
+          }
           Navigator.pop(ctx);
         }
 
@@ -352,12 +370,35 @@ Future<void> showSshLauncher(
                       style: TextStyle(
                           color: _K.textHi, fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
+                IconButton(
+                  tooltip: multiMode ? 'Cancelar seleccion' : 'Seleccionar varios',
+                  icon: Icon(multiMode ? Icons.close : Icons.checklist,
+                      size: 20, color: _K.accent),
+                  onPressed: () => setSheet(() {
+                    multiMode = !multiMode;
+                    selectedIds.clear();
+                  }),
+                ),
                 TextButton.icon(
                   onPressed: () => addOrEditHost(),
                   icon: const Icon(Icons.add, size: 18, color: _K.accent),
                   label: const Text('Host', style: TextStyle(color: _K.accent)),
                 ),
               ]),
+              if (multiMode)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(children: [
+                    Text('${selectedIds.length} seleccionados',
+                        style: const TextStyle(color: _K.off, fontSize: 12)),
+                    const Spacer(),
+                    if (selectedIds.length > 1)
+                      TextButton(
+                        onPressed: () => setSheet(() => selectedHost = hosts.first),
+                        child: const Text('Continuar', style: TextStyle(color: _K.accent)),
+                      ),
+                  ]),
+                ),
               const Divider(color: _K.border),
               if (hosts.isEmpty)
                 const Padding(
@@ -379,22 +420,47 @@ Future<void> showSshLauncher(
                                     color: _K.off, fontSize: 11, letterSpacing: 1)),
                           ),
                           ...entry.value.map((h) => ListTile(
-                                leading: const Icon(Icons.dns, color: _K.accent, size: 20),
+                                leading: multiMode
+                                    ? Checkbox(
+                                        value: selectedIds.contains(h.id),
+                                        activeColor: _K.accent,
+                                        onChanged: (_) => setSheet(() {
+                                          if (selectedIds.contains(h.id)) {
+                                            selectedIds.remove(h.id);
+                                          } else {
+                                            selectedIds.add(h.id);
+                                          }
+                                        }),
+                                      )
+                                    : const Icon(Icons.dns, color: _K.accent, size: 20),
                                 title: Text(h.label, style: const TextStyle(color: _K.textHi)),
                                 subtitle: Text(h.userAtHost,
                                     style: const TextStyle(
                                         color: _K.off, fontSize: 12, fontFamily: 'monospace')),
-                                onTap: () => setSheet(() => selectedHost = h),
-                                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.edit, size: 18, color: _K.off),
-                                    onPressed: () => addOrEditHost(existing: h),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete_outline, size: 18, color: _K.off),
-                                    onPressed: () => deleteHost(h),
-                                  ),
-                                ]),
+                                onTap: () => multiMode
+                                    ? setSheet(() {
+                                        if (selectedIds.contains(h.id)) {
+                                          selectedIds.remove(h.id);
+                                        } else {
+                                          selectedIds.add(h.id);
+                                        }
+                                      })
+                                    : setSheet(() {
+                                        selectedIds..clear()..add(h.id);
+                                        selectedHost = h;
+                                      }),
+                                trailing: multiMode
+                                    ? null
+                                    : Row(mainAxisSize: MainAxisSize.min, children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.edit, size: 18, color: _K.off),
+                                          onPressed: () => addOrEditHost(existing: h),
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline, size: 18, color: _K.off),
+                                          onPressed: () => deleteHost(h),
+                                        ),
+                                      ]),
                               )),
                         ],
                       );
