@@ -196,7 +196,36 @@ def list_files(path: str = "/root") -> str:
         return f"Error listando directorio: {e}"
 
 
-TOOLS = [run_bash, write_file, read_file, make_dir, list_files]
+@tool
+def http_request(method: str, url: str, body: str = "") -> str:
+    """
+    Realiza una peticion HTTP (GET, POST, PUT, DELETE, PATCH) a una URL.
+    Util para conectar con APIs como Home Assistant, webhooks, etc.
+    Args:
+        method: Metodo HTTP (GET, POST, PUT, DELETE, PATCH)
+        url: URL completa incluyendo protocolo (http:// o https://)
+        body: Cuerpo de la peticion en JSON (opcional, solo POST/PUT/PATCH)
+    Returns:
+        Codigo de estado y cuerpo de la respuesta (truncado)
+    """
+    try:
+        method = method.strip().upper()
+        if method not in ("GET", "POST", "PUT", "DELETE", "PATCH"):
+            return f"Error: metodo '{method}' no soportado. Usa GET, POST, PUT, DELETE o PATCH."
+        kwargs = {"headers": {"Content-Type": "application/json"}, "timeout": 15.0}
+        if body and method in ("POST", "PUT", "PATCH"):
+            kwargs["content"] = body
+        with httpx.Client() as client:
+            resp = client.request(method, url, **kwargs)
+        out = f"HTTP {resp.status_code}\n{resp.text}"
+        return out[:3000] if len(out) > 3000 else out
+    except httpx.TimeoutException:
+        return "Error: la peticion tardo demasiado (timeout 15s)"
+    except Exception as e:
+        return f"Error en la peticion HTTP: {e}"
+
+
+TOOLS = [run_bash, write_file, read_file, make_dir, list_files, http_request]
 
 # ─────────────────────────────────────────────────────────────
 # Detección de GPU local
@@ -421,12 +450,39 @@ def _friendly_error(msg: str) -> AgentResponse:
 
 _TOOL_MAP = {t.name: t for t in TOOLS}
 
+_DANGEROUS_BASH_PATTERNS = [
+    r"rm\s+-rf\s+/(\s|$)",
+    r"rm\s+-rf\s+/\*",
+    r"rm\s+-rf\s+~(\s|$)",
+    r"rm\s+-rf\s+\.\s*$",
+    r"dd\s+.*of=/dev/",
+    r"mkfs\.",
+    r">\s*/dev/(sd|nvme|mmcblk)",
+    r"chmod\s+-R\s+777\s+/(\s|$)",
+    r":\(\)\s*\{\s*:\s*\|\s*:&\s*\}",
+    r"docker\s+system\s+prune\s+-a.*--volumes",
+    r"\bshutdown\b|\breboot\b|\bpoweroff\b|\bhalt\b",
+]
+
+def _is_dangerous_bash(cmd: str) -> bool:
+    """True si el comando bash parece destructivo (borra todo, formatea, apaga)."""
+    return any(re.search(p, cmd, re.IGNORECASE) for p in _DANGEROUS_BASH_PATTERNS)
+
+_PROTECTED_WRITE_PREFIXES = ("/etc/", "/boot/", "/sys/", "/proc/", "/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/")
+
+def _is_protected_path(path: str) -> bool:
+    """True si la ruta esta en una zona protegida del sistema."""
+    if not path.startswith("/"):
+        path = f"/root/{path}"
+    return any(path.startswith(p) for p in _PROTECTED_WRITE_PREFIXES)
+
 _LIGHT_TOOLS_BRIEF = """Herramientas disponibles:
 - run_bash: ejecuta un comando bash en Debian. ARGS = el comando.
 - read_file: lee un fichero. ARGS = la ruta.
 - write_file: escribe un fichero. ARGS = ruta|||contenido (ruta, tres barras, contenido).
 - make_dir: crea un directorio. ARGS = la ruta.
-- list_files: lista ficheros. ARGS = la ruta (vacio = /root)."""
+- list_files: lista ficheros. ARGS = la ruta (vacio = /root).
+- http_request: llama a una API HTTP. ARGS = METODO|||URL o METODO|||URL|||BODY_JSON (ej: GET|||http://192.168.1.50:8123/api/states)."""
 
 _LIGHT_SYSTEM = (
     "Eres XTR, un agente que ejecuta tareas en un sistema Debian Linux local.\n\n"
@@ -486,20 +542,43 @@ def _light_parse(text: str) -> dict:
 
 
 def _light_exec_tool(tool_name: str, args: str) -> str:
-    """Ejecuta una tool con el argumento parseado."""
+    """Ejecuta una tool con el argumento parseado, aplicando guardarrailes basicos."""
     fn = _TOOL_MAP.get(tool_name)
     if fn is None:
         return f"Error: herramienta '{tool_name}' no existe. Disponibles: {', '.join(_TOOL_MAP.keys())}"
     try:
+        if tool_name == "run_bash":
+            cmd = args.strip()
+            if _is_dangerous_bash(cmd):
+                return ("\u26d4 Comando bloqueado por seguridad (parece destructivo: "
+                        "borra archivos en masa, formatea disco, o apaga el sistema). "
+                        "Si el usuario de verdad lo necesita, que lo ejecute el mismo "
+                        "desde la terminal.")
+            return fn(cmd)
         if tool_name == "write_file":
             if "|||" in args:
                 path, content = args.split("|||", 1)
-                return fn(path.strip(), content)
+                path = path.strip()
+                if _is_protected_path(path):
+                    return f"\u26d4 No se puede escribir en {path}: ruta protegida del sistema."
+                return fn(path, content)
             return "Error: write_file necesita 'ruta|||contenido'"
-        elif tool_name == "list_files":
+        if tool_name == "make_dir":
+            path = args.strip()
+            if _is_protected_path(path):
+                return f"\u26d4 No se puede crear directorio en {path}: ruta protegida del sistema."
+            return fn(path)
+        if tool_name == "list_files":
             return fn(args.strip() or "/root")
-        else:
-            return fn(args.strip())
+        if tool_name == "http_request":
+            parts = args.split("|||")
+            method = parts[0].strip() if len(parts) > 0 else "GET"
+            url = parts[1].strip() if len(parts) > 1 else ""
+            body = parts[2] if len(parts) > 2 else ""
+            if not url:
+                return "Error: http_request necesita 'METODO|||URL' o 'METODO|||URL|||BODY'"
+            return fn(method, url, body)
+        return fn(args.strip())
     except Exception as e:
         return f"Error ejecutando {tool_name}: {e}"
 
