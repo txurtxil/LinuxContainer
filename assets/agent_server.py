@@ -439,9 +439,11 @@ _LIGHT_SYSTEM = (
     "Cuando tengas la respuesta final:\n"
     "PIENSO: (una frase)\n"
     "FINAL: (tu respuesta)\n\n"
-    "Reglas: usa solo las herramientas listadas con su nombre exacto. "
+    "Reglas: NUNCA digas FINAL ni afirmes haber creado, escrito, leido "
+    "o ejecutado algo si no lo has hecho antes con una ACCION real. "
+    "Usa solo las herramientas listadas con su nombre exacto. "
     "UNA SOLA accion por respuesta: escribe PIENSO, ACCION y ARGS, y PARA. "
-    "No escribas mas texto ni otra ACCION despues de ARGS. No inventes resultados. Se conciso."
+    "No escribas mas texto ni otra ACCION despues de ARGS. Se conciso."
 )
 
 
@@ -535,6 +537,8 @@ async def _run_light_agent(req: AgentRequest):
     ]
 
     last_result = None
+    tools_used = 0
+    warned_no_tools = False
     for step in range(MAX_STEPS):
         try:
             raw = await _light_call_model(req, messages)
@@ -556,6 +560,19 @@ async def _run_light_agent(req: AgentRequest):
         parsed = _light_parse(raw)
 
         if parsed["kind"] == "final":
+            if tools_used == 0 and not warned_no_tools:
+                warned_no_tools = True
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "user", "content":
+                    "No has ejecutado ninguna ACCION todavia en esta "
+                    "conversacion. Si tu tarea requiere crear, leer, "
+                    "escribir o ejecutar algo, hazlo ahora con ACCION "
+                    "real (no des nada por hecho). Si de verdad no "
+                    "necesitas ninguna herramienta, repite tu FINAL."
+                })
+                yield {"type": "step", "thought":
+                       "\u26a0 Posible respuesta sin ejecutar herramientas. Pidiendo confirmacion..."}
+                continue
             if parsed.get("thought"):
                 yield {"type": "step", "thought": parsed["thought"]}
             yield {"type": "final", "answer": parsed["answer"]}
@@ -576,6 +593,7 @@ async def _run_light_agent(req: AgentRequest):
 
         result = _light_exec_tool(tool, args)
         last_result = result
+        tools_used += 1
         yield {"type": "step", "thought": f"\u2192 {result[:400]}"}
 
         # Alimentar el resultado de vuelta al modelo
