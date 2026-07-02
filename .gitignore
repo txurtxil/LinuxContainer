@@ -22,3 +22,5 @@ build/
 android/app/src/main/assets/rootfs.tar.xz
 *.apk
 android/app/src/main/assets/rootfs.tar.gz
+__pycache__/
+*.pyc

@@ -420,7 +420,7 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                 child: Text(
                   _sessions.length > 1
                       ? '${_active.name} (${_activeIndex + 1}/${_sessions.length})'
-                      : 'Terminal · Debian  v1.2',
+                      : 'Terminal · Debian  v1.3',
                   style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 13,

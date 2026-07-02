@@ -84,7 +84,7 @@ class MainActivity : FlutterActivity() {
                         val gpu  = call.argument<Boolean>("gpu") ?: true
                         if (path == null) { result.error("ARG", "Falta 'path'", null); return@setMethodCallHandler }
                         Thread {
-                            val err = InferenceEngine.load(applicationContext, path, gpu)
+                            val err = MediaPipeEngine.load(applicationContext, path, gpu)
                             runOnUiThread { if (err == null) result.success(true) else result.error("LOAD", err, null) }
                         }.start()
                     }
@@ -93,7 +93,7 @@ class MainActivity : FlutterActivity() {
                         if (prompt == null) { result.error("ARG", "Falta 'prompt'", null); return@setMethodCallHandler }
                         Thread { runGenerate(prompt, result) }.start()
                     }
-                    "unload" -> { InferenceEngine.close(); result.success(true) }
+                    "unload" -> { MediaPipeEngine.close(); result.success(true) }
                     "importModel" -> {
                         if (pendingImport != null) { result.error("BUSY", "Importación en curso", null); return@setMethodCallHandler }
                         pendingImport = result
@@ -110,9 +110,9 @@ class MainActivity : FlutterActivity() {
                         val gpu  = call.argument<Boolean>("gpu") ?: true
                         Thread {
                             var err: String? = null
-                            if (path != null && !InferenceEngine.isLoaded)
-                                err = InferenceEngine.load(applicationContext, path, gpu)
-                            if (err == null && !InferenceEngine.isLoaded)
+                            if (path != null && !MediaPipeEngine.isLoaded)
+                                err = MediaPipeEngine.load(applicationContext, path, gpu)
+                            if (err == null && !MediaPipeEngine.isLoaded)
                                 err = "El modelo no está cargado."
                             if (err == null) err = MediaPipeServer.start(port)
                             val e = err
@@ -123,8 +123,8 @@ class MainActivity : FlutterActivity() {
                     "serverStatus" -> result.success(mapOf(
                         "running"     to MediaPipeServer.isRunning,
                         "port"        to MediaPipeServer.port,
-                        "modelLoaded" to InferenceEngine.isLoaded,
-                        "modelPath"   to (InferenceEngine.loadedPath ?: "")
+                        "modelLoaded" to MediaPipeEngine.isLoaded,
+                        "modelPath"   to (MediaPipeEngine.loadedPath ?: "")
                     ))
                     else -> result.notImplemented()
                 }
@@ -167,7 +167,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         MediaPipeServer.stop()
-        InferenceEngine.close()
+        MediaPipeEngine.close()
         mainScope.cancel()
         super.onDestroy()
     }
@@ -273,7 +273,7 @@ class MainActivity : FlutterActivity() {
         val sb = StringBuilder()
         val startNs = System.nanoTime()
         var firstNs = 0L
-        val err = InferenceEngine.generate(prompt) { token, done ->
+        val err = MediaPipeEngine.generate(prompt) { token, done ->
             if (firstNs == 0L) firstNs = System.nanoTime()
             if (token.isNotEmpty()) sb.append(token)
             runOnUiThread {
@@ -281,7 +281,7 @@ class MainActivity : FlutterActivity() {
                 if (done) {
                     val genSecs  = (System.nanoTime() - firstNs) / 1e9
                     val ttftSecs = (firstNs - startNs) / 1e9
-                    val toks     = InferenceEngine.sizeInTokens(sb.toString())
+                    val toks     = MediaPipeEngine.sizeInTokens(sb.toString())
                     val tps      = if (genSecs > 0) toks / genSecs else 0.0
                     mpSink?.success(mapOf(
                         "stats" to true,

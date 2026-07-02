@@ -105,7 +105,8 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
       }
       final found = <FileSystemEntity>[];
       await for (final e in dir.list()) {
-        if (e is File && e.path.toLowerCase().endsWith('.task')) {
+        final lp = e.path.toLowerCase();
+        if (e is File && (lp.endsWith('.task') || lp.endsWith('.litertlm'))) {
           found.add(e);
         }
       }
@@ -128,8 +129,9 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
         setState(() => _status = 'Importación cancelada.');
         return;
       }
-      if (!path.toLowerCase().endsWith('.task')) {
-        setState(() => _status = 'Aviso: el fichero no acaba en .task.');
+      final lpath = path.toLowerCase();
+      if (!lpath.endsWith('.task') && !lpath.endsWith('.litertlm')) {
+        setState(() => _status = 'Aviso: el fichero no acaba en .task ni .litertlm.');
       }
       await _scanModels();
       setState(() {
@@ -165,7 +167,7 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
   Future<void> _load() async {
     final path = _selected;
     if (path == null) {
-      setState(() => _status = 'No hay ningún .task seleccionado.');
+      setState(() => _status = 'No hay ningún modelo (.task/.litertlm) seleccionado.');
       return;
     }
     setState(() {
@@ -349,14 +351,14 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            _label('Modelo (.task)'),
+            _label('Modelo (.task / .litertlm)'),
             const SizedBox(height: 8),
             if (_models.isEmpty)
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: _box(),
                 child: Text(
-                  'No hay ficheros .task en:\n${_modelsDir ?? "(carpeta de modelos)"}\n\n'
+                  'No hay modelos (.task/.litertlm) en:\n${_modelsDir ?? "(carpeta de modelos)"}\n\n'
                   'Copia ahí un modelo (p. ej. gemma3-1b-it-int4.task) y recarga.',
                   style: const TextStyle(
                       color: _textLo, fontSize: 12.5, height: 1.5),
@@ -415,7 +417,7 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
                   onPressed: _importModel,
                   icon: const Icon(Icons.file_download_outlined,
                       size: 16, color: _accent),
-                  label: const Text('Importar .task',
+                  label: const Text('Importar modelo',
                       style: TextStyle(color: _accent, fontSize: 12.5)),
                 ),
                 TextButton.icon(
