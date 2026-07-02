@@ -222,12 +222,17 @@ def http_request(method: str, url: str, body: str = "") -> str:
             data = json.loads(body_text)
             if isinstance(data, dict):
                 lines = []
+                omitted = 0
                 for k, v in data.items():
                     if isinstance(v, (dict, list)):
                         kind = "objeto" if isinstance(v, dict) else "lista"
                         lines.append(f"\"{k}\": <{kind}, {len(v)} elementos>")
+                    elif isinstance(v, str) and k.endswith("_url") and k not in ("html_url", "url"):
+                        omitted += 1
                     else:
                         lines.append(f"\"{k}\": {json.dumps(v, ensure_ascii=False)}")
+                if omitted:
+                    lines.append(f"(se omiten {omitted} campos url internos)")
                 summary = "{\n  " + ",\n  ".join(lines) + "\n}"
             elif isinstance(data, list):
                 summary = f"[lista con {len(data)} elementos]\n" + json.dumps(data[:5], ensure_ascii=False)
