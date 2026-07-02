@@ -446,23 +446,34 @@ _LIGHT_SYSTEM = (
 
 
 def _light_parse(text: str) -> dict:
-    """Parsea la salida del modelo: final / action / unparseable."""
+    """Parsea la salida del modelo: final / action / unparseable.
+
+    Si ACCION: aparece DESPUES de FINAL: en el mismo texto, el modelo
+    afirmo haber terminado pero siguio queriendo actuar (alucinacion
+    tipica: dice haber hecho algo sin haberlo ejecutado). En ese caso
+    se prioriza la ACCION real sobre el FINAL prematuro, para que el
+    bucle ejecute la tool de verdad y el resultado real (p.ej. un
+    error de fichero no encontrado) fuerce al modelo a autocorregirse.
+    """
     thought = ""
     m_think = re.search(r"PIENSO:\s*(.+?)(?=\n(?:ACCION|ACCI\u00d3N|FINAL):|$)",
                         text, re.IGNORECASE | re.DOTALL)
     if m_think:
         thought = m_think.group(1).strip()
 
-    m_final = re.search(r"FINAL:\s*(.+)", text, re.IGNORECASE | re.DOTALL)
-    if m_final:
-        return {"kind": "final", "thought": thought, "answer": m_final.group(1).strip()}
+    m_final = re.search(r"FINAL:", text, re.IGNORECASE)
+    m_tool  = re.search(r"ACCI[O\u00d3]N:\s*(\w+)", text, re.IGNORECASE)
 
-    m_tool = re.search(r"ACCI[O\u00d3]N:\s*(\w+)", text, re.IGNORECASE)
-    if m_tool:
+    if m_tool and (not m_final or m_tool.start() > m_final.start()):
         tool = m_tool.group(1).strip()
         m_args = re.search(r"ARGS:\s*(.*?)(?=\n(?:PIENSO|ACCI[O\u00d3]N|FINAL):|\Z)", text, re.IGNORECASE | re.DOTALL)
         args = m_args.group(1).strip() if m_args else ""
         return {"kind": "action", "thought": thought, "tool": tool, "args": args}
+
+    if m_final:
+        m_ans = re.search(r"FINAL:\s*(.+?)(?=\n(?:PIENSO|ACCI[O\u00d3]N):|\Z)", text, re.IGNORECASE | re.DOTALL)
+        answer = m_ans.group(1).strip() if m_ans else text[m_final.end():].strip()
+        return {"kind": "final", "thought": thought, "answer": answer}
 
     return {"kind": "unparseable", "raw": text.strip()}
 
