@@ -263,17 +263,6 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
     }
   }
 
-  Future<void> _useFixedTestImage() async {
-    const fixedPath = '/storage/emulated/0/Android/data/com.example.linux_container/files/test_images/test.jpg';
-    final exists = await File(fixedPath).exists();
-    setState(() {
-      _testImagePath = exists ? fixedPath : null;
-      _imageTestResult = exists
-          ? 'Imagen de prueba encontrada (via adb push).'
-          : 'No encontrada. Antes ejecuta: adb push imagen.jpg \'\$fixedPath\'';
-    });
-  }
-
   Future<void> _pickTestImage() async {
     try {
       final path = await _method.invokeMethod<String>('testImage');
