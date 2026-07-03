@@ -105,6 +105,28 @@ object InferenceEngine {
         }
     }
 
+    /**
+     * Generacion con imagen. Solo LITERTLM (Gemma 4) la soporta; MediaPipe
+     * (.task) devuelve un error claro en vez de fallar en silencio.
+     */
+    fun generateWithImage(
+        text: String,
+        imagePath: String,
+        temperature: Float = 0.8f,
+        topK: Int = 40,
+        topP: Float = 0.95f
+    ): Pair<String?, String> {
+        return when (activeKind) {
+            Kind.LITERTLM  -> LiteRtEngine.generateWithImage(text, imagePath, temperature, topK, topP)
+            Kind.MEDIAPIPE -> Pair(
+                "El modelo .task (MediaPipe) no soporta imagenes. " +
+                "Carga un modelo .litertlm (ej. Gemma 4) para usar esta funcion.",
+                ""
+            )
+            Kind.NONE -> Pair("Modelo no cargado", "")
+        }
+    }
+
     fun sizeInTokens(text: String): Int {
         return when (activeKind) {
             Kind.MEDIAPIPE -> MediaPipeEngine.sizeInTokens(text)

@@ -29,7 +29,7 @@ object MediaPipeServer {
             if (httpd?.isAlive == true) return null
             this.port = port
             val s = Server(port)
-            s.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            s.start(300000, false)  // 5 min: margen para primera inferencia con imagen
             httpd = s
             null
         } catch (e: Throwable) {
@@ -93,11 +93,70 @@ object MediaPipeServer {
                 return json(Response.Status.INTERNAL_ERROR,
                     errObj("El modelo no está cargado en el motor."))
             }
+            val imageInfo = extractImageFromMessages(messages)
+            if (imageInfo != null) {
+                val (imgText, imagePath) = imageInfo
+                val (err, out) = InferenceEngine.generateWithImage(imgText, imagePath, temperature, topK, topP)
+                if (err != null) return json(Response.Status.INTERNAL_ERROR, errObj(err))
+                return chatResponseJson(out, imgText)
+            }
             return if (stream) streamChat(prompt, temperature, topK, topP)
             else blockingChat(prompt, temperature, topK, topP)
         }
 
         /** Convierte los mensajes OpenAI a la plantilla de turnos de Gemma. */
+        private fun extractImageFromMessages(messages: JSONArray): Pair<String, String>? {
+            for (i in messages.length() - 1 downTo 0) {
+                val m = messages.getJSONObject(i)
+                if (m.optString("role") != "user") continue
+                val content = m.opt("content")
+                if (content !is JSONArray) return null
+                var text = ""
+                var base64Data: String? = null
+                for (j in 0 until content.length()) {
+                    val part = content.getJSONObject(j)
+                    when (part.optString("type")) {
+                        "text" -> text = part.optString("text", "")
+                        "image_url" -> {
+                            val url = part.optJSONObject("image_url")?.optString("url") ?: ""
+                            val marker = "base64,"
+                            val idx = url.indexOf(marker)
+                            if (idx >= 0) base64Data = url.substring(idx + marker.length)
+                        }
+                    }
+                }
+                if (base64Data == null) return null
+                return try {
+                    val bytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                    val cacheDir = LiteRtEngine.cacheDirPath?.let { java.io.File(it) }
+                    val tmpFile = java.io.File.createTempFile("xtr_img_", ".jpg", cacheDir)
+                    tmpFile.writeBytes(bytes)
+                    Pair(text, tmpFile.absolutePath)
+                } catch (e: Throwable) {
+                    null
+                }
+            }
+            return null
+        }
+
+        private fun chatResponseJson(text: String, promptForUsage: String): Response {
+            val msg = JSONObject().put("role", "assistant").put("content", text)
+            val choice = JSONObject().put("index", 0).put("message", msg)
+                .put("finish_reason", "stop")
+            val pt = InferenceEngine.sizeInTokens(promptForUsage)
+            val ct = InferenceEngine.sizeInTokens(text)
+            val usage = JSONObject().put("prompt_tokens", pt)
+                .put("completion_tokens", ct).put("total_tokens", pt + ct)
+            val resp = JSONObject()
+                .put("id", "chatcmpl-local")
+                .put("object", "chat.completion")
+                .put("created", System.currentTimeMillis() / 1000)
+                .put("model", modelId())
+                .put("choices", JSONArray().put(choice))
+                .put("usage", usage)
+            return json(Response.Status.OK, resp)
+        }
+
         private fun buildGemmaPrompt(messages: JSONArray): String {
             val sb = StringBuilder()
             var pendingSystem = ""

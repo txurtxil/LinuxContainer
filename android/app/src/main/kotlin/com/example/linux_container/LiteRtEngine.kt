@@ -34,6 +34,9 @@ object LiteRtEngine {
     @Volatile
     var loadedGpu: Boolean = true
         private set
+    @Volatile
+    var cacheDirPath: String? = null
+        private set
 
     private val genLock = ReentrantLock()
 
@@ -56,6 +59,7 @@ object LiteRtEngine {
             val config = EngineConfig(
                 modelPath = modelPath,
                 backend = backend,
+                visionBackend = backend,
                 cacheDir = context.cacheDir.path,
                 // Limita el KV-cache (contexto) para no agotar la RAM.
                 // 3072 da margen al system prompt de CodeAgent (tools +
@@ -70,6 +74,7 @@ object LiteRtEngine {
             engine = e
             loadedPath = modelPath
             loadedGpu = useGpu
+            cacheDirPath = context.cacheDir.path
             null
         } catch (e: Throwable) {
             "Error al cargar el modelo: ${e.message}"
@@ -126,6 +131,45 @@ object LiteRtEngine {
             if (token.isNotEmpty()) sb.append(token)
         }
         return Pair(err, sb.toString())
+    }
+
+    /**
+     * Generacion con imagen usando el motor de PRODUCCION (el mismo que
+     * el chat de texto, no uno temporal). Requiere visionBackend
+     * configurado en load() y que el modelo cargado soporte multimodalidad
+     * (confirmado con Gemma 4 E2B/.litertlm).
+     */
+    fun generateWithImage(
+        text: String,
+        imagePath: String,
+        temperature: Float = 0.8f,
+        topK: Int = 40,
+        topP: Float = 0.95f
+    ): Pair<String?, String> {
+        val eng = engine ?: return Pair("Modelo no cargado", "")
+        genLock.lock()
+        return try {
+            val convConfig = ConversationConfig(
+                samplerConfig = SamplerConfig(
+                    topK = topK,
+                    topP = topP.toDouble(),
+                    temperature = temperature.toDouble(),
+                ),
+            )
+            eng.createConversation(convConfig).use { conversation ->
+                val response = conversation.sendMessage(
+                    Contents.of(
+                        Content.Text(text),
+                        Content.ImageFile(imagePath),
+                    )
+                )
+                Pair(null, response.toString())
+            }
+        } catch (e: Throwable) {
+            Pair("Error al generar con imagen: \${e.message}", "")
+        } finally {
+            genLock.unlock()
+        }
     }
 
     /**
