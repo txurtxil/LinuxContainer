@@ -777,7 +777,7 @@ async def _run_light_agent(req: AgentRequest):
 
         if parsed["kind"] == "final":
             missing = expected_tools - tools_used_names
-            if (tools_used == 0 or missing) and not warned_no_tools:
+            if tools_used == 0 or missing:
                 warned_no_tools = True
                 messages.append({"role": "assistant", "content": raw})
                 if missing:
