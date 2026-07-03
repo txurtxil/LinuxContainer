@@ -716,10 +716,10 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _useFixedTestImage,
-                    icon: const Icon(Icons.usb, size: 16, color: _accent),
-                    label: const Text('Usar imagen (adb push)',
-                        style: TextStyle(color: _accent, fontSize: 12.5)),
+                    onPressed: _pickTestImage,
+                    icon: const Icon(Icons.image_outlined, size: 16, color: _accent),
+                    label: Text(_testImagePath == null ? 'Elegir imagen' : 'Cambiar imagen',
+                        style: const TextStyle(color: _accent, fontSize: 12.5)),
                   ),
                 ),
                 const SizedBox(width: 8),

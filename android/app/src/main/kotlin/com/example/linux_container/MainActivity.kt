@@ -11,7 +11,8 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.Log
 import android.widget.Toast
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -19,7 +20,7 @@ import kotlinx.coroutines.*
 import java.io.*
 import java.util.zip.GZIPInputStream
 
-class MainActivity : FlutterActivity() {
+class MainActivity : FlutterFragmentActivity() {
 
     private val NATIVE_PATHS     = "linux_container/native_paths"
     private val FOREGROUND       = "linux_container/foreground"
@@ -29,8 +30,8 @@ class MainActivity : FlutterActivity() {
 
     private val REQUEST_IMPORT = 4711
     private var pendingImport: MethodChannel.Result? = null
-    private val REQUEST_TEST_IMAGE = 4712
     private var pendingTestImage: MethodChannel.Result? = null
+    private lateinit var imagePickerLauncher: androidx.activity.result.ActivityResultLauncher<String>
     private var mpSink: EventChannel.EventSink? = null
 
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -113,7 +114,7 @@ class MainActivity : FlutterActivity() {
                             addCategory(Intent.CATEGORY_OPENABLE)
                             type = "image/*"
                         }
-                        try { startActivityForResult(intent, REQUEST_TEST_IMAGE) }
+                        try { imagePickerLauncher.launch("image/*") }
                         catch (e: Exception) { pendingTestImage = null; result.error("PICK", e.message, null) }
                     }
                     "testImageGeneration" -> {
@@ -183,7 +184,30 @@ class MainActivity : FlutterActivity() {
     // ── onCreate: diálogo de primer arranque ──────────────────
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        imagePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            handlePickedTestImage(uri)
+        }
         // El rootfs lo gestiona ContainerBootstrap.dart (sistema original)
+    }
+
+    private fun handlePickedTestImage(uri: Uri?) {
+        val pending = pendingTestImage ?: return
+        pendingTestImage = null
+        if (uri == null) {
+            pending.error("CANCEL", "Seleccion cancelada", null)
+            return
+        }
+        val name = queryName(uri) ?: "test_image.jpg"
+        val imagesDir = File(getExternalFilesDir(null), "test_images").also { it.mkdirs() }
+        val destFile = File(imagesDir, name)
+        try {
+            contentResolver.openInputStream(uri)?.use { inp ->
+                destFile.outputStream().use { out -> inp.copyTo(out) }
+            }
+            pending.success(destFile.absolutePath)
+        } catch (e: Exception) {
+            pending.error("COPY", e.message, null)
+        }
     }
 
     override fun onDestroy() {
