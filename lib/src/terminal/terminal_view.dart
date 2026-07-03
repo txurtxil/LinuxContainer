@@ -53,6 +53,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       Future.delayed(const Duration(milliseconds: 150), () {
         if (mounted) {
           _focusNodes[_activeIndex]?.requestFocus();
+          SystemChannels.textInput.invokeMethod('TextInput.show');
         }
       });
     }
