@@ -10,6 +10,8 @@
 
 import 'mediapipe_test_screen.dart';
 import 'dart:async';
+import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -225,6 +227,24 @@ class _AgentDashboardState extends State<AgentDashboard> {
     });
   }
 
+  static const _imgMethod = MethodChannel('xtr/mediapipe');
+  String? _attachedImagePath;
+
+  Future<void> _pickChatImage() async {
+    try {
+      final path = await _imgMethod.invokeMethod<String>('testImage');
+      if (path != null && mounted) {
+        setState(() => _attachedImagePath = path);
+      }
+    } on PlatformException catch (e) {
+      if (mounted) _snack('Error eligiendo imagen: \${e.message}');
+    }
+  }
+
+  void _removeAttachedImage() {
+    setState(() => _attachedImagePath = null);
+  }
+
   void _send() {
     final text = _input.text.trim();
     if (text.isEmpty || _ctrl.running.value) return;
@@ -234,14 +254,22 @@ class _AgentDashboardState extends State<AgentDashboard> {
       _scrollToBottom();
       return;
     }
+    String imageB64 = '';
+    if (_attachedImagePath != null) {
+      try {
+        imageB64 = base64Encode(File(_attachedImagePath!).readAsBytesSync());
+      } catch (_) {}
+    }
     _ctrl.send(
       text,
       _svc.agentPort,
       baseUrl: _svc.effectiveBaseUrl,
       model: _svc.effectiveModel,
       apiKey: _svc.effectiveApiKey,
+      imageBase64: imageB64,
     );
     _input.clear();
+    setState(() => _attachedImagePath = null);
     _scrollToBottom();
   }
 
@@ -1761,6 +1789,20 @@ class _AgentDashboardState extends State<AgentDashboard> {
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
       child: Row(
         children: [
+          GestureDetector(
+            onLongPress: _attachedImagePath != null ? _removeAttachedImage : null,
+            child: IconButton(
+              onPressed: running ? null : _pickChatImage,
+              icon: Icon(
+                _attachedImagePath != null ? Icons.image : Icons.attach_file,
+                size: 20,
+                color: _attachedImagePath != null ? _C.accent : _C.off,
+              ),
+              tooltip: _attachedImagePath != null
+                  ? 'Imagen adjunta (mantén pulsado para quitar)'
+                  : 'Adjuntar imagen',
+            ),
+          ),
           Expanded(
             child: TextField(
               controller: _input,
@@ -1771,7 +1813,9 @@ class _AgentDashboardState extends State<AgentDashboard> {
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => _send(),
               decoration: InputDecoration(
-                hintText: running ? 'Ejecutando…' : 'Tarea para el agente…',
+                hintText: _attachedImagePath != null
+                    ? (running ? 'Ejecutando…' : 'Con imagen adjunta…')
+                    : (running ? 'Ejecutando…' : 'Tarea para el agente…'),
                 hintStyle: const TextStyle(color: _C.off, fontSize: 14),
                 filled: true,
                 fillColor: _C.card,

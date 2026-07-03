@@ -83,6 +83,7 @@ class AgentApi {
     String baseUrl = '',
     String model = '',
     String apiKey = '',
+    String imageBase64 = '',
   }) async* {
     final client = HttpClient();
     try {
@@ -94,6 +95,7 @@ class AgentApi {
         if (baseUrl.isNotEmpty) 'llm_base_url': baseUrl,
         if (model.isNotEmpty) 'llm_model': model,
         if (apiKey.isNotEmpty) 'llm_api_key': apiKey,
+        if (imageBase64.isNotEmpty) 'image_base64': imageBase64,
       })));
       final resp = await req.close();
       await for (final line in resp
@@ -190,12 +192,13 @@ class AgentController {
     String baseUrl = '',
     String model = '',
     String apiKey = '',
+    String imageBase64 = '',
   }) {
     if (running.value) return;
     _append(ChatBlock('user', prompt));
     running.value = true;
     _saveCurrent();
-    _sub = AgentApi.run(prompt, agentPort, baseUrl: baseUrl, model: model, apiKey: apiKey).listen(
+    _sub = AgentApi.run(prompt, agentPort, baseUrl: baseUrl, model: model, apiKey: apiKey, imageBase64: imageBase64).listen(
       _ingest,
       onDone: () {
         running.value = false;
