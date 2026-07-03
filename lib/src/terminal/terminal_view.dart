@@ -17,7 +17,7 @@ class TerminalScreen extends StatefulWidget {
   State<TerminalScreen> createState() => _TerminalScreenState();
 }
 
-class _TerminalScreenState extends State<TerminalScreen> {
+class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObserver {
   final ContainerManager _manager = ContainerManager();
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
@@ -32,6 +32,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _showAgent = false; // Arranca en terminal (menú lc-menu)
   bool _hasSelection = false;
   String? _error;
+  final Map<int, FocusNode> _focusNodes = {};
 
   double _fontSize = 12.0;
   static const double _minFont = 8.0;
@@ -42,7 +43,19 @@ class _TerminalScreenState extends State<TerminalScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _boot();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_showAgent) {
+      Future.delayed(const Duration(milliseconds: 150), () {
+        if (mounted) {
+          _focusNodes[_activeIndex]?.requestFocus();
+        }
+      });
+    }
   }
 
   void _appendLog(String line, {bool spinning = false, double? progress}) {
@@ -290,6 +303,10 @@ true); Navigator.pop(ctx); },
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    for (final n in _focusNodes.values) {
+      n.dispose();
+    }
     for (final s in _sessions) {
       s.controller.removeListener(_onSelectionChanged);
       s.dispose();
@@ -418,10 +435,14 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
             children: [
               IndexedStack(
                 index: _activeIndex,
-                children: _sessions.map((s) {
+                children: _sessions.asMap().entries.map((entry) {
+                  final i = entry.key;
+                  final s = entry.value;
+                  final focusNode = _focusNodes.putIfAbsent(i, () => FocusNode());
                   return TerminalView(
                     s.terminal,
                     controller: s.controller,
+                    focusNode: focusNode,
                     autofocus: true,
                     backgroundOpacity: 1.0,
                     deleteDetection: true,
