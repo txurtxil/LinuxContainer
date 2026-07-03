@@ -70,6 +70,7 @@ class AgentRequest(BaseModel):
     history:        list = []
     system_prompt:  str  = ""
 
+    image_base64:   str  = ""
 class AgentResponse(BaseModel):
     answer:   str
     thoughts: list  = []
@@ -736,9 +737,16 @@ async def _run_light_agent(req: AgentRequest):
                "\u26a0 El servidor GPU no esta activo. Carga un modelo en 'Prueba GPU'."}
         return
 
+    if req.image_base64:
+        user_content = [
+            {"type": "text", "text": req.task},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{req.image_base64}"}},
+        ]
+    else:
+        user_content = req.task
     messages = [
         {"role": "system", "content": _LIGHT_SYSTEM},
-        {"role": "user", "content": req.task},
+        {"role": "user", "content": user_content},
     ]
     last_result = None
     last_action = None
