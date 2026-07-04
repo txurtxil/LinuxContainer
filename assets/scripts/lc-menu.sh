@@ -94,7 +94,7 @@ setup_agent() {
 
   # Scripts de generacion de imagenes
   echo -e "${C_CYN}▸ Verificando scripts de imagenes...${C_RESET}"
-  for script in gen_topologia.sh gen_flujo.sh gen_grafica.py gen_qr.sh gen_scan_red.sh; do
+  for script in gen_topologia.sh gen_flujo.sh gen_grafica.py gen_qr.sh gen_scan_red.sh gen_discover_red.sh; do
     if [ ! -f "/root/$script" ]; then
       curl -fsSL \
         "https://raw.githubusercontent.com/txurtxil/LinuxContainer/main/assets/scripts/$script" \
