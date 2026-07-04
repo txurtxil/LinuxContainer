@@ -18,7 +18,7 @@ if [ ! -f "$INPUT" ]; then
 fi
 
 RESULTADO=""
-while IFS= read -r linea; do
+while IFS= read -r linea || [ -n "$linea" ]; do
     [ -z "$linea" ] && continue
     if [[ "$linea" == *":"* ]]; then
         nombre="${linea%%:*}"
