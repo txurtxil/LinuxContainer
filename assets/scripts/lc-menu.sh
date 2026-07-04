@@ -92,6 +92,21 @@ setup_agent() {
     echo -e "${C_GRN}✓ agent_server.py ya existe${C_RESET}"
   fi
 
+  # Scripts de generacion de imagenes
+  echo -e "${C_CYN}▸ Verificando scripts de imagenes...${C_RESET}"
+  for script in gen_topologia.sh gen_flujo.sh gen_grafica.py gen_qr.sh; do
+    if [ ! -f "/root/$script" ]; then
+      curl -fsSL \
+        "https://raw.githubusercontent.com/txurtxil/LinuxContainer/main/assets/scripts/$script" \
+        -o "/root/$script" 2>/dev/null \
+        && chmod +x "/root/$script" \
+        && echo -e "${C_GRN}✓ $script descargado${C_RESET}" \
+        || echo -e "${C_YEL}⚠ $script no se pudo descargar${C_RESET}"
+    else
+      echo -e "${C_GRN}✓ $script ya existe${C_RESET}"
+    fi
+  done
+
   # start_agent.sh
   cat > /root/start_agent.sh << 'STARTEOF'
 #!/bin/bash
