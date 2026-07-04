@@ -69,6 +69,7 @@ class AgentServices {
   AgentServices._();
 
   final ContainerManager _cm = ContainerManager();
+  String? get rootfsPathForView => _cm.rootfsPath;
 
   // ---- Fuente de inferencia -------------------------------------------------
   // 'local' = llama-server local; cualquier otro id = endpoint remoto OpenAI.

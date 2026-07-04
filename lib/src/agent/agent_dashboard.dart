@@ -230,6 +230,60 @@ class _AgentDashboardState extends State<AgentDashboard> {
   static const _imgMethod = MethodChannel('xtr/mediapipe');
   String? _attachedImagePath;
 
+  Future<void> _viewGeneratedImage() async {
+    final pathCtrl = TextEditingController(text: '/root/mired.png');
+    final relPath = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _C.card,
+        title: const Text('Ver imagen del rootfs', style: TextStyle(color: _C.textHi)),
+        content: TextField(
+          controller: pathCtrl,
+          autofocus: true,
+          style: const TextStyle(color: _C.textHi, fontFamily: 'monospace'),
+          decoration: const InputDecoration(hintText: '/root/mired.png'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, pathCtrl.text.trim()),
+            child: const Text('Ver'),
+          ),
+        ],
+      ),
+    );
+    if (relPath == null || relPath.isEmpty) return;
+    final rootfs = _svc.rootfsPathForView;
+    if (rootfs == null) {
+      _snack('El contenedor no esta listo todavia.');
+      return;
+    }
+    final fullPath = '$rootfs$relPath';
+    final file = File(fullPath);
+    if (!await file.exists()) {
+      _snack('No existe: $relPath');
+      return;
+    }
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: _C.card,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              InteractiveViewer(child: Image.file(file)),
+              const SizedBox(height: 8),
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _pickChatImage() async {
     try {
       final path = await _imgMethod.invokeMethod<String>('testImage');
@@ -1854,6 +1908,11 @@ class _AgentDashboardState extends State<AgentDashboard> {
                   },
             icon: const Icon(Icons.content_paste, size: 20, color: _C.off),
             tooltip: 'Pegar',
+          ),
+          IconButton(
+            onPressed: running ? null : _viewGeneratedImage,
+            icon: const Icon(Icons.visibility_outlined, size: 20, color: _C.off),
+            tooltip: 'Ver imagen del rootfs',
           ),
           Expanded(
             child: TextField(
