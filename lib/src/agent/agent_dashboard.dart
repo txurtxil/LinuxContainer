@@ -1761,9 +1761,29 @@ class _AgentDashboardState extends State<AgentDashboard> {
                 right: BorderSide(color: _C.border),
                 bottom: BorderSide(color: _C.border)),
           ),
-          child: Text(b.text,
-              style: const TextStyle(
-                  color: _C.textHi, fontSize: 14.5, height: 1.5)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(b.text,
+                  style: const TextStyle(
+                      color: _C.textHi, fontSize: 14.5, height: 1.5)),
+              const SizedBox(height: 6),
+              InkWell(
+                onTap: () async {
+                  await Clipboard.setData(ClipboardData(text: b.text));
+                  if (mounted) _snack('Copiado');
+                },
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.copy_all, size: 14, color: _C.off),
+                    SizedBox(width: 4),
+                    Text('Copiar', style: TextStyle(color: _C.off, fontSize: 11.5)),
+                  ],
+                ),
+              ),
+            ],
+          ),
         );
 
       case 'error':
@@ -1819,6 +1839,21 @@ class _AgentDashboardState extends State<AgentDashboard> {
                   ? 'Imagen adjunta (mantén pulsado para quitar)'
                   : 'Adjuntar imagen',
             ),
+          ),
+          IconButton(
+            onPressed: running
+                ? null
+                : () async {
+                    final data = await Clipboard.getData('text/plain');
+                    final text = data?.text;
+                    if (text != null && text.isNotEmpty) {
+                      _input.text = _input.text.isEmpty
+                          ? text
+                          : '${_input.text} $text';
+                    }
+                  },
+            icon: const Icon(Icons.content_paste, size: 20, color: _C.off),
+            tooltip: 'Pegar',
           ),
           Expanded(
             child: TextField(
