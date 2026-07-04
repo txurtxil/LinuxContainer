@@ -56,6 +56,7 @@ setup_agent() {
   echo -e "${C_CYN}▸ Instalando Python3 y herramientas base...${C_RESET}"
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
     python3 python3-pip python3-venv python3-dev \
+    graphviz qrencode python3-matplotlib \
     git curl wget ca-certificates build-essential openssh-client 2>&1 | tail -5
 
   # Verificar python3
