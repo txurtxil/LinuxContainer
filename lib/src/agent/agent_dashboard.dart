@@ -230,29 +230,13 @@ class _AgentDashboardState extends State<AgentDashboard> {
   static const _imgMethod = MethodChannel('xtr/mediapipe');
   String? _attachedImagePath;
 
-  Future<void> _viewGeneratedImage() async {
-    final pathCtrl = TextEditingController(text: '/root/mired.png');
-    final relPath = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _C.card,
-        title: const Text('Ver imagen del rootfs', style: TextStyle(color: _C.textHi)),
-        content: TextField(
-          controller: pathCtrl,
-          autofocus: true,
-          style: const TextStyle(color: _C.textHi, fontFamily: 'monospace'),
-          decoration: const InputDecoration(hintText: '/root/mired.png'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, pathCtrl.text.trim()),
-            child: const Text('Ver'),
-          ),
-        ],
-      ),
-    );
-    if (relPath == null || relPath.isEmpty) return;
+  String? _detectImagePath(String text) {
+    final match = RegExp(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', caseSensitive: false)
+        .firstMatch(text);
+    return match?.group(1);
+  }
+
+  Future<void> _showImageFromRootfs(String relPath) async {
     final rootfs = _svc.rootfsPathForView;
     if (rootfs == null) {
       _snack('El contenedor no esta listo todavia.');
@@ -282,6 +266,52 @@ class _AgentDashboardState extends State<AgentDashboard> {
         ),
       ),
     );
+  }
+
+  Widget _imageChipIfAny(String text) {
+    final path = _detectImagePath(text);
+    if (path == null) return const SizedBox.shrink();
+    final name = path.split('/').last;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: InkWell(
+        onTap: () => _showImageFromRootfs(path),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.image_outlined, size: 14, color: _C.accent),
+            const SizedBox(width: 4),
+            Text('Ver $name', style: const TextStyle(color: _C.accent, fontSize: 11.5)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _viewGeneratedImage() async {
+    final pathCtrl = TextEditingController(text: '/root/mired.png');
+    final relPath = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _C.card,
+        title: const Text('Ver imagen del rootfs', style: TextStyle(color: _C.textHi)),
+        content: TextField(
+          controller: pathCtrl,
+          autofocus: true,
+          style: const TextStyle(color: _C.textHi, fontFamily: 'monospace'),
+          decoration: const InputDecoration(hintText: '/root/mired.png'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, pathCtrl.text.trim()),
+            child: const Text('Ver'),
+          ),
+        ],
+      ),
+    );
+    if (relPath == null || relPath.isEmpty) return;
+    await _showImageFromRootfs(relPath);
   }
 
   Future<void> _pickChatImage() async {
@@ -1797,8 +1827,17 @@ class _AgentDashboardState extends State<AgentDashboard> {
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: _C.border),
           ),
-          child: SingleChildScrollView(
-            child: Text(b.text, style: _mono.copyWith(color: _C.textLo)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Text(b.text, style: _mono.copyWith(color: _C.textLo)),
+                ),
+              ),
+              _imageChipIfAny(b.text),
+            ],
           ),
         );
 
@@ -1836,6 +1875,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
                   ],
                 ),
               ),
+                _imageChipIfAny(b.text),
             ],
           ),
         );
