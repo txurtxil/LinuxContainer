@@ -346,6 +346,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
         children: [
           _header(),
           _serviceRow(),
+          _cronRow(),
           const Divider(height: 1, color: _C.border),
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
@@ -462,6 +463,22 @@ class _AgentDashboardState extends State<AgentDashboard> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _cronRow() {
+    final cronActive = _svc.cronLaunched;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: _serviceCard(
+        name: 'cron (scheduler)',
+        port: 0,
+        up: cronActive,
+        starting: _svc.cronStarting.value,
+        active: cronActive,
+        onToggle: () => cronActive ? _svc.stopCron() : _svc.startCron(),
+        onLogs: () => _showLogs('cron', _svc.cronLog),
       ),
     );
   }

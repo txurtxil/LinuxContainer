@@ -102,14 +102,18 @@ class AgentServices {
 
   Pty? _llamaPty;
   Pty? _agentPty;
+  Pty? _cronPty;
 
   final ValueNotifier<List<String>> llamaLog = ValueNotifier<List<String>>([]);
   final ValueNotifier<List<String>> agentLog = ValueNotifier<List<String>>([]);
+  final ValueNotifier<List<String>> cronLog = ValueNotifier<List<String>>([]);
   final ValueNotifier<bool> llamaStarting = ValueNotifier<bool>(false);
   final ValueNotifier<bool> agentStarting = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> cronStarting = ValueNotifier<bool>(false);
 
   bool get llamaLaunched => _llamaPty != null;
   bool get agentLaunched => _agentPty != null;
+  bool get cronLaunched => _cronPty != null;
   bool get usingLocalModel =>
       llamaLocalModelPath != null && llamaLocalModelPath!.trim().isNotEmpty;
 
@@ -374,10 +378,38 @@ class AgentServices {
     _syncForeground();
   }
 
+  void startCron() {
+    if (_cronPty != null) return;
+    if (!_cm.isReady) {
+      _push(cronLog, '[error] El contenedor Debian a\u00fan no est\u00e1 listo.');
+      return;
+    }
+    _push(cronLog, '[XTR Cron]');
+    _push(cronLog, '[Arrancando scheduler...]');
+    cronStarting.value = true;
+    final pty = _cm.startProcess('/usr/sbin/cron -f -L 15');
+    _cronPty = pty;
+    _attach(pty, cronLog, () {
+      _cronPty = null;
+      cronStarting.value = false;
+      _push(cronLog, '[lc] cron finaliz\u00f3.');
+      _syncForeground();
+    });
+    _syncForeground();
+  }
+
+  void stopCron() {
+    _push(cronLog, '[lc] Deteniendo cron\u2026');
+    _killService(_cronPty, '/tmp/cron.pid', '/usr/sbin/cron');
+    _cronPty = null;
+    cronStarting.value = false;
+    _syncForeground();
+  }
+
   // ---- Internos -------------------------------------------------------------
 
   void _syncForeground() {
-    if (llamaLaunched || agentLaunched) {
+    if (llamaLaunched || agentLaunched || cronLaunched) {
       ForegroundService.start();
     } else {
       ForegroundService.stop();
