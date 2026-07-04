@@ -112,6 +112,20 @@ class PromptTemplate {
               'con: python3 /root/gen_grafica.py /root/datos.txt '
               '/root/salud.png',
         ),
+        const PromptTemplate(
+          id: 'descubrir_red',
+          icon: '🗺️',
+          label: 'Descubrir mi red completa',
+          category: 'Imágenes',
+          promptText:
+              'Usa run_bash para ejecutar exactamente esto, uno detras '
+              'de otro: bash /root/gen_discover_red.sh 192.168.10 '
+              '/root/ips_descubiertos.txt \&\& bash /root/gen_scan_red.sh '
+              '/root/ips_descubiertos.txt /root/dispositivos.txt \&\& '
+              'bash /root/gen_topologia.sh /root/dispositivos.txt '
+              '/root/mired.dot /root/mired.png. Puede tardar unos 30-35 '
+              'segundos, es normal.',
+        ),
       ];
 }
 
