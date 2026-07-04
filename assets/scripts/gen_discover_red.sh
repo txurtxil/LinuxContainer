@@ -1,16 +1,18 @@
 #!/bin/bash
-# Descubre hosts vivos en una subred /24. Version conservadora: un
-# primer intento con 32 concurrentes y 3 puertos de sonda provoco
-# SIGKILL de la sesion (demasiada carga de procesos bajo proot en
-# Android). Bajado a 8 concurrentes y 1 solo puerto, validado en
-# produccion con el rango completo (254 IPs, 34s, sin caidas).
+# Descubre hosts vivos en una subred /24 usando ping (ICMP), que Android
+# permite sin privilegios especiales a diferencia de rutas/ARP (ambas
+# bloqueadas por el kernel a nivel de plataforma, confirmado esta noche
+# con /proc/net/route y /proc/net/arp). Sustituye una version anterior
+# que sondeaba puertos TCP -- esa version solo encontraba dispositivos
+# con puertos comunes abiertos (4 en la red real de prueba); esta
+# version encuentra CUALQUIER dispositivo con IP activa (13 en la
+# misma red), acercandose mucho a lo que ve un escaner con acceso a
+# ARP como Fing (11-14 dispositivos).
 # Uso: bash gen_discover_red.sh <prefijo_red> <salida.txt> [inicio] [fin]
-# Ejemplo pequeno de prueba: bash gen_discover_red.sh 192.168.10 /root/ips.txt 1 20
 PREFIJO="$1"
 OUTPUT="$2"
 INICIO="${3:-1}"
 FIN="${4:-254}"
-PUERTO_SONDA=80
 LOTE=8
 TIMEOUT_SEG=1
 
@@ -25,7 +27,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 check_ip() {
     local ip="$1"
     local outfile="$2"
-    if timeout "$TIMEOUT_SEG" bash -c "echo > /dev/tcp/$ip/$PUERTO_SONDA" 2>/dev/null; then
+    if ping -c 1 -W "$TIMEOUT_SEG" "$ip" >/dev/null 2>&1; then
         echo "$ip" > "$outfile"
     fi
 }
