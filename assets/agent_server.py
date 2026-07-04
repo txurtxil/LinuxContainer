@@ -666,11 +666,16 @@ def _light_exec_tool(tool_name: str, args: str) -> str:
         if tool_name == "write_file":
             if "|||" in args:
                 path, content = args.split("|||", 1)
-                path = path.strip()
-                if _is_protected_path(path):
-                    return f"\u26d4 No se puede escribir en {path}: ruta protegida del sistema."
-                return fn(path, content)
-            return "Error: write_file necesita 'ruta|||contenido'"
+            elif "|" in args:
+                # El modelo a veces colapsa el separador de 3 barras a 1;
+                # lo toleramos en vez de fallar.
+                path, content = args.split("|", 1)
+            else:
+                return "Error: write_file necesita 'ruta|||contenido'"
+            path = path.strip()
+            if _is_protected_path(path):
+                return f"\u26d4 No se puede escribir en {path}: ruta protegida del sistema."
+            return fn(path, content)
         if tool_name == "make_dir":
             path = args.strip()
             if _is_protected_path(path):
