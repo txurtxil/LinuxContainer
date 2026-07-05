@@ -30,8 +30,8 @@ CONTENT=$(cat "$INPUT")
     i=0
     IFS=';' read -ra DISPOSITIVOS <<< "$CONTENT"
     for d in "${DISPOSITIVOS[@]}"; do
-        nombre="${d%%:*}"
-        ip="${d#*:}"
+        nombre="${d%:*}"
+        ip="${d##*:}"
         i=$((i+1))
         echo "    d$i [label=\"$nombre\\n$ip\"];"
         echo "    router -> d$i;"
