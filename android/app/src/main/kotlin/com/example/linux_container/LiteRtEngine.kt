@@ -257,6 +257,63 @@ object LiteRtEngine {
         }
     }
 
+    /**
+     * ToolSet minimo para probar FunctionGemma Mobile Actions -- este
+     * modelo concreto solo fue afinado sobre un set cerrado de funciones
+     * (turn_on_flashlight, create_calendar_event, create_contact...), asi
+     * que reutilizamos una de las SUYAS en vez de una generica como
+     * TestSumToolSet.
+     */
+    private class TestFlashlightToolSet : ToolSet {
+        @Tool(description = "Enciende la linterna del dispositivo")
+        fun turnOnFlashlight(): Map<String, Any> {
+            return mapOf("status" to "ok")
+        }
+    }
+
+    /**
+     * Test especifico para FunctionGemma: incluye el "Essential System
+     * Prompt" que la documentacion pide para activar su logica de
+     * function calling, ademas de una tool que el modelo si conoce.
+     * NOTA: el system prompt exacto de Google esta truncado en la
+     * documentacion publica que encontramos; este es el mejor intento de
+     * reconstruccion, no una copia verificada al 100%.
+     */
+    fun testFunctionGemmaFlashlight(context: Context, modelPath: String, useGpu: Boolean = true): Pair<String?, String> {
+        return try {
+            val testConfig = EngineConfig(
+                modelPath = modelPath,
+                backend = if (useGpu) Backend.GPU() else Backend.CPU(),
+                cacheDir = context.cacheDir.path,
+                maxNumTokens = 4096,
+            )
+            val testEngine = Engine(testConfig)
+            testEngine.initialize()
+            try {
+                testEngine.createConversation(
+                    ConversationConfig(
+                        systemInstruction = "You are a model that can do function calling with the following functions.",
+                        tools = listOf(tool(TestFlashlightToolSet())),
+                        automaticToolCalling = false,
+                    )
+                ).use { conversation ->
+                    val response = conversation.sendMessage("Enciende la linterna")
+                    val result = if (response.toolCalls.isNotEmpty()) {
+                        val call = response.toolCalls[0]
+                        "FUNCIONA: llamo a '${call.name}' con argumentos: ${call.arguments}"
+                    } else {
+                        "NO_FUNCIONA (texto plano, sin tool call): ${response.toString()}"
+                    }
+                    Pair(null, result)
+                }
+            } finally {
+                testEngine.close()
+            }
+        } catch (e: Throwable) {
+            Pair("ERROR: ${e.javaClass.simpleName}: ${e.message}", "")
+        }
+    }
+
     fun testImageSupport(context: Context, modelPath: String, imagePath: String): Pair<String?, String> {
         return try {
             val testConfig = EngineConfig(

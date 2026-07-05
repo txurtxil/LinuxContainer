@@ -322,6 +322,28 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
     }
   }
 
+  Future<void> _runFunctionGemmaTest() async {
+    if (_selected == null) return;
+    setState(() {
+      _testingFunctionCalling = true;
+      _functionCallingResult = 'Probando FunctionGemma (linterna, con system prompt)...';
+    });
+    try {
+      final result = await _method.invokeMethod<String>('testFunctionGemmaFlashlight', {
+        'modelPath': _selected,
+      });
+      setState(() {
+        _testingFunctionCalling = false;
+        _functionCallingResult = '\ud83d\udd26 $result';
+      });
+    } on PlatformException catch (e) {
+      setState(() {
+        _testingFunctionCalling = false;
+        _functionCallingResult = '\u274c  ${e.code}: ${e.message}';
+      });
+    }
+  }
+
   Future<void> _startServer() async {
     if (!_loaded) {
       setState(() => _serverMsg = 'Carga un modelo primero.');
@@ -761,7 +783,19 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
                 icon: _testingFunctionCalling
                     ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.functions, size: 16, color: _accent),
-                label: const Text('Probar function calling nativo',
+                label: const Text('Probar function calling nativo (sumar)',
+                    style: TextStyle(color: _accent, fontSize: 12.5)),
+              ),
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: (_selected == null || _testingFunctionCalling) ? null : _runFunctionGemmaTest,
+                icon: _testingFunctionCalling
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.flashlight_on, size: 16, color: _accent),
+                label: const Text('Probar FunctionGemma (linterna, con system prompt)',
                     style: TextStyle(color: _accent, fontSize: 12.5)),
               ),
             ),
