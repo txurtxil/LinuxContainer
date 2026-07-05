@@ -50,6 +50,8 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
   String? _testImagePath;
   bool _testingImage = false;
   String _imageTestResult = '';
+  bool _testingFunctionCalling = false;
+  String _functionCallingResult = '';
 
   bool _serverRunning = false;
   bool _serverBusy = false;
@@ -294,6 +296,28 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
       setState(() {
         _testingImage = false;
         _imageTestResult = '❌ ${e.code}: ${e.message}';
+      });
+    }
+  }
+
+  Future<void> _runFunctionCallingTest() async {
+    if (_selected == null) return;
+    setState(() {
+      _testingFunctionCalling = true;
+      _functionCallingResult = 'Probando function calling nativo (puede tardar)...';
+    });
+    try {
+      final result = await _method.invokeMethod<String>('testFunctionCalling', {
+        'modelPath': _selected,
+      });
+      setState(() {
+        _testingFunctionCalling = false;
+        _functionCallingResult = '\ud83d\udd0d $result';
+      });
+    } on PlatformException catch (e) {
+      setState(() {
+        _testingFunctionCalling = false;
+        _functionCallingResult = '\u274c  ${e.code}: ${e.message}';
       });
     }
   }
@@ -729,6 +753,22 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: (_selected == null || _testingFunctionCalling) ? null : _runFunctionCallingTest,
+                icon: _testingFunctionCalling
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.functions, size: 16, color: _accent),
+                label: const Text('Probar function calling nativo',
+                    style: TextStyle(color: _accent, fontSize: 12.5)),
+              ),
+            ),
+            if (_functionCallingResult.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(_functionCallingResult, style: const TextStyle(fontSize: 12.5)),
+            ],
             if (_imageTestResult.isNotEmpty) ...[
               const SizedBox(height: 10),
               Container(

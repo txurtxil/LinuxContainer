@@ -10,6 +10,10 @@ import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Tool
+import com.google.ai.edge.litertlm.ToolParam
+import com.google.ai.edge.litertlm.ToolSet
+import com.google.ai.edge.litertlm.tool
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.locks.ReentrantLock
 
@@ -166,7 +170,7 @@ object LiteRtEngine {
                 Pair(null, response.toString())
             }
         } catch (e: Throwable) {
-            Pair("Error al generar con imagen: \${e.message}", "")
+            Pair("Error al generar con imagen: ${e.message}", "")
         } finally {
             genLock.unlock()
         }
@@ -201,6 +205,58 @@ object LiteRtEngine {
      * toca el motor de produccion usado por el chat de texto), hace UNA
      * generacion con imagen, y lo cierra. Devuelve (error, texto).
      */
+    /**
+     * ToolSet de prueba minimo para el test aislado de function calling.
+     * Una sola herramienta trivial (sumar dos enteros) para confirmar si
+     * el modelo cargado reconoce y llama herramientas nativas de LiteRT-LM,
+     * en vez de responder solo en texto plano.
+     */
+    private class TestSumToolSet : ToolSet {
+        @Tool(description = "Suma dos numeros enteros y devuelve el resultado")
+        fun sumar(
+            @ToolParam(description = "Primer numero entero") a: Int,
+            @ToolParam(description = "Segundo numero entero") b: Int
+        ): Map<String, Any> {
+            return mapOf("resultado" to (a + b))
+        }
+    }
+
+    fun testFunctionCalling(context: Context, modelPath: String): Pair<String?, String> {
+        return try {
+            val testConfig = EngineConfig(
+                modelPath = modelPath,
+                backend = Backend.GPU(),
+                cacheDir = context.cacheDir.path,
+                maxNumTokens = 4096,
+            )
+            val testEngine = Engine(testConfig)
+            testEngine.initialize()
+            try {
+                testEngine.createConversation(
+                    ConversationConfig(
+                        tools = listOf(tool(TestSumToolSet())),
+                        automaticToolCalling = false,
+                    )
+                ).use { conversation ->
+                    val response = conversation.sendMessage(
+                        "Cuanto es 47 mas 89? Usa la herramienta sumar para calcularlo, no lo calcules tu mismo."
+                    )
+                    val result = if (response.toolCalls.isNotEmpty()) {
+                        val call = response.toolCalls[0]
+                        "FUNCIONA: llamo a '${call.name}' con argumentos: ${call.arguments}"
+                    } else {
+                        "NO_FUNCIONA (texto plano, sin tool call): ${response.toString()}"
+                    }
+                    Pair(null, result)
+                }
+            } finally {
+                testEngine.close()
+            }
+        } catch (e: Throwable) {
+            Pair("ERROR: ${e.javaClass.simpleName}: ${e.message}", "")
+        }
+    }
+
     fun testImageSupport(context: Context, modelPath: String, imagePath: String): Pair<String?, String> {
         return try {
             val testConfig = EngineConfig(

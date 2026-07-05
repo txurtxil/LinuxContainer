@@ -126,6 +126,14 @@ class MainActivity : FlutterFragmentActivity() {
                             runOnUiThread { if (err == null) result.success(text) else result.error("IMGTEST", err, null) }
                         }.start()
                     }
+                    "testFunctionCalling" -> {
+                        val modelPath = call.argument<String>("modelPath")
+                        if (modelPath == null) { result.error("ARG", "Falta modelPath", null); return@setMethodCallHandler }
+                        Thread {
+                            val (err, text) = LiteRtEngine.testFunctionCalling(applicationContext, modelPath)
+                            runOnUiThread { if (err == null) result.success(text) else result.error("FNTEST", err, null) }
+                        }.start()
+                    }
                     "serverStart" -> {
                         val port = call.argument<Int>("port") ?: 8090
                         val path = call.argument<String>("path")
