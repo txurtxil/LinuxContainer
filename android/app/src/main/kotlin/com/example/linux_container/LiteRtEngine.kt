@@ -292,7 +292,7 @@ object LiteRtEngine {
             try {
                 testEngine.createConversation(
                     ConversationConfig(
-                        systemInstruction = "You are a model that can do function calling with the following functions.",
+                        systemInstruction = Contents.of(Content.Text("You are a model that can do function calling with the following functions.")),
                         tools = listOf(tool(TestFlashlightToolSet())),
                         automaticToolCalling = false,
                     )
