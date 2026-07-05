@@ -221,11 +221,11 @@ object LiteRtEngine {
         }
     }
 
-    fun testFunctionCalling(context: Context, modelPath: String): Pair<String?, String> {
+    fun testFunctionCalling(context: Context, modelPath: String, useGpu: Boolean = true): Pair<String?, String> {
         return try {
             val testConfig = EngineConfig(
                 modelPath = modelPath,
-                backend = Backend.GPU(),
+                backend = if (useGpu) Backend.GPU() else Backend.CPU(),
                 cacheDir = context.cacheDir.path,
                 maxNumTokens = 4096,
             )

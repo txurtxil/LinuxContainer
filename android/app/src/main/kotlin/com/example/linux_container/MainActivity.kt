@@ -128,9 +128,10 @@ class MainActivity : FlutterFragmentActivity() {
                     }
                     "testFunctionCalling" -> {
                         val modelPath = call.argument<String>("modelPath")
+                        val useGpu = call.argument<Boolean>("useGpu") ?: true
                         if (modelPath == null) { result.error("ARG", "Falta modelPath", null); return@setMethodCallHandler }
                         Thread {
-                            val (err, text) = LiteRtEngine.testFunctionCalling(applicationContext, modelPath)
+                            val (err, text) = LiteRtEngine.testFunctionCalling(applicationContext, modelPath, useGpu)
                             runOnUiThread { if (err == null) result.success(text) else result.error("FNTEST", err, null) }
                         }.start()
                     }
