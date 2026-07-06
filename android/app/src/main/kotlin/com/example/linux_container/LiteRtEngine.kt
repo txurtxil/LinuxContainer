@@ -314,6 +314,37 @@ object LiteRtEngine {
         }
     }
 
+    fun testFunctionGemmaRaw(context: Context, modelPath: String, useGpu: Boolean = true): Pair<String?, String> {
+        return try {
+            val testConfig = EngineConfig(
+                modelPath = modelPath,
+                backend = if (useGpu) Backend.GPU() else Backend.CPU(),
+                cacheDir = context.cacheDir.path,
+                maxNumTokens = 4096,
+            )
+            val testEngine = Engine(testConfig)
+            testEngine.initialize()
+            try {
+                testEngine.createConversation().use { conversation ->
+                    val prompt = "<start_of_turn>developer\n" +
+                        "You are a model that can do function calling with the following functions\n" +
+                        "<start_function_declaration>declaration:turn_on_flashlight{description:\"Turns on the device flashlight\"}<end_function_declaration>\n" +
+                        "<end_of_turn>\n" +
+                        "<start_of_turn>user\n" +
+                        "Turn on the flashlight\n" +
+                        "<end_of_turn>\n" +
+                        "<start_of_turn>model\n"
+                    val response = conversation.sendMessage(prompt)
+                    Pair(null, response.toString())
+                }
+            } finally {
+                testEngine.close()
+            }
+        } catch (e: Throwable) {
+            Pair("ERROR: ${e.javaClass.simpleName}: ${e.message}", "")
+        }
+    }
+
     fun testImageSupport(context: Context, modelPath: String, imagePath: String): Pair<String?, String> {
         return try {
             val testConfig = EngineConfig(
