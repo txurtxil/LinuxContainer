@@ -86,7 +86,7 @@ class PromptTemplate {
           promptText:
               'Usa write_file para crear /root/datos.txt con pares '
               'Etiqueta:Valor separados por ;. Despues usa run_bash con: '
-              'python3 /root/gen_grafica.py /root/datos.txt '
+              '/root/gen_grafica.py /root/datos.txt '
               '/root/grafica.png',
         ),
         const PromptTemplate(
@@ -109,7 +109,7 @@ class PromptTemplate {
               'bc-250 (df -h /, free -m, uptime). Con esos 3 numeros, usa '
               'write_file para crear /root/datos.txt en formato '
               'Etiqueta:Valor separados por ;. Despues genera la grafica '
-              'con: python3 /root/gen_grafica.py /root/datos.txt '
+              'con: /root/gen_grafica.py /root/datos.txt '
               '/root/salud.png',
         ),
         const PromptTemplate(

@@ -597,7 +597,7 @@ _LIGHT_TOOLS_BRIEF = """Herramientas disponibles:
 
 Tambien puedes generar imagenes con run_bash, usando estos scripts ya instalados:
 - Diagrama de flujo: escribe pasos separados por ; en un fichero y ejecuta: bash /root/gen_flujo.sh /root/pasos.txt /root/salida.dot /root/salida.png
-- Grafica de barras: escribe Etiqueta:Valor separados por ; en un fichero y ejecuta: python3 /root/gen_grafica.py /root/datos.txt /root/salida.png
+- Grafica de barras: escribe Etiqueta:Valor separados por ; en un fichero y ejecuta: /root/gen_grafica.py /root/datos.txt /root/salida.png
 - Codigo QR: ejecuta bash /root/gen_qr.sh "texto o URL" /root/salida.png
 - Topologia de red: escribe Nombre:IP separados por ; en un fichero y ejecuta: bash /root/gen_topologia.sh /root/dispositivos.txt /root/salida.dot /root/salida.png
 """
