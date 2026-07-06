@@ -90,6 +90,8 @@ def run_bash(command: str) -> str:
     Returns:
         Salida stdout/stderr del comando
     """
+    if _is_dangerous_bash(command):
+        return "BLOQUEADO: este comando coincide con un patron peligroso conocido y no se ha ejecutado."
     import subprocess
     try:
         result = subprocess.run(
@@ -121,6 +123,8 @@ def write_file(path: str, content: str) -> str:
     try:
         if not path.startswith("/"):
             path = f"/root/{path}"
+        if _is_protected_path(path):
+            return f"BLOQUEADO: {path} es una ruta protegida del sistema, no se ha escrito."
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
