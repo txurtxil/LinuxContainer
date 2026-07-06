@@ -329,7 +329,7 @@ class _MediaPipeTestScreenState extends State<MediaPipeTestScreen> {
       _functionCallingResult = 'Probando FunctionGemma (linterna, con system prompt)...';
     });
     try {
-      final result = await _method.invokeMethod<String>('testGemma4NativeToolCall', {
+      final result = await _method.invokeMethod<String>('testGemma4ToolWithArgs', {
         'modelPath': _selected,
       });
       setState(() {

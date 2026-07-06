@@ -135,6 +135,15 @@ class MainActivity : FlutterFragmentActivity() {
                             runOnUiThread { if (err == null) result.success(text) else result.error("FNTEST", err, null) }
                         }.start()
                     }
+                    "testGemma4ToolWithArgs" -> {
+                        val modelPath = call.argument<String>("modelPath")
+                        val useGpu = call.argument<Boolean>("useGpu") ?: true
+                        if (modelPath == null) { result.error("ARG", "Falta modelPath", null); return@setMethodCallHandler }
+                        Thread {
+                            val (err, text) = LiteRtEngine.testGemma4ToolWithArgs(applicationContext, modelPath, useGpu)
+                            runOnUiThread { if (err == null) result.success(text) else result.error("FNTEST5", err, null) }
+                        }.start()
+                    }
                     "testGemma4NativeToolCall" -> {
                         val modelPath = call.argument<String>("modelPath")
                         val useGpu = call.argument<Boolean>("useGpu") ?: true

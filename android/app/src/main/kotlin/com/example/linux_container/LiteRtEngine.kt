@@ -374,6 +374,35 @@ object LiteRtEngine {
         }
     }
 
+    fun testGemma4ToolWithArgs(context: Context, modelPath: String, useGpu: Boolean = true): Pair<String?, String> {
+        return try {
+            val testConfig = EngineConfig(
+                modelPath = modelPath,
+                backend = if (useGpu) Backend.GPU() else Backend.CPU(),
+                cacheDir = context.cacheDir.path,
+                maxNumTokens = 4096,
+            )
+            val testEngine = Engine(testConfig)
+            testEngine.initialize()
+            try {
+                testEngine.createConversation().use { conversation ->
+                    val prompt = "<|turn>system\n" +
+                        "<|tool>declaration:get_weather{description:<|\"|>Gets the current weather for a city<|\"|>,parameters:{properties:{city:{type:<|\"|>string<|\"|>,description:<|\"|>The city name<|\"|>}},required:[<|\"|>city<|\"|>],type:<|\"|>object<|\"|>}}<tool|><turn|>\n" +
+                        "<|turn>user\n" +
+                        "What is the weather in Madrid?<turn|>\n" +
+                        "<|turn>model\n" +
+                        "<|channel>thought\n<channel|>"
+                    val response = conversation.sendMessage(prompt)
+                    Pair(null, response.toString())
+                }
+            } finally {
+                testEngine.close()
+            }
+        } catch (e: Throwable) {
+            Pair("ERROR: ${e.javaClass.simpleName}: ${e.message}", "")
+        }
+    }
+
     fun testImageSupport(context: Context, modelPath: String, imagePath: String): Pair<String?, String> {
         return try {
             val testConfig = EngineConfig(
