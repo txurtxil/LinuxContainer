@@ -211,21 +211,71 @@ object MediaPipeServer {
             return sb.toString()
         }
 
-        /** Prompt nativo de Gemma 4 con herramientas. SOLO soporta un turno
-         *  simple (system+tools opcional + ultimo mensaje de usuario) por
-         *  ahora -- historial multi-turno con tool_calls previos no probado
-         *  todavia, pendiente de validacion empirica. */
+        /** Prompt nativo de Gemma 4 con herramientas. Procesa el historial
+         *  completo: mensajes user normales, y mensajes assistant con
+         *  tool_calls emparejados con su respuesta "tool" siguiente,
+         *  aplanados en linea segun el formato real confirmado:
+         *  <|tool_call>call:X{args}<tool_call|><|tool_response>response:X{value:<|"|>R<|"|>}<tool_response|>
+         *
+         *  Gemma 4 tiene un bug propio documentado: tras un tool_response,
+         *  su plantilla oficial a veces NO reabre <|turn>model. Lo evitamos
+         *  cerrando y reabriendo el turno explicitamente nosotros mismos
+         *  (mismo arreglo que uso la comunidad con vLLM/llama-server). */
         private fun buildGemma4ToolPrompt(messages: JSONArray, tools: JSONArray): String {
             val sb = StringBuilder()
             sb.append("<|turn>system\n")
             sb.append(buildToolDeclarations(tools))
             sb.append("<turn|>\n")
-            var lastUserText = ""
-            for (i in 0 until messages.length()) {
+
+            var i = 0
+            while (i < messages.length()) {
                 val m = messages.getJSONObject(i)
-                if (m.optString("role") == "user") lastUserText = m.optString("content")
+                when (m.optString("role")) {
+                    "user" -> {
+                        sb.append("<|turn>user\n").append(m.optString("content")).append("<turn|>\n")
+                        i++
+                    }
+                    "assistant" -> {
+                        val toolCalls = m.optJSONArray("tool_calls")
+                        if (toolCalls != null && toolCalls.length() > 0) {
+                            sb.append("<|turn>model\n<|channel>thought\n<channel|>")
+                            var j = i + 1
+                            for (k in 0 until toolCalls.length()) {
+                                val call = toolCalls.getJSONObject(k)
+                                val fn = call.optJSONObject("function")
+                                val name = fn?.optString("name") ?: "unknown"
+                                val argsRaw = fn?.optString("arguments") ?: "{}"
+                                val argsObj = try { JSONObject(argsRaw) } catch (e: Throwable) { JSONObject() }
+                                sb.append("<|tool_call>call:").append(name).append("{")
+                                val keys = argsObj.keys()
+                                var first = true
+                                while (keys.hasNext()) {
+                                    val key = keys.next()
+                                    if (!first) sb.append(",")
+                                    sb.append(key).append(":<|\"|>").append(argsObj.optString(key)).append("<|\"|>")
+                                    first = false
+                                }
+                                sb.append("}<tool_call|>")
+                                if (j < messages.length() && messages.getJSONObject(j).optString("role") == "tool") {
+                                    val result = messages.getJSONObject(j).optString("content")
+                                    sb.append("<|tool_response>response:").append(name)
+                                        .append("{value:<|\"|>").append(result).append("<|\"|>}<tool_response|>")
+                                    j++
+                                }
+                            }
+                            // Arreglo del bug conocido de Gemma 4: cerrar y
+                            // reabrir el turno tras el tool_response en vez
+                            // de confiar en que el modelo continue solo.
+                            sb.append("<turn|>\n")
+                            i = j
+                        } else {
+                            sb.append("<|turn>model\n").append(m.optString("content")).append("<turn|>\n")
+                            i++
+                        }
+                    }
+                    else -> i++
+                }
             }
-            sb.append("<|turn>user\n").append(lastUserText).append("<turn|>\n")
             sb.append("<|turn>model\n")
             sb.append("<|channel>thought\n<channel|>")
             return sb.toString()
@@ -236,13 +286,13 @@ object MediaPipeServer {
          *  NO soporta objetos o arrays anidados dentro de los argumentos
          *  todavia -- pendiente de validar si Gemma 4 los genera asi. */
         private fun parseGemma4ToolCall(text: String): Pair<String, JSONObject>? {
-            val callRegex = Regex("""<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>""")
+            val callRegex = Regex("""<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>""", RegexOption.DOT_MATCHES_ALL)
             val match = callRegex.find(text) ?: return null
             val name = match.groupValues[1]
             val argsRaw = match.groupValues[2]
             val argsJson = JSONObject()
             if (argsRaw.isNotBlank()) {
-                val pairRegex = Regex("""(\w+):(?:<\|"\|>(.*?)<\|"\|>|([^,]+))""")
+                val pairRegex = Regex("""(\w+):(?:<\|"\|>(.*?)<\|"\|>|([^,]+))""", RegexOption.DOT_MATCHES_ALL)
                 for (pairMatch in pairRegex.findAll(argsRaw)) {
                     val key = pairMatch.groupValues[1]
                     val strVal = pairMatch.groupValues[2]

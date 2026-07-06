@@ -275,6 +275,14 @@ def ssh_exec(host: str, command: str) -> str:
     """
     import subprocess
     import shutil
+
+    SSH_ALIASES = {
+        "bc-250": "txurtxil@192.168.10.2",
+        "bc250": "txurtxil@192.168.10.2",
+    }
+    if host in SSH_ALIASES:
+        host = SSH_ALIASES[host]
+
     key_path = "/root/.ssh/id_ed25519"
     pub_path = key_path + ".pub"
     try:
