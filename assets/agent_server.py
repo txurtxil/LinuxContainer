@@ -69,6 +69,7 @@ class AgentRequest(BaseModel):
     llm_model:      str  = "llama-3.1-8b-instant"
     history:        list = []
     system_prompt:  str  = ""
+    use_native_tools: bool = False
 
     image_base64:   str  = ""
 class AgentResponse(BaseModel):
@@ -458,7 +459,12 @@ async def _run_agent(req: AgentRequest) -> AgentResponse:
         # de chat simple (MediaPipe/LiteRT-LM local no soportan tool-calling
         # estructurado). ToolCallingAgent: para backends remotos con function-
         # calling real (Groq, OpenAI-compatible serios).
-        AgentClass = CodeAgent if _is_gpu_local(req) else ToolCallingAgent
+        # CodeAgent era el fallback historico para local (sin tool-calling
+        # real); confirmado esta noche que MediaPipeServer.kt ahora SI lo
+        # soporta via el protocolo nativo de Gemma 4, asi que usamos
+        # ToolCallingAgent siempre que se llegue a este punto (remoto, o
+        # local con use_native_tools=True).
+        AgentClass = ToolCallingAgent
         agent = AgentClass(
             tools=TOOLS,
             model=model,
@@ -933,7 +939,7 @@ async def run_streaming(req: AgentRequest):
         raise HTTPException(status_code=400, detail="task no puede estar vacio")
 
     async def generate():
-        if _is_gpu_local(req):
+        if _is_gpu_local(req) and not req.use_native_tools:
             # Agente ligero: prompt corto, sin CodeAgent, evita
             # desbordar el contexto de modelos pequeños locales.
             async for event in _run_light_agent(req):
