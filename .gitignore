@@ -24,3 +24,10 @@ android/app/src/main/assets/rootfs.tar.xz
 android/app/src/main/assets/rootfs.tar.gz
 __pycache__/
 *.pyc
+
+# Credenciales y tokens - nunca deben subirse al repositorio
+*.pem
+*_token
+.ha_token
+*_key
+*.key
