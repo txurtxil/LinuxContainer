@@ -276,6 +276,12 @@ def ssh_exec(host: str, command: str) -> str:
     import subprocess
     import shutil
 
+    # Alias cortos -> host real. Existe porque los modelos pequenos
+    # (Gemma 4 E2B con function calling nativo) a veces transcriben
+    # mal IPs largas al regenerarlas dentro de su propia salida
+    # (confirmado en produccion: "192.10.2", "192.16.1.10.2" en vez
+    # de "192.168.10.2"). Un alias corto reduce drasticamente esa
+    # superficie de error.
     SSH_ALIASES = {
         "bc-250": "txurtxil@192.168.10.2",
         "bc250": "txurtxil@192.168.10.2",
@@ -338,7 +344,112 @@ def ssh_exec(host: str, command: str) -> str:
         return f"Error ejecutando SSH: {e}"
 
 
-TOOLS = [run_bash, write_file, read_file, make_dir, list_files, http_request, ssh_exec]
+@tool
+def generar_imagen(tipo: str, datos: str) -> str:
+    """
+    Genera una imagen usando el generador correcto segun el tipo pedido.
+    Elige tu mismo el tipo y da los datos en el formato indicado --
+    no necesitas saber los nombres de los scripts internos.
+    Args:
+        tipo: uno de "topologia", "flujo", "grafica", "qr"
+              - topologia: datos = "Nombre:IP;Nombre:IP;..."
+              - flujo: datos = "Paso1;Paso2;Paso3;..."
+              - grafica: datos = "Etiqueta:Valor;Etiqueta:Valor;..."
+              - qr: datos = el texto o URL a codificar (sin ; ni formato especial)
+        datos: el contenido en el formato que corresponda al tipo
+    Returns:
+        Ruta al PNG generado, o mensaje de error si algo fallo
+    """
+    import subprocess
+    import time
+    ts = str(int(time.time() * 1000))
+    try:
+        if tipo == "topologia":
+            input_path = f"/root/_img_input_{ts}.txt"
+            with open(input_path, "w") as f:
+                f.write(datos)
+            output_png = f"/root/_img_out_{ts}.png"
+            result = subprocess.run(
+                ["bash", "/root/gen_topologia.sh", input_path, f"/root/_img_dot_{ts}.dot", output_png],
+                capture_output=True, text=True, timeout=30,
+            )
+        elif tipo == "flujo":
+            input_path = f"/root/_img_input_{ts}.txt"
+            with open(input_path, "w") as f:
+                f.write(datos)
+            output_png = f"/root/_img_out_{ts}.png"
+            result = subprocess.run(
+                ["bash", "/root/gen_flujo.sh", input_path, f"/root/_img_dot_{ts}.dot", output_png],
+                capture_output=True, text=True, timeout=30,
+            )
+        elif tipo == "grafica":
+            input_path = f"/root/_img_input_{ts}.txt"
+            with open(input_path, "w") as f:
+                f.write(datos)
+            output_png = f"/root/_img_out_{ts}.png"
+            result = subprocess.run(
+                ["/root/gen_grafica.py", input_path, output_png],
+                capture_output=True, text=True, timeout=30,
+            )
+        elif tipo == "qr":
+            output_png = f"/root/_img_out_{ts}.png"
+            result = subprocess.run(
+                ["bash", "/root/gen_qr.sh", datos, output_png],
+                capture_output=True, text=True, timeout=15,
+            )
+        else:
+            return f"Error: tipo desconocido '{tipo}'. Usa: topologia, flujo, grafica, qr"
+
+        if not os.path.exists(output_png) or os.path.getsize(output_png) == 0:
+            return f"Error generando imagen: {result.stderr[:300] if result.stderr else 'salida vacia'}"
+        return f"Imagen generada: {output_png}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@tool
+def ha_api(method: str, path: str, body: str = "") -> str:
+    """
+    Llama a la API REST interna del servidor domestico de automatizacion
+    (puerto 8123). El token de acceso se lee automaticamente de
+    /root/.ha_token -- NUNCA escribas el token tu mismo como argumento.
+    Para comprobar la conexion, usa exactamente method=GET, path=/api/
+    (sin nada mas al final).
+    Args:
+        method: GET o POST
+        path: ruta exacta, ej "/api/" (comprobacion valida, usa esta
+              literalmente para probar conexion), "/api/states" (todas
+              las entidades), "/api/states/light.salon" (una entidad),
+              "/api/services/light/turn_on" (POST, encender)
+        body: JSON para POST, ej {"entity_id": "light.salon"}
+    Returns:
+        Respuesta JSON (recortado a 2000 caracteres)
+    """
+    import urllib.request
+    import urllib.error
+    try:
+        with open("/root/.ha_token") as f:
+            token = f.read().strip()
+    except FileNotFoundError:
+        return "Error: no se encontro /root/.ha_token. Guarda el token primero."
+
+    base_url = "http://192.168.10.140:8123"
+    url = base_url + path
+    try:
+        req = urllib.request.Request(url, method=method.upper())
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+        if body:
+            req.data = body.encode()
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.read().decode()[:2000]
+    except urllib.error.HTTPError as e:
+        return f"Error HTTP {e.code}: {e.read().decode()[:300]}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+TOOLS = [run_bash, write_file, read_file, make_dir, list_files, http_request, ssh_exec, generar_imagen, ha_api]
 
 # ─────────────────────────────────────────────────────────────
 # Detección de GPU local
@@ -605,8 +716,9 @@ _LIGHT_TOOLS_BRIEF = """Herramientas disponibles:
 
 Tambien puedes generar imagenes con run_bash, usando estos scripts ya instalados:
 - Diagrama de flujo: escribe pasos separados por ; en un fichero y ejecuta: bash /root/gen_flujo.sh /root/pasos.txt /root/salida.dot /root/salida.png
-- Grafica de barras: escribe Etiqueta:Valor separados por ; en un fichero y ejecuta: /root/gen_grafica.py /root/datos.txt /root/salida.png
+- Grafica de barras: escribe Etiqueta:Valor separados por ; en un fichero y ejecuta: python3 /root/gen_grafica.py /root/datos.txt /root/salida.png
 - Codigo QR: ejecuta bash /root/gen_qr.sh "texto o URL" /root/salida.png
+- Alternativa mas simple: usa la herramienta generar_imagen(tipo, datos) directamente, sin necesitar los nombres de los scripts (tipo: topologia/flujo/grafica/qr)
 - Topologia de red: escribe Nombre:IP separados por ; en un fichero y ejecuta: bash /root/gen_topologia.sh /root/dispositivos.txt /root/salida.dot /root/salida.png
 """
 
