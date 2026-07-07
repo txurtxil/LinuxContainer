@@ -442,7 +442,20 @@ def ha_api(method: str, path: str, body: str = "") -> str:
         if body:
             req.data = body.encode()
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.read().decode()[:2000]
+            raw = resp.read().decode()
+            # /api/states devuelve un JSON denso con TODOS los atributos
+            # de cada entidad -- puede desbordar el contexto del modelo
+            # local (confirmado: 4189 >= 4096 tokens). Para esta ruta en
+            # concreto, resumimos a solo los nombres de entidad.
+            if path.rstrip("/") == "/api/states" and method.upper() == "GET":
+                try:
+                    import json as _json
+                    entities = _json.loads(raw)
+                    names = [e.get("entity_id", "?") for e in entities]
+                    return f"{len(names)} entidades encontradas:\n" + "\n".join(names[:80])
+                except Exception:
+                    return raw[:2000]
+            return raw[:2000]
     except urllib.error.HTTPError as e:
         return f"Error HTTP {e.code}: {e.read().decode()[:300]}"
     except Exception as e:
