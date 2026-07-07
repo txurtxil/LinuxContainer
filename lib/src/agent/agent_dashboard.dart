@@ -230,6 +230,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
 
   static const _imgMethod = MethodChannel('xtr/mediapipe');
   String? _attachedImagePath;
+  bool _useNativeTools = false;
 
   String? _detectImagePath(String text) {
     final match = RegExp(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', caseSensitive: false)
@@ -352,6 +353,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
       model: _svc.effectiveModel,
       apiKey: _svc.effectiveApiKey,
       imageBase64: imageB64,
+      useNativeTools: _useNativeTools,
     );
     _input.clear();
     setState(() => _attachedImagePath = null);
@@ -464,6 +466,24 @@ class _AgentDashboardState extends State<AgentDashboard> {
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
+                  ),
+                  FilterChip(
+                    selected: _useNativeTools,
+                    onSelected: (v) => setState(() => _useNativeTools = v),
+                    label: Text(_useNativeTools ? 'Nativo' : 'Clasico',
+                        style: TextStyle(
+                            color: _useNativeTools ? Colors.white : _C.accent,
+                            fontSize: 12)),
+                    avatar: Icon(
+                        _useNativeTools ? Icons.bolt : Icons.shield_outlined,
+                        size: 16,
+                        color: _useNativeTools ? Colors.white : _C.accent),
+                    selectedColor: _C.accent,
+                    backgroundColor: _C.card,
+                    side: const BorderSide(color: _C.border),
+                    tooltip: _useNativeTools
+                        ? 'Motor nativo: mas directo, puede saltarse pasos de juicio en tareas largas'
+                        : 'Motor clasico: mas robusto, con guardarrailes probados',
                   ),
                 ],
               ),
