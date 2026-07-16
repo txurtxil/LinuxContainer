@@ -51,7 +51,7 @@ LOG_DIR="/var/log/linuxcontainer"
 LOG_FILE="$LOG_DIR/android-sdk.log"
 SMOKE_DIR="/tmp/hello-android"
 
-MIN_FREE_GB=4
+MIN_FREE_GB=8
 MIN_RAM_MB=3000
 
 # ══════════════════════════════════════════════════════════════
@@ -333,10 +333,23 @@ export JAVA_HOME=$JAVA_HOME_PATH
 export GRADLE_HOME=$GRADLE_HOME
 # proot no lleva bien native-platform de Gradle: lo desactivamos.
 export GRADLE_OPTS="-Dorg.gradle.native=false"
-export PATH="\$PATH:\$ANDROID_HOME/platform-tools:\$ANDROID_HOME/cmdline-tools/latest/bin:\$ANDROID_HOME/emulator:\$GRADLE_HOME/bin"
+# El SDK va DELANTE de \$PATH, no detrás. Debian trae su propio adb (29.0.6,
+# sin 'adb pair') y su gradle (4.4.1, inservible con AGP 8.x); si van primero,
+# ganan ellos y el SDK parcheado no se usa nunca.
+# El emulador no se añade: sin KVM en proot no arranca.
+export PATH="\$ANDROID_HOME/platform-tools:\$ANDROID_HOME/cmdline-tools/latest/bin:\$GRADLE_HOME/bin:\$PATH"
 EOF
 chmod 644 "$PROFILE_D"
 ok "$PROFILE_D"
+
+# Verificamos que gana el nuestro, no el de Debian.
+if [ -x "$ANDROID_HOME/platform-tools/adb" ]; then
+  ADB_VER="$("$ANDROID_HOME/platform-tools/adb" version 2>/dev/null | sed -n 2p)"
+  info "adb del SDK: $ADB_VER"
+  if command -v adb >/dev/null && [ "$(command -v adb)" != "$ANDROID_HOME/platform-tools/adb" ]; then
+    warn "Hay otro adb en $(command -v adb) — el profile.d lo tapa en terminales nuevas."
+  fi
+fi
 
 mkdir -p "$HOME/.gradle"
 GP="$HOME/.gradle/gradle.properties"
