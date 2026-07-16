@@ -21,7 +21,6 @@ import 'agent_chat.dart';
 
 import 'ssh_connections.dart';
 import 'prompt_templates.dart';
-import '../dev/android_sdk_card.dart';
 class _C {
   static const bg = Color(0xFF1C1C1E);
   static const card = Color(0xFF2C2C2E);
@@ -435,10 +434,6 @@ class _AgentDashboardState extends State<AgentDashboard> {
           _header(),
           _serviceRow(),
           _cronRow(),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: AndroidSdkCard(),
-          ),
           const Divider(height: 1, color: _C.border),
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),

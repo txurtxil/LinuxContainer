@@ -107,19 +107,6 @@ setup_agent() {
     fi
   done
 
-  # Entorno de desarrollo Android
-  echo -e "${C_CYN}▸ Verificando install_android_sdk.sh...${C_RESET}"
-  if [ ! -f /root/install_android_sdk.sh ]; then
-    curl -fsSL \
-      "https://raw.githubusercontent.com/txurtxil/LinuxContainer/main/assets/scripts/install_android_sdk.sh" \
-      -o /root/install_android_sdk.sh 2>/dev/null \
-      && chmod +x /root/install_android_sdk.sh \
-      && echo -e "${C_GRN}✓ install_android_sdk.sh descargado${C_RESET}" \
-      || echo -e "${C_YEL}⚠ install_android_sdk.sh no se pudo descargar${C_RESET}"
-  else
-    echo -e "${C_GRN}✓ install_android_sdk.sh ya existe${C_RESET}"
-  fi
-
   # start_agent.sh
   cat > /root/start_agent.sh << 'STARTEOF'
 #!/bin/bash

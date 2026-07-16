@@ -38,7 +38,7 @@ class AndroidSdkService extends ChangeNotifier {
 
   static const String androidHome = '/opt/android-sdk';
   static const String buildToolsVer = '35.0.0';
-  static const String scriptPath = '/root/install_android_sdk.sh';
+  static const String scriptPath = '/root/scripts/install_android_sdk.sh';
   static const String profileD = '/etc/profile.d/android-sdk.sh';
   static const String logPath = '/var/log/linuxcontainer/android-sdk.log';
 
