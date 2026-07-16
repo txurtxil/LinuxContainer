@@ -51,7 +51,7 @@ LOG_DIR="/var/log/linuxcontainer"
 LOG_FILE="$LOG_DIR/android-sdk.log"
 SMOKE_DIR="/tmp/hello-android"
 
-MIN_FREE_GB=4
+MIN_FREE_GB=8
 MIN_RAM_MB=3000
 
 # ══════════════════════════════════════════════════════════════

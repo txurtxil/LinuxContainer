@@ -43,50 +43,11 @@ class AndroidSdkCard extends StatefulWidget {
 class _AndroidSdkCardState extends State<AndroidSdkCard> {
   final _svc = AndroidSdkService();
 
-  // Versión real de aapt2, obtenida ejecutándolo. No damos nada por hecho:
-  // que exista /opt/android-sdk/build-tools no significa que el binario
-  // arranque, y eso es justo lo que puede fallar en aarch64.
-  String? _aapt2;
-  bool _aapt2Checked = false;
-  bool _probing = false;
-
   @override
   void initState() {
     super.initState();
     _svc.addListener(_onChange);
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _svc.refresh();
-      _maybeProbe();
-    });
-  }
-
-  Future<void> _probeAapt2() async {
-    _probing = true;
-    final v = await _svc.aapt2Version();
-    if (!mounted) return;
-    setState(() {
-      _probing = false;
-      _aapt2Checked = true;
-      if (v == null) {
-        _aapt2 = null;
-      } else {
-        // "Android Asset Packaging Tool (aapt) 2.19-F966BXXUABZF1" → "aapt2 2.19"
-        final m = RegExp(r'(\d+\.\d+)').firstMatch(v);
-        _aapt2 = m != null ? 'aapt2 ${m.group(1)}' : v;
-      }
-    });
-  }
-
-  void _maybeProbe() {
-    if (_svc.phase == SdkPhase.ready &&
-        !_aapt2Checked &&
-        !_probing &&
-        !_svc.busy) {
-      _probeAapt2();
-    } else if (_svc.phase != SdkPhase.ready && _aapt2Checked) {
-      _aapt2Checked = false;
-      _aapt2 = null;
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _svc.refresh());
   }
 
   @override
@@ -96,9 +57,7 @@ class _AndroidSdkCardState extends State<AndroidSdkCard> {
   }
 
   void _onChange() {
-    if (!mounted) return;
-    setState(() {});
-    _maybeProbe();
+    if (mounted) setState(() {});
   }
 
   // ── Estado visual ──────────────────────────────────────────────────────────
@@ -119,9 +78,7 @@ class _AndroidSdkCardState extends State<AndroidSdkCard> {
   String get _status {
     switch (_svc.phase) {
       case SdkPhase.ready:
-        if (!_aapt2Checked) return 'Instalado · comprobando aapt2…';
-        if (_aapt2 == null) return 'Instalado · aapt2 NO responde';
-        return 'Instalado · SDK 35 · $_aapt2 aarch64';
+        return 'Instalado · SDK 35 · aapt2 aarch64';
       case SdkPhase.installing:
         return _svc.phaseTotal > 0
             ? '[${_svc.phaseCurrent}/${_svc.phaseTotal}] ${_svc.phaseLabel}'
@@ -129,7 +86,7 @@ class _AndroidSdkCardState extends State<AndroidSdkCard> {
       case SdkPhase.failed:
         return _svc.lastError ?? 'Falló la instalación';
       case SdkPhase.absent:
-        return 'No instalado · ~1,3 GB, 5-15 min';
+        return 'No instalado · ~4 GB, 20-40 min';
       case SdkPhase.unknown:
         return 'Contenedor no listo';
     }
@@ -169,10 +126,7 @@ class _AndroidSdkCardState extends State<AndroidSdkCard> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                            color: (_svc.phase == SdkPhase.failed ||
-                                    (_svc.phase == SdkPhase.ready &&
-                                        _aapt2Checked &&
-                                        _aapt2 == null))
+                            color: _svc.phase == SdkPhase.failed
                                 ? _C.err
                                 : _C.textLo,
                             fontSize: 11.5)),
@@ -354,7 +308,7 @@ class _AndroidSdkCardState extends State<AndroidSdkCard> {
             children: [
               const Text(
                 'JDK 17, Gradle 8.9, SDK 35 y los binarios aarch64 que Google '
-                'no publica. Unos 1,3 GB y 5-15 minutos con WiFi decente.\n\n'
+                'no publica. Unos 4 GB y 20-40 minutos con WiFi decente.\n\n'
                 'Termina compilando un APK de prueba para verificar que todo '
                 'funciona de verdad.',
                 style: TextStyle(color: _C.textLo, fontSize: 12.5, height: 1.4),
