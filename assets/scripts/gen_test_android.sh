@@ -25,6 +25,11 @@ BUILD_TOOLS_VER="35.0.0"
 AGP_VER="8.7.3"
 GRADLE_VER="8.9"
 APPCOMPAT_VER="1.7.0"
+# appcompat arrastra kotlin-stdlib 1.8.22 y, por vía transitiva,
+# kotlin-stdlib-jdk8 1.6.21. Desde Kotlin 1.8 los artefactos jdk7/jdk8 están
+# fusionados dentro de kotlin-stdlib: las mismas clases en dos jars → d8 aborta
+# con "Duplicate class". Forzamos una única versión y excluimos los viejos.
+KOTLIN_STDLIB_VER="1.9.24"
 
 C_RESET='\e[0m'; C_B='\e[1m'; C_DIM='\e[2m'
 C_GRN='\e[1;32m'; C_YEL='\e[1;33m'; C_RED='\e[1;31m'; C_CYN='\e[1;36m'
@@ -120,6 +125,16 @@ android {
 
     buildTypes {
         debug { applicationIdSuffix "" }
+    }
+}
+
+configurations.all {
+    // Los jdk7/jdk8 de Kotlin estan fusionados en kotlin-stdlib desde 1.8.
+    // Sin esto: "Duplicate class kotlin.streams.jdk8.StreamsKt".
+    exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"
+    exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"
+    resolutionStrategy {
+        force "org.jetbrains.kotlin:kotlin-stdlib:$KOTLIN_STDLIB_VER"
     }
 }
 
