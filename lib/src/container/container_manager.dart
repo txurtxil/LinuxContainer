@@ -65,6 +65,7 @@ class ContainerManager {
         '-b', '/sys',
         '-b', '/system',
         '-b', '/apex',
+        '-b', '/storage/emulated/0:/sdcard',
         '-w', '/root',
         ...tail,
       ];

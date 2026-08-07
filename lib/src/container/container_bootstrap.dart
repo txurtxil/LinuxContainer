@@ -25,7 +25,7 @@ class ContainerBootstrap {
   static const _markerFileName = '.bootstrap_complete';
 
   Future<void> _ensureMountPoints(Directory rootfsDir) async {
-    for (final name in ['system', 'apex', 'tmp', 'root']) {
+    for (final name in ['system', 'apex', 'tmp', 'root', 'sdcard']) {
       final dir = Directory('${rootfsDir.path}/$name');
       if (!await dir.exists()) {
         await dir.create(recursive: true);

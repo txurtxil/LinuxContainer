@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.os.Environment
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -229,6 +231,16 @@ class MainActivity : FlutterFragmentActivity() {
     // ── onCreate: diálogo de primer arranque ──────────────────
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            !Environment.isExternalStorageManager()) {
+            try {
+                startActivity(Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:$packageName")))
+            } catch (e: Exception) {
+                Log.w("XTR", "No se pudo abrir ajustes de almacenamiento", e)
+            }
+        }
         imagePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             handlePickedTestImage(uri)
         }
