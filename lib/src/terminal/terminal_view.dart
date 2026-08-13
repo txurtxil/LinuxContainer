@@ -8,6 +8,7 @@ import 'terminal_session.dart';
 import 'keybar_config.dart';
 import 'keybar_settings_screen.dart';
 import '../agent/agent_dashboard.dart';
+import '../agent/agent_services.dart';
 import '../agent/mediapipe_test_screen.dart';
 
 class TerminalScreen extends StatefulWidget {
@@ -73,6 +74,11 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       // Carga la configuración del teclado guardada
       _keybarConfig = await KeybarConfig.load();
       await _manager.initContainer(log: _appendLog);
+      if (_manager.isReady) {
+        final svc = AgentServices();
+        svc.startAgent();
+        svc.startCron();
+      }
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
       _addSession(initial: true);
