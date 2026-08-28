@@ -109,27 +109,53 @@ fi
 
 # ── ¿Existe ya la release? ────────────────────────────────────
 echo ""
+
+# El JSON de GitHub no se parsea con grep sin acabar mal. python3 esta
+# garantizado aqui, asi que lo usamos.
+jget() {  # jget <expresion python sobre 'd'>  — lee el JSON de stdin
+  python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+try:
+    r = $1
+    print(r if r is not None else '')
+except Exception:
+    pass
+" 2>/dev/null
+}
+
 EXISTING="$(api GET "https://api.github.com/repos/$REPO/releases/tags/$VERSION")"
-RELEASE_ID="$(echo "$EXISTING" | grep -o '"id": *[0-9]*' | head -1 | grep -o '[0-9]*')"
+RELEASE_ID="$(echo "$EXISTING" | jget "d.get('id')")"
 
 if [ -n "$RELEASE_ID" ]; then
   warn "La release $VERSION ya existe (id $RELEASE_ID)"
-  # ¿Tiene ya un asset con ese nombre? Habria que borrarlo antes.
-  ASSET_ID="$(echo "$EXISTING" \
-    | tr ',' '\n' | grep -B2 '"name": *"app-release.apk"' \
-    | grep -o '"id": *[0-9]*' | head -1 | grep -o '[0-9]*')"
+
+  # ¿Hay ya un asset con ese nombre? Hay que borrarlo antes de subir.
+  ASSET_ID="$(echo "$EXISTING" | jget "next((a['id'] for a in d.get('assets', []) if a['name'] == 'app-release.apk'), None)")"
+
   if [ -n "$ASSET_ID" ]; then
-    read -rp "$(echo -e "  Ya hay una app-release.apk subida. ¿Reemplazar? ${C_YEL}[s/N]${C_RESET} ")" c
+    ASSET_MB="$(echo "$EXISTING" | jget "next((a['size'] // 1048576 for a in d.get('assets', []) if a['name'] == 'app-release.apk'), None)")"
+    warn "Ya hay una app-release.apk subida (${ASSET_MB} MB, id $ASSET_ID)"
+    read -rp "$(echo -e "  ¿Reemplazarla por la nueva? ${C_YEL}[s/N]${C_RESET} ")" c
     [[ "$c" != "s" && "$c" != "S" ]] && { echo "Cancelado."; exit 0; }
-    api DELETE "https://api.github.com/repos/$REPO/releases/assets/$ASSET_ID" > /dev/null
+    DEL="$(api DELETE "https://api.github.com/repos/$REPO/releases/assets/$ASSET_ID")"
+    # Un DELETE correcto devuelve 204 sin cuerpo.
+    if [ -n "$DEL" ] && echo "$DEL" | grep -q '"message"'; then
+      echo "$DEL" | head -5
+      die "No se pudo borrar el asset anterior."
+    fi
     ok "asset anterior borrado"
+    sleep 2   # GitHub tarda un instante en liberar el nombre
   fi
 else
   info "creando release..."
   BODY="$(printf '{"tag_name":"%s","name":"%s","body":"%s","draft":false,"prerelease":false}' \
     "$VERSION" "$VERSION" "$(echo "$NOTES" | sed 's/"/\\"/g')")"
   RESP="$(api POST "https://api.github.com/repos/$REPO/releases" "$BODY")"
-  RELEASE_ID="$(echo "$RESP" | grep -o '"id": *[0-9]*' | head -1 | grep -o '[0-9]*')"
+  RELEASE_ID="$(echo "$RESP" | jget "d.get('id')")"
   if [ -z "$RELEASE_ID" ]; then
     echo "$RESP" | head -20
     die "No se pudo crear la release. Mira el error de arriba."
@@ -149,8 +175,9 @@ UP="$(curl -sS -X POST \
   --data-binary @"$APK_PATH" \
   "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=app-release.apk")"
 
-if echo "$UP" | grep -q '"state": *"uploaded"'; then
-  URL="$(echo "$UP" | grep -o '"browser_download_url": *"[^"]*"' | head -1 | cut -d'"' -f4)"
+UP_STATE="$(echo "$UP" | jget "d.get('state')")"
+if [ "$UP_STATE" = "uploaded" ]; then
+  URL="$(echo "$UP" | jget "d.get('browser_download_url')")"
   echo ""
   ok "═══ SUBIDA OK ═══"
   echo ""
@@ -160,6 +187,5 @@ if echo "$UP" | grep -q '"state": *"uploaded"'; then
 else
   echo ""
   echo "$UP" | head -20
-  die "La subida fallo. Mira el error de arriba.
-  Si dice 'already_exists', borra el asset desde la web y reintenta."
+  die "La subida fallo. Mira el error de arriba."
 fi
