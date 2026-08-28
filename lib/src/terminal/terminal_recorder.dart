@@ -48,7 +48,6 @@ class TerminalRecorder {
   final String label;
   TerminalRecorder({this.label = ''});
 
-  String? _rootfsPath;
   IOSink? _sink;
   File? _currentFile;
   final StringBuffer _tail = StringBuffer();
@@ -60,7 +59,6 @@ class TerminalRecorder {
   /// de esta sesión (TerminalSession.start()).
   Future<void> startSession(String rootfsPath) async {
     await _closeCurrent();
-    _rootfsPath = rootfsPath;
     _tail.clear();
 
     try {
