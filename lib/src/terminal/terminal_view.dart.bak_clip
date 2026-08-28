@@ -10,8 +10,6 @@ import 'keybar_settings_screen.dart';
 import '../agent/agent_dashboard.dart';
 import '../agent/agent_services.dart';
 import '../agent/mediapipe_test_screen.dart';
-import 'clipboard_vault.dart';
-import 'clipboard_vault_sheet.dart';
 
 class TerminalScreen extends StatefulWidget {
   const TerminalScreen({super.key});
@@ -80,7 +78,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
         final svc = AgentServices();
         svc.startAgent();
         svc.startCron();
-        await ClipboardVault.instance.loadFrom(_manager.rootfsPath!);
       }
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
@@ -184,17 +181,15 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     }
   }
 
-  /// Solo lo que se ve ahora mismo en el viewport, no el scrollback.
-  /// Deliberadamente limitado: para "todo lo que ha pasado" está "Sesión
-  /// completa" en el Portapapeles.
-  String _visibleText() {
+  void _copyScreen() {
     final buffer = _active.terminal.buffer;
     final sb = StringBuffer();
     for (int i = 0; i < _active.terminal.viewHeight; i++) {
       final line = buffer.lines[buffer.height - _active.terminal.viewHeight + i];
       sb.writeln(line.toString().trimRight());
     }
-    return sb.toString().trimRight();
+    Clipboard.setData(ClipboardData(text: sb.toString().trimRight()));
+    _toast('Pantalla copiada al portapapeles');
   }
 
   void _toast(String msg) {
@@ -267,18 +262,9 @@ const TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.bold)),
                 onTap: () { Navigator.pop(ctx); _paste(); },
               ),
               ListTile(
-                leading: const Icon(Icons.content_paste_rounded, color: Colors.greenAccent),
-                title: const Text('Portapapeles', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Sesión completa, última salida, errores…', style: TextStyle(color: Colors.white54)),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showClipboardVault(
-                    context,
-                    recorder: _active.recorder,
-                    sessionLabel: _sessions.length > 1 ? _active.name : null,
-                    getVisibleText: _visibleText,
-                  );
-                },
+                leading: const Icon(Icons.copy_all, color: Colors.greenAccent),
+                title: const Text('Copiar pantalla', style: TextStyle(color: Colors.white)),
+                onTap: () { Navigator.pop(ctx); _copyScreen(); },
               ),
               const Divider(color: Colors.white24),
               ListTile(

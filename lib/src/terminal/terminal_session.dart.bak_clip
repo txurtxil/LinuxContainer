@@ -1,9 +1,7 @@
-import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_pty/flutter_pty.dart';
 import 'package:xterm/xterm.dart';
 import '../container/container_manager.dart';
-import 'terminal_recorder.dart';
 
 /// Una sesión de terminal independiente (una pestaña): su propio Terminal,
 /// Controller y PTY. El PTY se arranca de forma diferida (cuando el
@@ -13,13 +11,12 @@ class TerminalSession {
   final Terminal terminal = Terminal(maxLines: 10000);
   final TerminalController controller = TerminalController();
   final ContainerManager _manager = ContainerManager();
-  final TerminalRecorder recorder;
 
   Pty? _pty;
   bool _started = false;
   bool get isStarted => _started;
 
-  TerminalSession(this.name) : recorder = TerminalRecorder(label: name);
+  TerminalSession(this.name);
 
   /// Arranca el shell con el tamaño dado. Idempotente.
   void start({required int columns, required int rows}) {
@@ -32,15 +29,10 @@ class TerminalSession {
     );
     _pty = pty;
 
-    unawaited(recorder.startSession(_manager.rootfsPath!));
-
     pty.output
         .cast<List<int>>()
         .transform(const Utf8Decoder())
-        .listen((data) {
-      terminal.write(data);
-      recorder.feed(data);
-    });
+        .listen(terminal.write);
 
     terminal.onOutput = (data) {
       pty.write(const Utf8Encoder().convert(data));
@@ -66,7 +58,6 @@ class TerminalSession {
   void dispose() {
     _pty?.kill();
     _pty = null;
-    unawaited(recorder.dispose());
     controller.dispose();
   }
 }
