@@ -9,6 +9,7 @@
 import 'package:flutter/material.dart';
 import 'ssh_host.dart';
 import 'ssh_hosts_service.dart';
+import '../sftp/sftp_browser_screen.dart';
 
 class _C {
   static const bg = Color(0xFF1C1C1E);
@@ -37,7 +38,10 @@ const Map<String, IconData> _osIcons = {
 
 class HostsScreen extends StatefulWidget {
   final void Function(SshHost host) onConnect;
-  const HostsScreen({super.key, required this.onConnect});
+  /// Si se pasa, cada host muestra un icono extra para abrir el explorador
+  /// SFTP directamente (sin pasar por una pestaña de terminal).
+  final String? rootfsPath;
+  const HostsScreen({super.key, required this.onConnect, this.rootfsPath});
 
   @override
   State<HostsScreen> createState() => _HostsScreenState();
@@ -122,7 +126,20 @@ class _HostsScreenState extends State<HostsScreen> {
           '${h.username}@${h.hostname}${h.port != 22 ? ':${h.port}' : ''}',
           style: const TextStyle(color: _C.textLo, fontSize: 12),
         ),
-        trailing: const Icon(Icons.chevron_right, color: _C.textLo),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (widget.rootfsPath != null)
+              IconButton(
+                icon: const Icon(Icons.folder_open, color: _C.textLo, size: 20),
+                tooltip: 'Explorar archivos (SFTP)',
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => SftpBrowserScreen(host: h, rootfsPath: widget.rootfsPath!),
+                )),
+              ),
+            const Icon(Icons.chevron_right, color: _C.textLo),
+          ],
+        ),
       ),
     );
   }

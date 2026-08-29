@@ -149,9 +149,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   void _openHosts() {
     Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => HostsScreen(
-        rootfsPath: _manager.rootfsPath,
-        onConnect: (host) {
+      builder: (_) => HostsScreen(onConnect: (host) {
         Navigator.of(context).pop();
         _connectToHost(host);
       }),
