@@ -522,7 +522,6 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
               ),
               if (_viewKeys[_activeIndex] != null)
                 SelectionHandlesOverlay(
-                  key: ValueKey(_activeIndex),
                   terminal: _active.terminal,
                   controller: _active.controller,
                   viewKey: _viewKeys[_activeIndex]!,

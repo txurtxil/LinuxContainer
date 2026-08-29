@@ -48,6 +48,21 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
     widget.controller.addListener(_onChange);
   }
 
+  // FIX: sin esto, cambiar de pestaña (o conectar a un host SSH nuevo, que
+  // abre otra sesión) deja la escucha enganchada al controller VIEJO para
+  // siempre — Flutter reutiliza este State en vez de crear uno nuevo al
+  // cambiar de sesión, así que sin este override nadie avisa cuando el
+  // controller cambia de identidad.
+  @override
+  void didUpdateWidget(covariant SelectionHandlesOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_onChange);
+      widget.controller.addListener(_onChange);
+      _onChange(); // lectura fresca ya mismo, no solo en el próximo cambio
+    }
+  }
+
   @override
   void dispose() {
     widget.controller.removeListener(_onChange);
