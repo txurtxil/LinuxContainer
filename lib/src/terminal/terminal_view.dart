@@ -191,9 +191,11 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   void _selectAll() {
     final buf = _active.terminal.buffer;
     final topAbsolute = (buf.height - buf.viewHeight - buf.scrollBack)
-        .clamp(0, buf.height - 1);
+        .clamp(0, buf.height - 1)
+        .toInt();
     final bottomAbsolute = (topAbsolute + buf.viewHeight - 1)
-        .clamp(0, buf.height - 1);
+        .clamp(0, buf.height - 1)
+        .toInt();
     final base = buf.createAnchor(0, topAbsolute);
     final extent = buf.createAnchor(buf.viewWidth - 1, bottomAbsolute);
     _active.controller.setSelection(base, extent);
