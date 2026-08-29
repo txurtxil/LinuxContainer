@@ -37,6 +37,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   bool _spinning = false;
   bool _booting = true;
   bool _showAgent = false; // Arranca en terminal (menú lc-menu)
+  bool _hasSelection = false;
   String? _error;
   final Map<int, FocusNode> _focusNodes = {};
   final Map<int, GlobalKey<TerminalViewState>> _viewKeys = {};
@@ -112,6 +113,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     }
     final n = _sessions.length + 1;
     final session = TerminalSession('Sesión $n');
+    session.controller.addListener(_onSelectionChanged);
     _sessions.add(session);
     if (!initial) {
       setState(() => _activeIndex = _sessions.length - 1);
@@ -135,6 +137,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       return;
     }
     final session = TerminalSession(host.name, customCommand: host.toSshCommand());
+    session.controller.addListener(_onSelectionChanged);
     _sessions.add(session);
     setState(() {
       _activeIndex = _sessions.length - 1;
@@ -172,6 +175,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       return;
     }
     final s = _sessions[index];
+    s.controller.removeListener(_onSelectionChanged);
     s.dispose();
     setState(() {
       _sessions.removeAt(index);
@@ -181,6 +185,12 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     });
   }
 
+  void _onSelectionChanged() {
+    final has = _active.controller.selection != null;
+    if (has != _hasSelection && mounted) {
+      setState(() => _hasSelection = has);
+    }
+  }
 
   void _changeFont(double delta) {
     setState(() {
@@ -374,6 +384,7 @@ true); Navigator.pop(ctx); },
       n.dispose();
     }
     for (final s in _sessions) {
+      s.controller.removeListener(_onSelectionChanged);
       s.dispose();
     }
     super.dispose();
@@ -526,6 +537,31 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                   onCopy: _copySelection,
                   onPaste: _paste,
                   onSelectAll: _selectAll,
+                ),
+              if (_hasSelection)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Material(
+                    color: Colors.green.shade700,
+                    borderRadius: BorderRadius.circular(8),
+                    elevation: 4,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: _copySelection,
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.copy, color: Colors.white, size: 18),
+                            SizedBox(width: 6),
+                            Text('Copiar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
             ],
           ),
