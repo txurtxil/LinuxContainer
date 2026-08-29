@@ -73,24 +73,23 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
     if (mounted) setState(() {});
   }
 
-  // v4: el calculo anterior deducia el tamano de celda a partir del cursor
-  // parpadeante (globalCursorRect + buf.cursorX/cursorY). Eso asumia que la
-  // posicion reportada del cursor siempre corresponde exactamente a la fila
-  // que yo creia - y en la practica las asas aparecian muchas filas por
-  // debajo de donde debian, o no aparecian en absoluto. Nueva estrategia,
-  // sin esa suposicion: el tamano de UNA celda es, sencillamente, el
-  // tamano total del widget dividido entre columnas y filas - buf.viewWidth
-  // y buf.viewHeight, los mismos valores que ya se usan sin problema en
-  // _visibleText() y _selectAll(). El origen es (0,0) en coordenadas
-  // LOCALES del propio TerminalView, asumiendo que no tiene padding interno
-  // (no se configuro ninguno en este proyecto).
+  // v5: v4 asumia que este overlay y el TerminalView comparten el mismo
+  // origen (0,0) dentro del Stack que los contiene -- nunca se comprobo, y
+  // por lo visto en el dispositivo real NO es cierto (las asas seguian
+  // saliendo desviadas, mismo problema que con el metodo del cursor).
+  // Ahora se mide la posicion real de los dos widgets con localToGlobal/
+  // globalToLocal y se calcula la diferencia de verdad, sin asumir nada
+  // sobre como el Stack padre alinea a sus hijos.
   (({double cellW, double cellH, double originX, double originY})?, String?) _metrics() {
-    final ctx = widget.viewKey.currentContext;
-    if (ctx == null) return (null, 'viewKey.currentContext es null');
+    final termCtx = widget.viewKey.currentContext;
+    if (termCtx == null) return (null, 'viewKey.currentContext es null');
+    final termBox = termCtx.findRenderObject();
+    if (termBox is! RenderBox) return (null, 'terminal no es un RenderBox (${termBox.runtimeType})');
+    if (!termBox.hasSize) return (null, 'el RenderBox del terminal aun no tiene tamano');
 
-    final box = ctx.findRenderObject();
-    if (box is! RenderBox) return (null, 'findRenderObject() no es un RenderBox (${box.runtimeType})');
-    if (!box.hasSize) return (null, 'el RenderBox aun no tiene tamano (hasSize=false)');
+    final myBox = context.findRenderObject();
+    if (myBox is! RenderBox) return (null, 'overlay no es un RenderBox (${myBox.runtimeType})');
+    if (!myBox.hasSize) return (null, 'el RenderBox del overlay aun no tiene tamano');
 
     final buf = widget.terminal.buffer;
     final viewW = buf.viewWidth;
@@ -99,13 +98,18 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
       return (null, 'viewWidth/viewHeight invalidos: $viewW x $viewH');
     }
 
-    final cellW = box.size.width / viewW;
-    final cellH = box.size.height / viewH;
+    final cellW = termBox.size.width / viewW;
+    final cellH = termBox.size.height / viewH;
     if (cellW <= 0 || cellH <= 0) {
-      return (null, 'celda invalida: cellW=$cellW cellH=$cellH (box=${box.size})');
+      return (null, 'celda invalida: cellW=$cellW cellH=$cellH (termBox=${termBox.size})');
     }
 
-    return ((cellW: cellW, cellH: cellH, originX: 0.0, originY: 0.0), null);
+    // Origen real del TerminalView, medido y convertido a las coordenadas
+    // LOCALES de este propio overlay -- no asumido.
+    final termGlobalOrigin = termBox.localToGlobal(Offset.zero);
+    final myLocalOrigin = myBox.globalToLocal(termGlobalOrigin);
+
+    return ((cellW: cellW, cellH: cellH, originX: myLocalOrigin.dx, originY: myLocalOrigin.dy), null);
   }
 
   int _viewportTopAbsolute() {
@@ -138,15 +142,18 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
 
     final box = widget.viewKey.currentContext?.findRenderObject();
     if (box is! RenderBox) return;
+    // local ya esta en coordenadas propias del TerminalView (su (0,0) es
+    // su propia esquina superior izquierda) -- no hay que restarle ningun
+    // origen encima, eso ya se resolvio dentro de globalToLocal.
     final local = box.globalToLocal(details.globalPosition);
 
     // FIX: .clamp() en Dart siempre devuelve num, nunca int, aunque el
     // receptor sea int. buf.createAnchor() exige int de verdad -> .toInt().
-    final col = ((local.dx - m.originX) / m.cellW)
+    final col = (local.dx / m.cellW)
         .round()
         .clamp(0, widget.terminal.buffer.viewWidth - 1)
         .toInt();
-    final viewportRow = ((local.dy - m.originY) / m.cellH).round();
+    final viewportRow = (local.dy / m.cellH).round();
     final absoluteRow = (viewportRow + _viewportTopAbsolute())
         .clamp(0, widget.terminal.buffer.height - 1)
         .toInt();
