@@ -13,9 +13,6 @@ import '../agent/mediapipe_test_screen.dart';
 import 'clipboard_vault.dart';
 import 'clipboard_vault_sheet.dart';
 import 'selection_handles.dart';
-import '../ssh/ssh_host.dart';
-import '../ssh/ssh_hosts_service.dart';
-import '../ssh/hosts_screen.dart';
 
 class TerminalScreen extends StatefulWidget {
   const TerminalScreen({super.key});
@@ -86,7 +83,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
         svc.startAgent();
         svc.startCron();
         await ClipboardVault.instance.loadFrom(_manager.rootfsPath!);
-        await SshHostsService.instance.loadFrom(_manager.rootfsPath!);
       }
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
@@ -129,34 +125,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     final s = _active;
     if (s.isStarted) return;
     s.start(columns: s.terminal.viewWidth, rows: s.terminal.viewHeight);
-  }
-
-  void _connectToHost(SshHost host) {
-    if (_sessions.length >= _maxSessions) {
-      _toast('Máximo $_maxSessions sesiones');
-      return;
-    }
-    final session = TerminalSession(host.name, customCommand: host.toSshCommand());
-    session.controller.addListener(_onSelectionChanged);
-    _sessions.add(session);
-    setState(() {
-      _activeIndex = _sessions.length - 1;
-      _showAgent = false;
-    });
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      WidgetsBinding.instance.endOfFrame.then((_) {
-        if (mounted) _startActiveSession();
-      });
-    });
-  }
-
-  void _openHosts() {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => HostsScreen(onConnect: (host) {
-        Navigator.of(context).pop();
-        _connectToHost(host);
-      }),
-    ));
   }
 
   void _switchTo(int index) {
@@ -310,12 +278,6 @@ const TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.bold)),
                   onTap: () { Navigator.pop(ctx); _addSession(); },
                 ),
               const Divider(color: Colors.white24),
-              ListTile(
-                leading: const Icon(Icons.dns_rounded, color: Colors.lightBlueAccent),
-                title: const Text('Hosts SSH', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Conectar a otro servidor', style: TextStyle(color: Colors.white54)),
-                onTap: () { Navigator.pop(ctx); _openHosts(); },
-              ),
               ListTile(
                 leading: const Icon(Icons.content_paste, color: Colors.greenAccent),
                 title: const Text('Pegar', style: TextStyle(color: Colors.white)),

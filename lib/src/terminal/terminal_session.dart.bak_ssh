@@ -14,33 +14,22 @@ class TerminalSession {
   final TerminalController controller = TerminalController();
   final ContainerManager _manager = ContainerManager();
   final TerminalRecorder recorder;
-  /// Si no es null, se ejecuta ESTE comando en vez del shell por defecto
-  /// (p.ej. "ssh -p 22 usuario@host"). El PTY es igual de real en ambos
-  /// casos: ssh lo detecta como terminal interactivo y funciona igual que
-  /// si se escribiera a mano.
-  final String? customCommand;
 
   Pty? _pty;
   bool _started = false;
   bool get isStarted => _started;
 
-  TerminalSession(this.name, {this.customCommand}) : recorder = TerminalRecorder(label: name);
+  TerminalSession(this.name) : recorder = TerminalRecorder(label: name);
 
   /// Arranca el shell con el tamaño dado. Idempotente.
   void start({required int columns, required int rows}) {
     if (_started) return;
     _started = true;
 
-    final pty = customCommand != null
-        ? _manager.startProcess(
-            customCommand!,
-            rows: rows > 0 ? rows : 24,
-            columns: columns > 0 ? columns : 80,
-          )
-        : _manager.startShell(
-            rows: rows > 0 ? rows : 24,
-            columns: columns > 0 ? columns : 80,
-          );
+    final pty = _manager.startShell(
+      rows: rows > 0 ? rows : 24,
+      columns: columns > 0 ? columns : 80,
+    );
     _pty = pty;
 
     unawaited(recorder.startSession(_manager.rootfsPath!));
