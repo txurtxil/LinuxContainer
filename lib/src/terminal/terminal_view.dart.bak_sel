@@ -12,7 +12,6 @@ import '../agent/agent_services.dart';
 import '../agent/mediapipe_test_screen.dart';
 import 'clipboard_vault.dart';
 import 'clipboard_vault_sheet.dart';
-import 'selection_handles.dart';
 
 class TerminalScreen extends StatefulWidget {
   const TerminalScreen({super.key});
@@ -37,7 +36,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   bool _hasSelection = false;
   String? _error;
   final Map<int, FocusNode> _focusNodes = {};
-  final Map<int, GlobalKey<TerminalViewState>> _viewKeys = {};
 
   double _fontSize = 12.0;
   static const double _minFont = 8.0;
@@ -184,19 +182,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     if (text != null && text.isNotEmpty) {
       _active.terminal.textInput(text);
     }
-  }
-
-  /// Selecciona todo lo VISIBLE ahora mismo (el viewport), no todo el
-  /// historial — para eso ya esta "Sesion completa" en el Portapapeles.
-  void _selectAll() {
-    final buf = _active.terminal.buffer;
-    final topAbsolute = (buf.height - buf.viewHeight - buf.scrollBack)
-        .clamp(0, buf.height - 1);
-    final bottomAbsolute = (topAbsolute + buf.viewHeight - 1)
-        .clamp(0, buf.height - 1);
-    final base = buf.createAnchor(0, topAbsolute);
-    final extent = buf.createAnchor(buf.viewWidth - 1, bottomAbsolute);
-    _active.controller.setSelection(base, extent);
   }
 
   /// Solo lo que se ve ahora mismo en el viewport, no el scrollback.
@@ -475,10 +460,8 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                   final i = entry.key;
                   final s = entry.value;
                   final focusNode = _focusNodes.putIfAbsent(i, () => FocusNode());
-                  final viewKey = _viewKeys.putIfAbsent(i, () => GlobalKey<TerminalViewState>());
                   return TerminalView(
                     s.terminal,
-                    key: viewKey,
                     controller: s.controller,
                     focusNode: focusNode,
                     autofocus: true,
@@ -489,15 +472,6 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                   );
                 }).toList(),
               ),
-              if (_viewKeys[_activeIndex] != null)
-                SelectionHandlesOverlay(
-                  terminal: _active.terminal,
-                  controller: _active.controller,
-                  viewKey: _viewKeys[_activeIndex]!,
-                  onCopy: _copySelection,
-                  onPaste: _paste,
-                  onSelectAll: _selectAll,
-                ),
               if (_hasSelection)
                 Positioned(
                   top: 8,

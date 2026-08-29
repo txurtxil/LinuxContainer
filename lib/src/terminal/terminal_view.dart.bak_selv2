@@ -186,19 +186,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     }
   }
 
-  /// Selecciona todo lo VISIBLE ahora mismo (el viewport), no todo el
-  /// historial — para eso ya esta "Sesion completa" en el Portapapeles.
-  void _selectAll() {
-    final buf = _active.terminal.buffer;
-    final topAbsolute = (buf.height - buf.viewHeight - buf.scrollBack)
-        .clamp(0, buf.height - 1);
-    final bottomAbsolute = (topAbsolute + buf.viewHeight - 1)
-        .clamp(0, buf.height - 1);
-    final base = buf.createAnchor(0, topAbsolute);
-    final extent = buf.createAnchor(buf.viewWidth - 1, bottomAbsolute);
-    _active.controller.setSelection(base, extent);
-  }
-
   /// Solo lo que se ve ahora mismo en el viewport, no el scrollback.
   /// Deliberadamente limitado: para "todo lo que ha pasado" está "Sesión
   /// completa" en el Portapapeles.
@@ -494,9 +481,6 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                   terminal: _active.terminal,
                   controller: _active.controller,
                   viewKey: _viewKeys[_activeIndex]!,
-                  onCopy: _copySelection,
-                  onPaste: _paste,
-                  onSelectAll: _selectAll,
                 ),
               if (_hasSelection)
                 Positioned(
