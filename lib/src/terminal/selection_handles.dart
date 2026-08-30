@@ -227,29 +227,47 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
     );
   }
 
+  // v6: build() devolvia SizedBox.shrink() sin seleccion y Stack(...) con
+  // seleccion -- dos TIPOS de widget distintos. Eso hace que mi propio
+  // RenderObject se destruya y se cree de cero justo cuando aparece una
+  // seleccion, colapsado a tamano (0,0) en ese primer frame -- y Stack
+  // recorta por defecto lo que se sale de su propio tamano. Las gotas
+  // podian estar bien calculadas y aun asi desaparecer, o verse solo a
+  // medias, segun como colapsara el recuadro cada vez. Arreglo doble:
+  // build() SIEMPRE devuelve el mismo tipo de widget (un Stack, nunca
+  // cambia), y ese Stack no recorta nada (clipBehavior: Clip.none).
   @override
   Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: _buildChildren(),
+    );
+  }
+
+  List<Widget> _buildChildren() {
     final sel = widget.controller.selection;
-    if (sel == null) return const SizedBox.shrink();
+    if (sel == null) return const [];
 
     final (m, reason) = _metrics();
     if (m == null) {
-      return Positioned(
-        left: 8,
-        bottom: 8,
-        right: 8,
-        child: Material(
-          color: Colors.red.shade900,
-          borderRadius: BorderRadius.circular(6),
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Text(
-              'DEBUG asas: $reason',
-              style: const TextStyle(color: Colors.white, fontSize: 11),
+      return [
+        Positioned(
+          left: 8,
+          bottom: 8,
+          right: 8,
+          child: Material(
+            color: Colors.red.shade900,
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                'DEBUG asas: $reason',
+                style: const TextStyle(color: Colors.white, fontSize: 11),
+              ),
             ),
           ),
         ),
-      );
+      ];
     }
 
     final startY = _localY(sel.begin.y, m.cellH, m.originY);
@@ -276,8 +294,6 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
 
     if (startY != null || endY != null) {
       const toolbarHeight = 40.0;
-      // FIX: mismo problema de .clamp() -> num. Aqui hace falta double
-      // (Positioned.left lo exige), no int.
       final double toolbarLeftRaw = m.originX + sel.begin.x * m.cellW;
       final double toolbarLeft = toolbarLeftRaw < 0 ? 0.0 : toolbarLeftRaw;
       double toolbarTop;
@@ -295,7 +311,7 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
       ));
     }
 
-    return Stack(children: children);
+    return children;
   }
 }
 
