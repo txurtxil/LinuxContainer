@@ -40,9 +40,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   String? _error;
   final Map<int, FocusNode> _focusNodes = {};
   final Map<int, GlobalKey<TerminalViewState>> _viewKeys = {};
-  // Una calibracion por sesion: cada TerminalView tiene su propio
-  // tamano y su propio scroll, asi que no se pueden compartir.
-  final Map<int, TerminalCalibration> _calibrations = {};
 
   double _fontSize = 12.0;
   static const double _minFont = 8.0;
@@ -513,19 +510,6 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                   return TerminalView(
                     s.terminal,
                     key: viewKey,
-                    onTapUp: (details, cellOffset) {
-                      // Cada toque aporta un par (pixel, celda) medido de
-                      // verdad. Con dos toques en celdas distintas se
-                      // despeja el tamano de celda y el origen reales.
-                      final rb = viewKey.currentContext?.findRenderObject();
-                      if (rb is RenderBox) {
-                        final local = rb.globalToLocal(details.globalPosition);
-                        _calibrations
-                            .putIfAbsent(i, () => TerminalCalibration())
-                            .observe(local, cellOffset);
-                        setState(() {});
-                      }
-                    },
                     controller: s.controller,
                     focusNode: focusNode,
                     autofocus: true,
@@ -542,8 +526,6 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                   terminal: _active.terminal,
                   controller: _active.controller,
                   viewKey: _viewKeys[_activeIndex]!,
-                  calibration: _calibrations
-                      .putIfAbsent(_activeIndex, () => TerminalCalibration()),
                   onCopy: _copySelection,
                   onPaste: _paste,
                   onSelectAll: _selectAll,

@@ -1,24 +1,94 @@
 // lib/src/terminal/selection_handles.dart
 //
-// Asas de seleccion arrastrables + barra flotante Copiar/Pegar/Todo, estilo
-// seleccion nativa de Android.
+// Asas de seleccion arrastrables + barra flotante Copiar/Pegar/Todo.
 //
-// v3: corregidos 3 errores de tipos que solo salen al compilar de verdad
-// (Dart .clamp() SIEMPRE devuelve num, nunca el tipo original int/double -
-// hace falta .toInt()/.toDouble() explicito despues). No tengo compilador
-// aqui; si queda alguno mas, el proximo `flutter analyze` lo dira.
+// v7 - CAMBIO DE ENFOQUE. Las seis versiones anteriores intentaban DEDUCIR
+// donde cae cada celda en pantalla: primero desde el cursor parpadeante,
+// luego dividiendo el tamano del widget, luego midiendo offsets entre
+// widgets... Todas fallaron porque TerminalView contiene un Scrollable
+// interno CON PADDING PROPIO (documentado: "Padding around the inner
+// Scrollable widget"), y ni el padding ni el desplazamiento del scroll son
+// visibles desde fuera. Por eso el desfase parecia distinto cada vez.
 //
-// El diagnostico visible (banner rojo si _metrics() falla) se mantiene.
-// El boton verde "Copiar" antiguo de terminal_view.dart sigue sin tocar,
-// a proposito, como red de seguridad mientras esto se confirma.
+// Enfoque nuevo: NO deducir nada. El paquete expone onTapUp(details,
+// CellOffset) -- te dice exactamente en que celda tocaste. Cada vez que el
+// usuario toca la terminal tenemos un par (posicion en pixeles, celda
+// real). Con dos toques en celdas distintas se despeja la relacion exacta:
+// tamano de celda Y origen, incluyendo el padding y el scroll que no
+// podemos ver. Eso se llama calibracion, y sustituye a seis intentos de
+// adivinar.
+//
+// Mientras no haya calibracion, las asas NO se dibujan (no se inventan
+// posiciones), pero la barra Copiar/Pegar/Todo SI aparece, anclada abajo
+// en un sitio fijo -- util desde el primer segundo, sin depender de
+// ninguna geometria.
 
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
+
+/// Relacion medida entre pixeles y celdas. Se rellena con los toques
+/// reales del usuario, no se calcula a ciegas.
+class TerminalCalibration {
+  double? cellW;
+  double? cellH;
+  double? originX;
+  double? originY;
+
+  // Ultimo par observado (pixel local, celda) para poder despejar con el
+  // siguiente toque en una celda distinta.
+  Offset? _lastPixel;
+  CellOffset? _lastCell;
+
+  bool get isReady =>
+      cellW != null && cellH != null && originX != null && originY != null;
+
+  /// Registra un toque: posicion LOCAL dentro del TerminalView + la celda
+  /// que el propio paquete dice que corresponde.
+  void observe(Offset localPixel, CellOffset cell) {
+    final prevPixel = _lastPixel;
+    final prevCell = _lastCell;
+    _lastPixel = localPixel;
+    _lastCell = cell;
+
+    if (prevPixel == null || prevCell == null) return;
+
+    // Necesitamos dos toques en columnas distintas para despejar cellW,
+    // y en filas distintas para cellH. Se acumula: cada eje se resuelve
+    // por separado en cuanto hay datos suficientes.
+    final dxCells = cell.x - prevCell.x;
+    if (dxCells != 0) {
+      final w = (localPixel.dx - prevPixel.dx) / dxCells;
+      if (w > 1 && w < 200) {
+        cellW = w;
+        originX = localPixel.dx - (cell.x * w);
+      }
+    }
+
+    final dyCells = cell.y - prevCell.y;
+    if (dyCells != 0) {
+      final h = (localPixel.dy - prevPixel.dy) / dyCells;
+      if (h > 1 && h < 200) {
+        cellH = h;
+        originY = localPixel.dy - (cell.y * h);
+      }
+    }
+  }
+
+  void reset() {
+    cellW = null;
+    cellH = null;
+    originX = null;
+    originY = null;
+    _lastPixel = null;
+    _lastCell = null;
+  }
+}
 
 class SelectionHandlesOverlay extends StatefulWidget {
   final Terminal terminal;
   final TerminalController controller;
   final GlobalKey<TerminalViewState> viewKey;
+  final TerminalCalibration calibration;
   final VoidCallback onCopy;
   final VoidCallback onPaste;
   final VoidCallback onSelectAll;
@@ -28,6 +98,7 @@ class SelectionHandlesOverlay extends StatefulWidget {
     required this.terminal,
     required this.controller,
     required this.viewKey,
+    required this.calibration,
     required this.onCopy,
     required this.onPaste,
     required this.onSelectAll,
@@ -48,18 +119,13 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
     widget.controller.addListener(_onChange);
   }
 
-  // FIX: sin esto, cambiar de pestana (o conectar a un host SSH nuevo, que
-  // abre otra sesion) deja la escucha enganchada al controller VIEJO para
-  // siempre - Flutter reutiliza este State en vez de crear uno nuevo al
-  // cambiar de sesion, asi que sin este override nadie avisa cuando el
-  // controller cambia de identidad.
   @override
   void didUpdateWidget(covariant SelectionHandlesOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_onChange);
       widget.controller.addListener(_onChange);
-      _onChange(); // lectura fresca ya mismo, no solo en el proximo cambio
+      _onChange();
     }
   }
 
@@ -73,43 +139,23 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
     if (mounted) setState(() {});
   }
 
-  // v5: v4 asumia que este overlay y el TerminalView comparten el mismo
-  // origen (0,0) dentro del Stack que los contiene -- nunca se comprobo, y
-  // por lo visto en el dispositivo real NO es cierto (las asas seguian
-  // saliendo desviadas, mismo problema que con el metodo del cursor).
-  // Ahora se mide la posicion real de los dos widgets con localToGlobal/
-  // globalToLocal y se calcula la diferencia de verdad, sin asumir nada
-  // sobre como el Stack padre alinea a sus hijos.
-  (({double cellW, double cellH, double originX, double originY})?, String?) _metrics() {
+  /// Convierte el origen medido (coordenadas locales del TerminalView) a
+  /// coordenadas locales de ESTE overlay.
+  Offset? _originInMyCoords() {
+    final cal = widget.calibration;
+    if (!cal.isReady) return null;
+
     final termCtx = widget.viewKey.currentContext;
-    if (termCtx == null) return (null, 'viewKey.currentContext es null');
+    if (termCtx == null) return null;
     final termBox = termCtx.findRenderObject();
-    if (termBox is! RenderBox) return (null, 'terminal no es un RenderBox (${termBox.runtimeType})');
-    if (!termBox.hasSize) return (null, 'el RenderBox del terminal aun no tiene tamano');
+    if (termBox is! RenderBox || !termBox.hasSize) return null;
 
     final myBox = context.findRenderObject();
-    if (myBox is! RenderBox) return (null, 'overlay no es un RenderBox (${myBox.runtimeType})');
-    if (!myBox.hasSize) return (null, 'el RenderBox del overlay aun no tiene tamano');
+    if (myBox is! RenderBox || !myBox.hasSize) return null;
 
-    final buf = widget.terminal.buffer;
-    final viewW = buf.viewWidth;
-    final viewH = buf.viewHeight;
-    if (viewW <= 0 || viewH <= 0) {
-      return (null, 'viewWidth/viewHeight invalidos: $viewW x $viewH');
-    }
-
-    final cellW = termBox.size.width / viewW;
-    final cellH = termBox.size.height / viewH;
-    if (cellW <= 0 || cellH <= 0) {
-      return (null, 'celda invalida: cellW=$cellW cellH=$cellH (termBox=${termBox.size})');
-    }
-
-    // Origen real del TerminalView, medido y convertido a las coordenadas
-    // LOCALES de este propio overlay -- no asumido.
-    final termGlobalOrigin = termBox.localToGlobal(Offset.zero);
-    final myLocalOrigin = myBox.globalToLocal(termGlobalOrigin);
-
-    return ((cellW: cellW, cellH: cellH, originX: myLocalOrigin.dx, originY: myLocalOrigin.dy), null);
+    final originGlobal =
+        termBox.localToGlobal(Offset(cal.originX!, cal.originY!));
+    return myBox.globalToLocal(originGlobal);
   }
 
   int _viewportTopAbsolute() {
@@ -117,8 +163,6 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
     return buf.height - buf.viewHeight - buf.scrollBack;
   }
 
-  // FIX: eran "num cellH, num originY" - Dart no puede devolver un num
-  // como double aunque en la practica siempre lo sea. Tipado explicito.
   double? _localY(int absoluteRow, double cellH, double originY) {
     final viewportRow = absoluteRow - _viewportTopAbsolute();
     if (viewportRow < 0 || viewportRow >= widget.terminal.buffer.viewHeight) {
@@ -137,23 +181,18 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
   }
 
   void _updateDrag(DragUpdateDetails details) {
-    final (m, _) = _metrics();
-    if (m == null || _fixedX == null || _fixedY == null) return;
+    final cal = widget.calibration;
+    if (!cal.isReady || _fixedX == null || _fixedY == null) return;
 
     final box = widget.viewKey.currentContext?.findRenderObject();
     if (box is! RenderBox) return;
-    // local ya esta en coordenadas propias del TerminalView (su (0,0) es
-    // su propia esquina superior izquierda) -- no hay que restarle ningun
-    // origen encima, eso ya se resolvio dentro de globalToLocal.
     final local = box.globalToLocal(details.globalPosition);
 
-    // FIX: .clamp() en Dart siempre devuelve num, nunca int, aunque el
-    // receptor sea int. buf.createAnchor() exige int de verdad -> .toInt().
-    final col = (local.dx / m.cellW)
+    final col = ((local.dx - cal.originX!) / cal.cellW!)
         .round()
         .clamp(0, widget.terminal.buffer.viewWidth - 1)
         .toInt();
-    final viewportRow = (local.dy / m.cellH).round();
+    final viewportRow = ((local.dy - cal.originY!) / cal.cellH!).round();
     final absoluteRow = (viewportRow + _viewportTopAbsolute())
         .clamp(0, widget.terminal.buffer.height - 1)
         .toInt();
@@ -181,12 +220,12 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
       onPanUpdate: _updateDrag,
       onPanEnd: (_) => _endDrag(),
       child: Container(
-        width: 28,
-        height: 28,
-        alignment: isStart ? Alignment.topCenter : Alignment.bottomCenter,
+        width: 32,
+        height: 32,
+        alignment: Alignment.center,
         child: CustomPaint(
-          size: const Size(28, 14),
-          painter: const _TeardropPainter(),
+          size: const Size(20, 20),
+          painter: const _HandlePainter(),
         ),
       ),
     );
@@ -196,12 +235,12 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
     return InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, size: 16, color: Colors.white),
-            const SizedBox(width: 5),
+            const SizedBox(width: 6),
             Text(label, style: const TextStyle(color: Colors.white, fontSize: 13)),
           ],
         ),
@@ -212,30 +251,21 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
   Widget _toolbar() {
     return Material(
       color: const Color(0xFF3A3A3C),
-      borderRadius: BorderRadius.circular(8),
-      elevation: 6,
+      borderRadius: BorderRadius.circular(10),
+      elevation: 8,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           _toolbarButton('Copiar', Icons.copy, widget.onCopy),
-          Container(width: 1, height: 20, color: Colors.white24),
+          Container(width: 1, height: 22, color: Colors.white24),
           _toolbarButton('Pegar', Icons.content_paste, widget.onPaste),
-          Container(width: 1, height: 20, color: Colors.white24),
+          Container(width: 1, height: 22, color: Colors.white24),
           _toolbarButton('Todo', Icons.select_all, widget.onSelectAll),
         ],
       ),
     );
   }
 
-  // v6: build() devolvia SizedBox.shrink() sin seleccion y Stack(...) con
-  // seleccion -- dos TIPOS de widget distintos. Eso hace que mi propio
-  // RenderObject se destruya y se cree de cero justo cuando aparece una
-  // seleccion, colapsado a tamano (0,0) en ese primer frame -- y Stack
-  // recorta por defecto lo que se sale de su propio tamano. Las gotas
-  // podian estar bien calculadas y aun asi desaparecer, o verse solo a
-  // medias, segun como colapsara el recuadro cada vez. Arreglo doble:
-  // build() SIEMPRE devuelve el mismo tipo de widget (un Stack, nunca
-  // cambia), y ese Stack no recorta nada (clipBehavior: Clip.none).
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -248,90 +278,62 @@ class _SelectionHandlesOverlayState extends State<SelectionHandlesOverlay> {
     final sel = widget.controller.selection;
     if (sel == null) return const [];
 
-    final (m, reason) = _metrics();
-    if (m == null) {
-      return [
-        Positioned(
-          left: 8,
-          bottom: 8,
-          right: 8,
-          child: Material(
-            color: Colors.red.shade900,
-            borderRadius: BorderRadius.circular(6),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Text(
-                'DEBUG asas: $reason',
-                style: const TextStyle(color: Colors.white, fontSize: 11),
-              ),
-            ),
-          ),
-        ),
-      ];
-    }
-
-    final startY = _localY(sel.begin.y, m.cellH, m.originY);
-    final endY = _localY(sel.end.y, m.cellH, m.originY);
-
     final children = <Widget>[];
+    final cal = widget.calibration;
+    final origin = _originInMyCoords();
 
-    if (startY != null) {
-      final x = m.originX + sel.begin.x * m.cellW;
-      children.add(Positioned(
-        left: x - 14,
-        top: startY - 28,
-        child: _handle(isStart: true),
-      ));
-    }
-    if (endY != null) {
-      final x = m.originX + (sel.end.x + 1) * m.cellW;
-      children.add(Positioned(
-        left: x - 14,
-        top: endY + m.cellH,
-        child: _handle(isStart: false),
-      ));
-    }
+    // Asas: SOLO si hay calibracion real. Sin ella no se dibujan -- antes
+    // que inventar una posicion, no poner nada.
+    if (origin != null && cal.isReady) {
+      final startY = _localY(sel.begin.y, cal.cellH!, origin.dy);
+      final endY = _localY(sel.end.y, cal.cellH!, origin.dy);
 
-    if (startY != null || endY != null) {
-      const toolbarHeight = 40.0;
-      final double toolbarLeftRaw = m.originX + sel.begin.x * m.cellW;
-      final double toolbarLeft = toolbarLeftRaw < 0 ? 0.0 : toolbarLeftRaw;
-      double toolbarTop;
-      if (startY != null && startY - toolbarHeight - 4 > 0) {
-        toolbarTop = startY - toolbarHeight - 4;
-      } else if (endY != null) {
-        toolbarTop = endY + m.cellH + 32;
-      } else {
-        toolbarTop = (startY ?? 0) + 32;
+      if (startY != null) {
+        children.add(Positioned(
+          left: origin.dx + sel.begin.x * cal.cellW! - 16,
+          top: startY - 32,
+          child: _handle(isStart: true),
+        ));
       }
-      children.add(Positioned(
-        left: toolbarLeft,
-        top: toolbarTop,
-        child: _toolbar(),
-      ));
+      if (endY != null) {
+        children.add(Positioned(
+          left: origin.dx + (sel.end.x + 1) * cal.cellW! - 16,
+          top: endY + cal.cellH!,
+          child: _handle(isStart: false),
+        ));
+      }
     }
+
+    // Barra: SIEMPRE que haya seleccion, en un sitio fijo y predecible.
+    // No depende de ninguna geometria, asi que funciona desde el primer
+    // segundo -- calibrado o no.
+    children.add(Positioned(
+      left: 0,
+      right: 0,
+      bottom: 12,
+      child: Center(child: _toolbar()),
+    ));
 
     return children;
   }
 }
 
-class _TeardropPainter extends CustomPainter {
-  const _TeardropPainter();
+class _HandlePainter extends CustomPainter {
+  const _HandlePainter();
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..color = Colors.greenAccent.shade400;
-    final cx = size.width / 2;
+    final border = Paint()
+      ..color = Colors.black54
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    final c = Offset(size.width / 2, size.height / 2);
     final r = size.width / 2;
-    canvas.drawCircle(Offset(cx, size.height - r), r, paint);
-    final path = Path()
-      ..moveTo(cx - r * 0.5, size.height - r)
-      ..lineTo(cx, size.height - r * 2.1)
-      ..lineTo(cx + r * 0.5, size.height - r)
-      ..close();
-    canvas.drawPath(path, paint);
+    canvas.drawCircle(c, r, paint);
+    canvas.drawCircle(c, r, border);
   }
 
   @override
-  bool shouldRepaint(covariant _TeardropPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _HandlePainter oldDelegate) => false;
 }
