@@ -5,10 +5,14 @@
 // acotada — sin subir fichero ni renombrar todavía, para que lo que
 // entra hoy se pueda probar de verdad antes de añadir más encima.
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../ssh/ssh_host.dart';
 import 'sftp_service.dart';
+import 'sftp_favorites_service.dart';
+import 'local_file_picker_screen.dart';
 
 class _C {
   static const bg = Color(0xFF1C1C1E);
@@ -232,6 +236,99 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     }
   }
 
+  void _showFabMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _C.card,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.upload_file, color: _C.accent),
+              title: const Text('Subir archivo', style: TextStyle(color: _C.textHi)),
+              onTap: () { Navigator.pop(ctx); _uploadFile(); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.create_new_folder_outlined, color: _C.accent),
+              title: const Text('Nueva carpeta', style: TextStyle(color: _C.textHi)),
+              onTap: () { Navigator.pop(ctx); _newFolder(); },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _uploadFile() async {
+    final localPath = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const LocalFilePickerScreen()),
+    );
+    if (localPath == null || !mounted) return;
+
+    final fileName = localPath.split('/').last;
+    final remote = _path == '.' ? fileName : '$_path/$fileName';
+    final localSize = await File(localPath).length();
+
+    setState(() => _busy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _svc.upload(localPath, remote);
+      messenger.showSnackBar(SnackBar(
+        content: Text('Subido: $fileName (${_fmtSize(localSize)})'),
+      ));
+      await _load(_path);
+    } catch (err) {
+      messenger.showSnackBar(SnackBar(content: Text('Fallo al subir: $err'), backgroundColor: _C.err));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _showFavorites() {
+    final favs = SftpFavoritesService.instance.forHost(widget.host.id);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _C.card,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+              child: Row(
+                children: [
+                  Icon(Icons.star, color: Color(0xFFFFD60A), size: 18),
+                  SizedBox(width: 8),
+                  Text('Favoritos', style: TextStyle(color: _C.textHi, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+            if (favs.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(20),
+                child: Text('Sin rutas guardadas todavia. Toca la estrella arriba para guardar la actual.',
+                    style: TextStyle(color: _C.textLo, fontSize: 12)),
+              ),
+            ...favs.map((f) => ListTile(
+                  leading: const Icon(Icons.folder, color: _C.accent, size: 20),
+                  title: Text(f.label, style: const TextStyle(color: _C.textHi, fontSize: 13)),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.close, color: _C.textLo, size: 18),
+                    onPressed: () async {
+                      await SftpFavoritesService.instance.remove(f.id);
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                  onTap: () { Navigator.pop(ctx); _load(f.path); },
+                )),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showActions(SftpEntry e) {
     showModalBottomSheet(
       context: context,
@@ -266,13 +363,39 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
         elevation: 0,
         iconTheme: const IconThemeData(color: _C.textHi),
         title: Text(widget.host.name, style: const TextStyle(color: _C.textHi, fontSize: 16)),
+        actions: _state == _LoadState.ready
+            ? [
+                IconButton(
+                  tooltip: 'Favoritos',
+                  icon: const Icon(Icons.star_border, color: _C.textLo),
+                  onPressed: _showFavorites,
+                ),
+                IconButton(
+                  tooltip: SftpFavoritesService.instance.isFavorite(widget.host.id, _path)
+                      ? 'Quitar de favoritos'
+                      : 'Guardar esta ruta',
+                  icon: Icon(
+                    SftpFavoritesService.instance.isFavorite(widget.host.id, _path)
+                        ? Icons.star
+                        : Icons.star_outline,
+                    color: SftpFavoritesService.instance.isFavorite(widget.host.id, _path)
+                        ? const Color(0xFFFFD60A)
+                        : _C.textLo,
+                  ),
+                  onPressed: () async {
+                    await SftpFavoritesService.instance.toggle(widget.host.id, _path);
+                    if (mounted) setState(() {});
+                  },
+                ),
+              ]
+            : null,
       ),
       body: _buildBody(),
       floatingActionButton: _state == _LoadState.ready
           ? FloatingActionButton(
               backgroundColor: _C.accent,
-              onPressed: _newFolder,
-              child: const Icon(Icons.create_new_folder_outlined, color: Colors.white),
+              onPressed: _showFabMenu,
+              child: const Icon(Icons.add, color: Colors.white),
             )
           : null,
     );

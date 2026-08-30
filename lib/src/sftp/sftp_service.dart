@@ -166,6 +166,40 @@ class SftpService {
     return localPath;
   }
 
+  /// Sube un fichero local al directorio remoto actual. [onProgress] recibe
+  /// bytes enviados hasta ahora -- dartssh2 no da el total en el propio
+  /// callback, asi que el porcentaje (si se quiere mostrar) hay que
+  /// calcularlo fuera comparando con el tamano local ya conocido.
+  Future<void> upload(String localPath, String remotePath, {void Function(int bytes)? onProgress}) async {
+    final sftp = _sftp;
+    if (sftp == null) throw StateError('No conectado');
+
+    final localFile = File(localPath);
+    if (!await localFile.exists()) {
+      throw StateError('El fichero local ya no existe: $localPath');
+    }
+
+    // create: por si no existe. truncate: por si ya existe, para no dejar
+    // basura del fichero viejo si el nuevo es mas corto.
+    final remoteFile = await sftp.open(
+      remotePath,
+      mode: SftpFileOpenMode.create | SftpFileOpenMode.truncate | SftpFileOpenMode.write,
+    );
+
+    try {
+      var sent = 0;
+      final stream = localFile.openRead().map((chunk) {
+        sent += chunk.length;
+        onProgress?.call(sent);
+        return chunk;
+      });
+      final uploader = remoteFile.write(stream.cast());
+      await uploader.done;
+    } finally {
+      await remoteFile.close();
+    }
+  }
+
   Future<void> delete(String remotePath, {required bool isDirectory}) async {
     final sftp = _sftp;
     if (sftp == null) throw StateError('No conectado');

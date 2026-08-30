@@ -16,7 +16,6 @@ import 'selection_handles.dart';
 import '../ssh/ssh_host.dart';
 import '../ssh/ssh_hosts_service.dart';
 import '../ssh/hosts_screen.dart';
-import '../sftp/sftp_favorites_service.dart';
 
 class TerminalScreen extends StatefulWidget {
   const TerminalScreen({super.key});
@@ -90,7 +89,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
         svc.startCron();
         await ClipboardVault.instance.loadFrom(_manager.rootfsPath!);
         await SshHostsService.instance.loadFrom(_manager.rootfsPath!);
-        await SftpFavoritesService.instance.loadFrom(_manager.rootfsPath!);
       }
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
