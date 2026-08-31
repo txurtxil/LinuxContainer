@@ -41,7 +41,11 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
   late final SftpService _svc;
   _LoadState _state = _LoadState.connecting;
   String _error = '';
-  String _path = '.';
+  // Arranca en initialPath si el host lo tiene configurado; si no, en el
+  // home del usuario remoto como siempre ('.' es lo que ya usaba sftp).
+  late String _path = (widget.host.initialPath?.trim().isNotEmpty ?? false)
+      ? widget.host.initialPath!.trim()
+      : '.';
   List<SftpEntry> _entries = [];
   bool _busy = false;
 

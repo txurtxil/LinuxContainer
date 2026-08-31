@@ -9,6 +9,7 @@
 import 'package:flutter/material.dart';
 import 'ssh_host.dart';
 import 'ssh_hosts_service.dart';
+import 'ssh_credentials_store.dart';
 import '../sftp/sftp_browser_screen.dart';
 
 class _C {
@@ -186,7 +187,10 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
   late final TextEditingController _port;
   late final TextEditingController _username;
   late final TextEditingController _keyPath;
+  late final TextEditingController _password;
+  late final TextEditingController _initialPath;
   String _osTag = 'generic';
+  bool _obscurePassword = true;
 
   @override
   void initState() {
@@ -197,7 +201,18 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
     _port = TextEditingController(text: (e?.port ?? 22).toString());
     _username = TextEditingController(text: e?.username ?? 'root');
     _keyPath = TextEditingController(text: e?.keyPath ?? '');
+    _initialPath = TextEditingController(text: e?.initialPath ?? '');
+    _password = TextEditingController();
     _osTag = e?.osTag ?? 'generic';
+
+    // La contrasena vive en almacenamiento cifrado, no en el host -- se
+    // carga aparte y de forma asincrona. Un host nuevo no tiene id todavia,
+    // asi que no hay nada que cargar hasta la primera vez que se guarde.
+    if (e != null) {
+      SshCredentialsStore.readPassword(e.id).then((pwd) {
+        if (mounted && pwd != null) setState(() => _password.text = pwd);
+      });
+    }
   }
 
   @override
@@ -207,6 +222,8 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
     _port.dispose();
     _username.dispose();
     _keyPath.dispose();
+    _password.dispose();
+    _initialPath.dispose();
     super.dispose();
   }
 
@@ -220,7 +237,7 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
       );
 
-  void _save() {
+  Future<void> _save() async {
     final hostname = _hostname.text.trim();
     final username = _username.text.trim();
     if (hostname.isEmpty || username.isEmpty) return;
@@ -228,20 +245,33 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
     final name = _name.text.trim().isEmpty ? hostname : _name.text.trim();
     final port = int.tryParse(_port.text.trim()) ?? 22;
     final keyPath = _keyPath.text.trim();
+    final initialPath = _initialPath.text.trim();
+    final password = _password.text;
 
+    String hostId;
     if (widget.existing != null) {
-      SshHostsService.instance.update(widget.existing!.copyWith(
+      hostId = widget.existing!.id;
+      await SshHostsService.instance.update(widget.existing!.copyWith(
         name: name, hostname: hostname, port: port, username: username,
-        keyPath: keyPath.isEmpty ? null : keyPath, osTag: _osTag,
+        keyPath: keyPath.isEmpty ? null : keyPath,
+        initialPath: initialPath.isEmpty ? null : initialPath,
+        osTag: _osTag,
       ));
     } else {
-      SshHostsService.instance.add(SshHost(
-        id: SshHostsService.instance.newId(),
+      hostId = SshHostsService.instance.newId();
+      await SshHostsService.instance.add(SshHost(
+        id: hostId,
         name: name, hostname: hostname, port: port, username: username,
-        keyPath: keyPath.isEmpty ? null : keyPath, osTag: _osTag,
+        keyPath: keyPath.isEmpty ? null : keyPath,
+        initialPath: initialPath.isEmpty ? null : initialPath,
+        osTag: _osTag,
       ));
     }
-    Navigator.pop(context);
+
+    // Contrasena aparte, cifrada -- nunca dentro del objeto SshHost.
+    await SshCredentialsStore.savePassword(hostId, password);
+
+    if (mounted) Navigator.pop(context);
   }
 
   @override
@@ -283,6 +313,30 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
               const SizedBox(height: 10),
               TextField(controller: _keyPath, style: const TextStyle(color: _C.textHi),
                   decoration: _dec('Clave privada (opcional)', hint: '/root/.ssh/id_ed25519')),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _password,
+                obscureText: _obscurePassword,
+                style: const TextStyle(color: _C.textHi),
+                decoration: _dec('Contrasena (opcional)', hint: 'Se guarda cifrada, no en texto plano').copyWith(
+                  suffixIcon: IconButton(
+                    icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility,
+                        color: _C.textLo, size: 18),
+                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 4, left: 4),
+                child: Text(
+                  'Se usa en el explorador de archivos (SFTP). En una pestana de terminal '
+                  'normal seguiras tecleandola tu, como en cualquier ssh.',
+                  style: TextStyle(color: _C.textLo, fontSize: 10.5),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(controller: _initialPath, style: const TextStyle(color: _C.textHi),
+                  decoration: _dec('Carpeta inicial (opcional)', hint: '/  o  /var/www')),
               const SizedBox(height: 14),
               Wrap(
                 spacing: 8,

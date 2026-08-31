@@ -20,6 +20,7 @@ import 'dart:io';
 import 'package:dartssh2/dartssh2.dart';
 
 import '../ssh/ssh_host.dart';
+import '../ssh/ssh_credentials_store.dart';
 
 class SftpEntry {
   final String name;
@@ -101,8 +102,13 @@ class SftpService {
       socket,
       username: host.username,
       identities: identities,
-      onPasswordRequest:
-          identities == null ? () => onPasswordRequest() : null,
+      onPasswordRequest: identities == null
+          ? () async {
+              final saved = await SshCredentialsStore.readPassword(host.id);
+              if (saved != null && saved.isNotEmpty) return saved;
+              return onPasswordRequest();
+            }
+          : null,
       handshakeTimeout: const Duration(seconds: 15),
       authTimeout: const Duration(seconds: 15),
       onVerifyHostKey: (type, fingerprintBytes) async {
