@@ -206,14 +206,34 @@ class SftpService {
     }
   }
 
-  Future<void> delete(String remotePath, {required bool isDirectory}) async {
+  /// Borra un fichero, o una carpeta y TODO su contenido. rmdir() en SFTP
+  /// (igual que en cualquier sistema de ficheros POSIX) solo funciona con
+  /// carpetas vacias -- por eso hay que vaciarla primero, de dentro hacia
+  /// fuera, antes de poder borrar la carpeta en si. [onProgress] recibe el
+  /// numero de elementos ya borrados, util para carpetas grandes.
+  Future<void> deleteRecursive(String remotePath, {required bool isDirectory, void Function(int count)? onProgress}) async {
     final sftp = _sftp;
     if (sftp == null) throw StateError('No conectado');
-    if (isDirectory) {
-      await sftp.rmdir(remotePath);
-    } else {
-      await sftp.remove(remotePath);
+
+    var count = 0;
+    Future<void> walk(String path, bool isDir) async {
+      if (!isDir) {
+        await sftp.remove(path);
+        count++;
+        onProgress?.call(count);
+        return;
+      }
+      final items = await sftp.listdir(path);
+      for (final item in items) {
+        if (item.filename == '.' || item.filename == '..') continue;
+        await walk('$path/${item.filename}', item.attr.isDirectory);
+      }
+      await sftp.rmdir(path);
+      count++;
+      onProgress?.call(count);
     }
+
+    await walk(remotePath, isDirectory);
   }
 
   Future<void> mkdir(String remotePath) async {

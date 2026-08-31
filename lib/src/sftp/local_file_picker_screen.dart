@@ -1,23 +1,19 @@
 // lib/src/sftp/local_file_picker_screen.dart
 //
-// Explorador del almacenamiento del PROPIO telefono, para elegir que
-// fichero subir por SFTP. No es una libreria de terceros: es dart:io
-// puro (Directory/File), el mismo patron que ya funciona en
-// sftp_browser_screen.dart. MANAGE_EXTERNAL_STORAGE ya esta concedido
-// (confirmado en el manifest), asi que no hace falta ningun dialogo de
-// permisos adicional.
+// Explorador del almacenamiento del propio telefono, para elegir que
+// fichero(s) subir por SFTP. dart:io puro (Directory/File), mismo patron
+// que sftp_browser_screen.dart -- cero dependencias nuevas.
 //
-// Devuelve la ruta elegida via Navigator.pop(context, path), o null si se
-// cancela.
+// Selecciona uno o varios ficheros marcando la casilla; "Subir (N)" los
+// devuelve todos de golpe via Navigator.pop(context, List<String>). Tocar
+// una carpeta navega dentro, como siempre.
 
 import 'dart:io';
 import 'package:flutter/material.dart';
 
 class _C {
   static const bg = Color(0xFF1C1C1E);
-  static const card = Color(0xFF2C2C2E);
   static const cardAlt = Color(0xFF242426);
-  static const border = Color(0xFF3A3A3C);
   static const textHi = Color(0xFFEAEAEC);
   static const textLo = Color(0xFF9A9AA0);
   static const accent = Color(0xFF5E9BD6);
@@ -35,6 +31,7 @@ class _LocalFilePickerScreenState extends State<LocalFilePickerScreen> {
 
   String _currentPath = _startDir;
   List<FileSystemEntity> _entries = [];
+  final Set<String> _selected = {};
   bool _busy = true;
   String? _error;
 
@@ -83,6 +80,24 @@ class _LocalFilePickerScreenState extends State<LocalFilePickerScreen> {
 
   String _name(FileSystemEntity e) => e.path.split('/').last;
 
+  void _toggle(String path) {
+    setState(() {
+      if (_selected.contains(path)) {
+        _selected.remove(path);
+      } else {
+        _selected.add(path);
+      }
+    });
+  }
+
+  void _selectAllFilesHere() {
+    setState(() {
+      for (final e in _entries) {
+        if (e is File) _selected.add(e.path);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -91,7 +106,17 @@ class _LocalFilePickerScreenState extends State<LocalFilePickerScreen> {
         backgroundColor: _C.bg,
         elevation: 0,
         iconTheme: const IconThemeData(color: _C.textHi),
-        title: const Text('Elegir fichero', style: TextStyle(color: _C.textHi, fontSize: 16)),
+        title: Text(
+          _selected.isEmpty ? 'Elegir fichero(s)' : '${_selected.length} seleccionado(s)',
+          style: const TextStyle(color: _C.textHi, fontSize: 16),
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Seleccionar todos los ficheros de esta carpeta',
+            icon: const Icon(Icons.select_all, color: _C.textLo),
+            onPressed: _entries.any((e) => e is File) ? _selectAllFilesHere : null,
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -117,6 +142,21 @@ class _LocalFilePickerScreenState extends State<LocalFilePickerScreen> {
             ),
           ),
           Expanded(child: _buildBody()),
+          if (_selected.isNotEmpty)
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(_selected.toList()),
+                    style: ElevatedButton.styleFrom(backgroundColor: _C.accent, padding: const EdgeInsets.symmetric(vertical: 14)),
+                    child: Text('Subir (${_selected.length})', style: const TextStyle(color: Colors.white)),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -140,17 +180,21 @@ class _LocalFilePickerScreenState extends State<LocalFilePickerScreen> {
       itemBuilder: (context, i) {
         final e = _entries[i];
         final isDir = e is Directory;
+        final selected = _selected.contains(e.path);
         return ListTile(
-          leading: Icon(
-            isDir ? Icons.folder : Icons.insert_drive_file_outlined,
-            color: isDir ? _C.accent : _C.textLo,
-          ),
+          leading: isDir
+              ? const Icon(Icons.folder, color: _C.accent)
+              : Checkbox(
+                  value: selected,
+                  onChanged: (_) => _toggle(e.path),
+                  activeColor: _C.accent,
+                ),
           title: Text(_name(e), style: const TextStyle(color: _C.textHi, fontSize: 14)),
           onTap: () {
             if (isDir) {
               _load(e.path);
             } else {
-              Navigator.of(context).pop(e.path);
+              _toggle(e.path);
             }
           },
         );
