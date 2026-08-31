@@ -25,11 +25,13 @@ SFTP pensada para trabajar comodo desde el movil.
 - Las conexiones SSH (pestanas de terminal) reutilizan el mismo mecanismo:
   en vez del shell por defecto, se ejecuta "ssh usuario@host" como proceso
   dentro del proot -- mismo Pty real, portapapeles y seleccion funcionan
-  igual.
+  igual. Si la pestana viene de un host, lo recuerda y ofrece saltar
+  directo al explorador SFTP de ese mismo host.
 - El explorador SFTP es un camino de codigo aparte: conexion TCP directa
   desde el propio proceso Flutter via dartssh2, sin pasar por proot. Las
-  conexiones SFTP viven en un pool independiente de la pantalla, para que
-  navegar (por ejemplo, a una pestana SSH) no las corte.
+  conexiones SFTP viven en un pool independiente de la pantalla (por eso
+  navegar a una pestana SSH no las corta), y se puede saltar de vuelta a
+  SSH sin cerrar la sesion sftp.
 
 ## Caracteristicas
 
@@ -53,17 +55,22 @@ SFTP pensada para trabajar comodo desde el movil.
   pestanas de terminal la siguen pidiendo a mano, como un ssh normal
 - Conectar abre una pestana de terminal nueva, con todo lo del terminal
   normal (portapapeles, seleccion) funcionando igual dentro de la sesion
+- Punto verde junto al icono de SFTP de cada host si tiene una conexion
+  sftp viva de fondo; boton para cerrarlas todas de golpe
 
 ### SFTP
 - Explorador visual: navegar tocando carpetas, crear carpetas, subir
   varios ficheros a la vez, descargar, borrado recursivo real (vacia
   carpetas con contenido antes de borrarlas)
+- Fecha de modificacion visible en ficheros y carpetas; orden configurable
+  (nombre, fecha o tamano -- las carpetas siempre van primero)
 - Seleccion multiple: mantener pulsado entra en modo seleccion: borrar,
   descargar o seleccionar todo en bloque
 - Favoritos de rutas por host, persistentes
 - Verificacion de huella de host propia (confia la primera vez, avisa si
   cambia despues)
-- Conexion persistente: cambiar a una pestana SSH no corta la sesion sftp
+- Conexion persistente: icono para saltar a una pestana SSH del mismo
+  host sin cortar la sesion sftp, y viceversa desde la terminal
 
 ## Limitaciones conocidas
 
@@ -72,6 +79,8 @@ SFTP pensada para trabajar comodo desde el movil.
   aparte)
 - La contrasena guardada no llega a las pestanas SSH de terminal (solo a
   SFTP) -- automatizarlo necesitaria sshpass dentro del rootfs
+- Las conexiones SFTP del pool no expiran solas por inactividad; hay que
+  cerrarlas a mano (o usar "cerrar todas") si se acumulan varias
 - xterm (el paquete de terminal) esta sin mantenimiento activo; existe un
   fork (xterm2) pero no aporta nada nuevo relevante para este proyecto
 - LiteRtEngine no hace streaming real: una respuesta, un bloque
@@ -92,11 +101,15 @@ x86_64 o usar un dispositivo Android para pruebas locales.
 
 ## Historial de versiones (ultimas 6)
 
+### v1.21.0
+Navegacion SSH<->SFTP visible en ambos sentidos (iconos directos, no en
+menus). Indicador de conexiones sftp vivas por host y boton para cerrarlas
+todas. Orden configurable y fecha de modificacion en el explorador SFTP.
+
 ### v1.20.0
 SFTP: conexion persistente al cambiar a terminal SSH. Las conexiones
 viven en un pool aparte de la pantalla; volver atras o abrir una pestana
-de terminal ya no las cierra. Menu nuevo: abrir terminal sin cortar,
-desconectar y reconectar a mano.
+de terminal ya no las cierra.
 
 ### v1.19.0
 SFTP: borrado recursivo real (antes fallaba con carpetas no vacias,
@@ -116,7 +129,3 @@ Seleccion de texto: cambio de enfoque tras varios intentos fallidos de
 deducir la geometria del terminal. Calibracion por toque real (onTapUp)
 en vez de calcular a ciegas; barra Copiar/Pegar/Todo independiente de la
 geometria.
-
-### v1.15.4
-Ultimo ajuste de la saga de geometria de las asas de seleccion: el propio
-contenedor del overlay recortaba las gotas por nacer con tamano colapsado.
