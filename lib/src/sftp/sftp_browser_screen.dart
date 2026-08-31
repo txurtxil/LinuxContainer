@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import '../ssh/ssh_host.dart';
 import 'sftp_service.dart';
 import 'sftp_favorites_service.dart';
+import 'sftp_connection_pool.dart';
 import 'local_file_picker_screen.dart';
 
 class _C {
@@ -33,7 +34,16 @@ class _C {
 class SftpBrowserScreen extends StatefulWidget {
   final SshHost host;
   final String rootfsPath;
-  const SftpBrowserScreen({super.key, required this.host, required this.rootfsPath});
+  /// Si se pasa, aparece "Abrir terminal SSH" en el menu: navega de vuelta
+  /// a la terminal y abre una pestana ssh a este mismo host, SIN cerrar
+  /// esta conexion sftp (vive en SftpConnectionPool, no en esta pantalla).
+  final void Function(SshHost host)? onOpenTerminal;
+  const SftpBrowserScreen({
+    super.key,
+    required this.host,
+    required this.rootfsPath,
+    this.onOpenTerminal,
+  });
 
   @override
   State<SftpBrowserScreen> createState() => _SftpBrowserScreenState();
@@ -42,7 +52,7 @@ class SftpBrowserScreen extends StatefulWidget {
 enum _LoadState { connecting, ready, error }
 
 class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
-  late final SftpService _svc;
+  late SftpService _svc;
   _LoadState _state = _LoadState.connecting;
   String _error = '';
   // Arranca en initialPath si el host lo tiene configurado; si no, en el
@@ -61,17 +71,27 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
   @override
   void initState() {
     super.initState();
-    _svc = SftpService(host: widget.host, rootfsPath: widget.rootfsPath);
+    _svc = SftpConnectionPool.instance.forHost(widget.host, widget.rootfsPath);
     _connect();
   }
 
   @override
   void dispose() {
-    _svc.close();
+    // A proposito NO se cierra _svc aqui: la conexion vive en
+    // SftpConnectionPool, no en esta pantalla. Volver atras (por ejemplo,
+    // para abrir una pestana SSH) no debe cortarla.
     super.dispose();
   }
 
   Future<void> _connect() async {
+    // Si ya esta conectada (se volvio a esta pantalla sin haber
+    // desconectado), no hay que repetir el handshake ni pedir la
+    // contrasena otra vez -- se va directo al listado.
+    if (_svc.isConnected) {
+      await _load(_path);
+      if (mounted) setState(() => _state = _LoadState.ready);
+      return;
+    }
     setState(() {
       _state = _LoadState.connecting;
       _error = '';
@@ -530,6 +550,35 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                   await SftpFavoritesService.instance.toggle(widget.host.id, _path);
                   if (mounted) setState(() {});
                 },
+              ),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert, color: _C.textLo),
+                color: _C.card,
+                onSelected: (v) {
+                  switch (v) {
+                    case 'terminal':
+                      // La navegacion (cuantas pantallas cerrar) la decide
+                      // quien nos dio este callback, no esta pantalla -- ella
+                      // no sabe cuantos niveles de Navigator hay por debajo.
+                      widget.onOpenTerminal?.call(widget.host);
+                      break;
+                    case 'disconnect':
+                      SftpConnectionPool.instance.disconnect(widget.host.id).then((_) {
+                        if (!mounted) return;
+                        setState(() {
+                          _svc = SftpConnectionPool.instance.forHost(widget.host, widget.rootfsPath);
+                          _state = _LoadState.connecting;
+                        });
+                        _connect();
+                      });
+                      break;
+                  }
+                },
+                itemBuilder: (_) => [
+                  if (widget.onOpenTerminal != null)
+                    const PopupMenuItem(value: 'terminal', child: Text('Abrir terminal SSH (sin cortar esto)')),
+                  const PopupMenuItem(value: 'disconnect', child: Text('Desconectar y reconectar')),
+                ],
               ),
             ]
           : null,

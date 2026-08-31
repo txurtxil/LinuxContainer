@@ -157,17 +157,9 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       builder: (_) => HostsScreen(
         rootfsPath: _manager.rootfsPath,
         onConnect: (host) {
-          Navigator.of(context).pop();
-          _connectToHost(host);
-        },
-        onOpenTerminalFromSftp: (host) {
-          // Se viene de mas adentro (explorador SFTP dentro de Hosts SSH),
-          // asi que hay que cerrar dos pantallas, no una. popUntil hasta la
-          // raiz es mas robusto que contar pops a mano.
-          Navigator.of(context).popUntil((r) => r.isFirst);
-          _connectToHost(host);
-        },
-      ),
+        Navigator.of(context).pop();
+        _connectToHost(host);
+      }),
     ));
   }
 

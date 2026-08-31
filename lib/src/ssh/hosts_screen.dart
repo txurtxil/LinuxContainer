@@ -42,7 +42,18 @@ class HostsScreen extends StatefulWidget {
   /// Si se pasa, cada host muestra un icono extra para abrir el explorador
   /// SFTP directamente (sin pasar por una pestaña de terminal).
   final String? rootfsPath;
-  const HostsScreen({super.key, required this.onConnect, this.rootfsPath});
+  /// Callback DISTINTO de onConnect para cuando "Abrir terminal SSH" se
+  /// pulsa DESDE DENTRO del explorador SFTP (no desde esta lista). onConnect
+  /// ya trae su propio pop() pensado para cerrar solo esta pantalla; desde
+  /// el explorador hay una pantalla mas de por medio, asi que hace falta
+  /// una navegacion distinta (quien la reciba decide cuanto cerrar).
+  final void Function(SshHost host)? onOpenTerminalFromSftp;
+  const HostsScreen({
+    super.key,
+    required this.onConnect,
+    this.rootfsPath,
+    this.onOpenTerminalFromSftp,
+  });
 
   @override
   State<HostsScreen> createState() => _HostsScreenState();
@@ -135,7 +146,11 @@ class _HostsScreenState extends State<HostsScreen> {
                 icon: const Icon(Icons.folder_open, color: _C.textLo, size: 20),
                 tooltip: 'Explorar archivos (SFTP)',
                 onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => SftpBrowserScreen(host: h, rootfsPath: widget.rootfsPath!),
+                  builder: (_) => SftpBrowserScreen(
+                    host: h,
+                    rootfsPath: widget.rootfsPath!,
+                    onOpenTerminal: widget.onOpenTerminalFromSftp,
+                  ),
                 )),
               ),
             const Icon(Icons.chevron_right, color: _C.textLo),
