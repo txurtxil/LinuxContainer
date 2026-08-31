@@ -1,130 +1,122 @@
 # XTR Terminal
 
-Terminal Android local con agente de IA autónomo — Debian Bookworm (arm64) sin root vía `proot`, con inferencia multimodal 100% on-device.
+Terminal Linux completa para Android: monta un rootfs Debian Bookworm
+arm64 real via proot, sin necesitar root en el dispositivo. Pensada para
+desarrollo movil serio en un Samsung Galaxy Z Fold7 (Snapdragon 8 Elite),
+pero corre en cualquier ARM64 razonable.
 
-**Repositorio:** https://github.com/txurtxil/LinuxContainer
-**Releases:** https://github.com/txurtxil/LinuxContainer/releases
-**Última versión:** [v1.8.0](https://github.com/txurtxil/LinuxContainer/releases/tag/v1.8.0)
+Repositorio: https://github.com/txurtxil/LinuxContainer
 
-## Qué es esto
+## Que es esto
 
-XTR Terminal convierte un Samsung Galaxy Z Fold7 (Snapdragon 8 Elite) en una estación Linux de bolsillo: terminal completo con Debian real, y un agente de IA que ejecuta comandos, genera imágenes, descubre la red doméstica y actúa de forma autónoma a lo largo del tiempo — todo local, sin nube, sin root.
-
-## Hardware objetivo
-
-- Samsung Galaxy Z Fold7 (Snapdragon 8 Elite, GPU Adreno)
-- Debería funcionar en cualquier Android arm64 razonablemente potente, sin garantías fuera del dispositivo de desarrollo
+Una app Flutter que arranca un contenedor proot con Debian Bookworm arm64
+de verdad: apt, compiladores, Python, Android SDK, todo. Encima corre un
+agente de IA local (Gemma 4 via LiteRT-LM/MediaPipe sobre la GPU Adreno)
+que puede ejecutar comandos, y una terminal con gestion de sesiones SSH y
+SFTP pensada para trabajar comodo desde el movil.
 
 ## Arquitectura
-Flutter (UI, Dart)
-│
-├─ Terminal (xterm) ── proot ── Debian Bookworm arm64
-│                                   │
-│                                   ├─ agent_server.py (FastAPI, puerto 8765)
-│                                   │     bucle ReAct ligero + tools
-│                                   │
-│                                   └─ scripts/*.sh, *.py (generación de imágenes, red, scheduler)
-│
-└─ MethodChannel ── InferenceEngine (Kotlin)
-├─ LiteRtEngine (Gemma 4, .litertlm, multimodal)
-└─ MediaPipeEngine (Gemma 3, .task, legacy)
-│
-└─ MediaPipeServer.kt (NanoHTTPD, puerto 8090, API estilo OpenAI)
 
-El agente (`agent_server.py`) habla con el modelo local vía HTTP en `127.0.0.1:8090/v1`, con el mismo protocolo que usarías contra la API de OpenAI — así que también acepta fuentes remotas (Groq, Gemini, OpenRouter...) sin cambiar de código.
+- Flutter UI -> proot (Debian Bookworm arm64) -> agent_server.py (:8765,
+  smolagents FastAPI) <-> MediaPipeServer.kt (:8090, compatible OpenAI) ->
+  LiteRtEngine (Gemma 4 E2B local)
+- Cada pestana de terminal es una TerminalSession independiente: su propio
+  Terminal, TerminalController y Pty. Hasta 5 sesiones simultaneas.
+- Las conexiones SSH (pestanas de terminal) reutilizan el mismo mecanismo:
+  en vez del shell por defecto, se ejecuta "ssh usuario@host" como proceso
+  dentro del proot -- mismo Pty real, portapapeles y seleccion funcionan
+  igual.
+- El explorador SFTP es un camino de codigo aparte: conexion TCP directa
+  desde el propio proceso Flutter via dartssh2, sin pasar por proot. Las
+  conexiones SFTP viven en un pool independiente de la pantalla, para que
+  navegar (por ejemplo, a una pestana SSH) no las corte.
 
-## Funcionalidades principales
+## Caracteristicas
 
-**Terminal**
-- Multi-sesión (hasta 5 pestañas), teclado configurable con atajos visibles/ocultos
-- Recupera el foco del teclado al volver de segundo plano
+### Terminal
+- Multiples sesiones/pestanas simultaneas (hasta 5)
+- Portapapeles avanzado: sesion completa, ultima salida, bloque de error
+  detectado automaticamente, marcador manual con offset de bytes
+- Seleccion de texto: barra Copiar/Pegar/Todo independiente de la
+  geometria (siempre funciona); asas de arrastre opcionales via
+  calibracion por toque real (onTapUp) -- necesitan dos toques en celdas
+  distintas antes de aparecer
+- Configuracion de teclado personalizable, tamano de fuente ajustable
+- Entorno Android SDK completo instalable dentro del rootfs (JDK 17,
+  Gradle, cmdline-tools, build-tools, aapt2 arm64 nativo)
 
-**Agente de IA**
-- Bucle ReAct ligero optimizado para modelos pequeños on-device (Gemma 4 E2B)
-- Herramientas: `run_bash`, `write_file`, `read_file`, `make_dir`, `list_files`, `http_request`, `ssh_exec`
-- Guardarraíles: bloqueo de comandos destructivos, rutas protegidas del sistema, detección de repetición de acciones, verificación de que las tools mencionadas en la tarea se usan de verdad antes de aceptar un `FINAL`
+### SSH
+- Lista de hosts (nombre, direccion, puerto, usuario, clave privada
+  opcional, carpeta inicial opcional)
+- Contrasena guardada cifrada en el Keystore de Android (separada del
+  JSON de hosts a proposito) -- rellena sola las conexiones SFTP; las
+  pestanas de terminal la siguen pidiendo a mano, como un ssh normal
+- Conectar abre una pestana de terminal nueva, con todo lo del terminal
+  normal (portapapeles, seleccion) funcionando igual dentro de la sesion
 
-**Multimodal**
-- Cámara/galería → chat → Gemma 4 → descripción real de la imagen
-- El agente también puede generar imágenes y mostrártelas en el propio chat (botón de ojo o detección automática)
-- Portapapeles: pegar en el campo de tarea, copiar cualquier respuesta
-
-**Generación de imágenes** (`assets/scripts/`)
-- `gen_topologia.sh` — diagramas de red (Graphviz)
-- `gen_flujo.sh` — diagramas de flujo secuenciales (Graphviz)
-- `gen_grafica.py` — gráficas de barras (matplotlib)
-- `gen_qr.sh` — códigos QR (qrencode)
-- `gen_scan_red.sh` — escaneo de puertos comunes de IPs conocidas (`/dev/tcp`, sin nmap)
-- `gen_discover_red.sh` — descubrimiento real de dispositivos en la subred vía ping ICMP
-
-**Automatización**
-- `run_mission.sh` — motor de misiones: dale una orden, el agente la completa a lo largo de varios ciclos programados por `cron`, sin intervención
-- `run_scheduled_task.sh` — comprobaciones periódicas (ej. salud de un servidor remoto por SSH)
-
-**Gestión de servicios**
-- Tarjetas de un toque para GPU Local, agent-server y cron — arrancar/parar/ver logs sin terminal
-
-**SSH**
-- Gestor de conexiones estilo Termius, plantillas de tareas reutilizables, ejecución por lotes
-
-**Plantillas de prompts**
-- Botón dedicado con prompts predefinidos y editables para las capacidades de imagen/red más usadas
-
-## Estructura del código
-
-lib/src/
-├── agent/
-│   ├── agent_chat.dart          — cliente HTTP + estado del chat (AgentController)
-│   ├── agent_dashboard.dart     — UI del chat, tarjetas de servicio, botones
-│   ├── agent_services.dart      — arranque/parada de procesos (llama, agent-server, cron)
-│   ├── mediapipe_test_screen.dart — pantalla de pruebas del motor GPU
-│   ├── prompt_templates.dart    — plantillas de prompts guardadas
-│   └── ssh_connections.dart     — gestor de conexiones SSH
-├── container/
-│   ├── container_bootstrap.dart — extracción inicial del rootfs
-│   ├── container_manager.dart   — gestión de proot en tiempo de ejecución
-│   ├── native_paths.dart        — rutas nativas vía MethodChannel
-│   └── rootfs_config.dart       — .bashrc y configuración del rootfs
-└── terminal/
-├── keybar_config.dart       — configuración del teclado
-├── keybar_settings_screen.dart
-├── terminal_keybar.dart
-├── terminal_session.dart
-└── terminal_view.dart       — vista principal de la terminal
-android/app/src/main/kotlin/com/example/linux_container/
-├── MainActivity.kt              — MethodChannels, selector de imágenes
-├── InferenceEngine.kt           — router entre LiteRT-LM y MediaPipe
-├── LiteRtEngine.kt              — motor Gemma 4 (.litertlm), multimodal
-├── MediaPipeEngine.kt           — motor Gemma 3 (.task), legacy
-├── MediaPipeServer.kt           — servidor HTTP estilo OpenAI (NanoHTTPD)
-└── AgentForegroundService.kt    — foreground service del agente
-assets/
-├── agent_server.py              — servidor del agente (FastAPI + smolagents)
-└── scripts/
-├── lc-menu.sh                — menú de configuración, Setup Agente IA
-├── gen_topologia.sh / gen_flujo.sh / gen_grafica.py / gen_qr.sh
-├── gen_scan_red.sh / gen_discover_red.sh
-└── run_mission.sh / run_scheduled_task.sh
-## Historial de versiones
-
-| Versión | Cambios principales |
-|---|---|
-| [v1.8.0](https://github.com/txurtxil/LinuxContainer/releases/tag/v1.8.0) | Descubrimiento real de red (ping ICMP), séptima plantilla |
-| [v1.7.0](https://github.com/txurtxil/LinuxContainer/releases/tag/v1.7.0) | Botón de plantillas de prompts, escaneo de red por puertos |
-| [v1.6.0](https://github.com/txurtxil/LinuxContainer/releases/tag/v1.6.0) | Detección automática de imágenes en el chat, gráficas, QR, flujos |
-| [v1.5.0](https://github.com/txurtxil/LinuxContainer/releases/tag/v1.5.0) | Motor de misiones autónomo, tarjeta de servicio para cron |
-| [v1.4.0](https://github.com/txurtxil/LinuxContainer/releases/tag/v1.4.0) | Chat multimodal de extremo a extremo (cámara → agente → Gemma 4) |
-| v1.3.x | Endurecimiento del agente, `ssh_exec`, gestor de conexiones SSH |
-| v1.2 y anteriores | Migración a LiteRT-LM, base del proyecto |
+### SFTP
+- Explorador visual: navegar tocando carpetas, crear carpetas, subir
+  varios ficheros a la vez, descargar, borrado recursivo real (vacia
+  carpetas con contenido antes de borrarlas)
+- Seleccion multiple: mantener pulsado entra en modo seleccion: borrar,
+  descargar o seleccionar todo en bloque
+- Favoritos de rutas por host, persistentes
+- Verificacion de huella de host propia (confia la primera vez, avisa si
+  cambia despues)
+- Conexion persistente: cambiar a una pestana SSH no corta la sesion sftp
 
 ## Limitaciones conocidas
 
-- **Sin root real**: `proot` no da privilegios de sistema. `/proc/net/route` y `/proc/net/arp` están bloqueados por Android — `nmap` no puede calcular rutas ni hacer descubrimiento ARP. El descubrimiento de red usa `ping` (ICMP), que Android sí permite sin privilegios especiales.
-- **Sin identificación de fabricante**: sin acceso a ARP, no hay forma de leer direcciones MAC ni identificar fabricantes (a diferencia de apps como Fing).
-- **Modelo pequeño, composición limitada**: Gemma 4 E2B a veces falla al componer sintaxis exacta (el separador `|||` de `write_file`, por ejemplo). Mitigado con parsers tolerantes, pero las tareas con plantillas explícitas son más fiables que pedirle que componga formatos complejos desde cero.
-- **Servicios no persistentes**: `agent-server`, el servidor GPU y `cron` no sobreviven al cierre completo de la app — hay que relanzarlos (un toque cada uno, desde sus tarjetas de servicio).
-- **Rootfs se pierde en reinstalación completa**: `Setup Agente IA` (en `lc-menu`) descarga automáticamente `agent_server.py` y todos los scripts desde este repositorio, y instala las dependencias necesarias (`graphviz`, `qrencode`, `python3-matplotlib`, `openssh-client`, `cron`).
+- Descargar carpetas completas por SFTP no esta soportado, solo ficheros
+  sueltos (descarga recursiva con estructura de carpetas es un desarrollo
+  aparte)
+- La contrasena guardada no llega a las pestanas SSH de terminal (solo a
+  SFTP) -- automatizarlo necesitaria sshpass dentro del rootfs
+- xterm (el paquete de terminal) esta sin mantenimiento activo; existe un
+  fork (xterm2) pero no aporta nada nuevo relevante para este proyecto
+- LiteRtEngine no hace streaming real: una respuesta, un bloque
+- Sin ARP en proot (bloqueado por Android): el analisis de red no ve MAC
+  ni fabricante, solo lo que resuelven DNS/mDNS/NetBIOS/banners
 
-## Primeros pasos
+## Compilar
 
-Desde la terminal de la app: `lc-menu` → **Setup Agente IA**. Instala Python, dependencias, y descarga todos los scripts de este repositorio automáticamente.
+Requiere Flutter estable, Android SDK API 35, NDK 27, Java 17.
+
+    flutter pub get
+    flutter analyze lib/
+    flutter build apk --release
+
+`flutter build apk` en un host Linux arm64 no funciona (gen_snapshot para
+android-arm64-release no existe en el SDK oficial). Compilar en un host
+x86_64 o usar un dispositivo Android para pruebas locales.
+
+## Historial de versiones (ultimas 6)
+
+### v1.20.0
+SFTP: conexion persistente al cambiar a terminal SSH. Las conexiones
+viven en un pool aparte de la pantalla; volver atras o abrir una pestana
+de terminal ya no las cierra. Menu nuevo: abrir terminal sin cortar,
+desconectar y reconectar a mano.
+
+### v1.19.0
+SFTP: borrado recursivo real (antes fallaba con carpetas no vacias,
+SftpStatusError codigo 4). Seleccion multiple para borrar, descargar y
+subir varios elementos a la vez.
+
+### v1.18.0
+SSH: contrasena cifrada en Keystore de Android para conexiones SFTP.
+Carpeta inicial configurable por host (aplica a SSH y SFTP).
+
+### v1.17.0
+SFTP: subir archivos (explorador local propio, sin dependencias nuevas).
+Favoritos de rutas por host, persistentes entre reinicios.
+
+### v1.16.0
+Seleccion de texto: cambio de enfoque tras varios intentos fallidos de
+deducir la geometria del terminal. Calibracion por toque real (onTapUp)
+en vez de calcular a ciegas; barra Copiar/Pegar/Todo independiente de la
+geometria.
+
+### v1.15.4
+Ultimo ajuste de la saga de geometria de las asas de seleccion: el propio
+contenedor del overlay recortaba las gotas por nacer con tamano colapsado.
