@@ -154,23 +154,13 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   }
 
   void _openSftpForHost(SshHost host) {
-    // Se recuerda de que pestana salimos, para poder VOLVER a ella (en vez
-    // de abrir una nueva) si "Abrir terminal SSH" se pulsa desde dentro
-    // del explorador SFTP -- cierra el circuito ssh -> sftp -> ssh.
-    final originIndex = _activeIndex;
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => SftpBrowserScreen(
         host: host,
         rootfsPath: _manager.rootfsPath!,
         onOpenTerminal: (h) {
           Navigator.of(context).pop();
-          final stillThere = originIndex < _sessions.length &&
-              _sessions[originIndex].sourceHost?.id == h.id;
-          if (stillThere) {
-            _switchTo(originIndex);
-          } else {
-            _connectToHost(h);
-          }
+          _connectToHost(h);
         },
       ),
     ));
