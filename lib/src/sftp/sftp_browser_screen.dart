@@ -50,6 +50,7 @@ class SftpBrowserScreen extends StatefulWidget {
 }
 
 enum _LoadState { connecting, ready, error }
+enum _SortBy { name, date, size }
 
 class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
   late SftpService _svc;
@@ -61,6 +62,7 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
       ? widget.host.initialPath!.trim()
       : '.';
   List<SftpEntry> _entries = [];
+  _SortBy _sortBy = _SortBy.name;
   bool _busy = false;
   String _busyLabel = '';
 
@@ -193,6 +195,76 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)} KB';
     if (b < 1024 * 1024 * 1024) return '${(b / 1024 / 1024).toStringAsFixed(1)} MB';
     return '${(b / 1024 / 1024 / 1024).toStringAsFixed(1)} GB';
+  }
+
+  String _fmtDate(DateTime? d) {
+    if (d == null) return '';
+    const meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    return '${d.day} ${meses[d.month - 1]} ${d.year}';
+  }
+
+  // Las carpetas siempre van primero (convencion estandar de cualquier
+  // explorador de archivos); el criterio elegido solo ordena DENTRO de
+  // cada grupo.
+  List<SftpEntry> get _sortedEntries {
+    final list = List<SftpEntry>.from(_entries);
+    list.sort((a, b) {
+      if (a.isDirectory != b.isDirectory) return a.isDirectory ? -1 : 1;
+      switch (_sortBy) {
+        case _SortBy.date:
+          final ad = a.modified;
+          final bd = b.modified;
+          if (ad == null && bd == null) return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          if (ad == null) return 1;
+          if (bd == null) return -1;
+          return bd.compareTo(ad); // mas reciente primero
+        case _SortBy.size:
+          return b.size.compareTo(a.size); // mayor primero
+        case _SortBy.name:
+          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      }
+    });
+    return list;
+  }
+
+  void _pickSort() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _C.card,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+              child: Text('Ordenar por', style: TextStyle(color: _C.textHi, fontWeight: FontWeight.bold)),
+            ),
+            RadioListTile<_SortBy>(
+              value: _SortBy.name,
+              groupValue: _sortBy,
+              activeColor: _C.accent,
+              title: const Text('Nombre', style: TextStyle(color: _C.textHi)),
+              onChanged: (v) { setState(() => _sortBy = v!); Navigator.pop(ctx); },
+            ),
+            RadioListTile<_SortBy>(
+              value: _SortBy.date,
+              groupValue: _sortBy,
+              activeColor: _C.accent,
+              title: const Text('Fecha (mas reciente primero)', style: TextStyle(color: _C.textHi)),
+              onChanged: (v) { setState(() => _sortBy = v!); Navigator.pop(ctx); },
+            ),
+            RadioListTile<_SortBy>(
+              value: _SortBy.size,
+              groupValue: _sortBy,
+              activeColor: _C.accent,
+              title: const Text('Tamano (mayor primero)', style: TextStyle(color: _C.textHi)),
+              onChanged: (v) { setState(() => _sortBy = v!); Navigator.pop(ctx); },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   // ── Seleccion multiple ──────────────────────────────────────────────────
@@ -529,6 +601,17 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
       title: Text(widget.host.name, style: const TextStyle(color: _C.textHi, fontSize: 16)),
       actions: _state == _LoadState.ready
           ? [
+              if (widget.onOpenTerminal != null)
+                IconButton(
+                  tooltip: 'Abrir terminal SSH (sin cortar esto)',
+                  icon: const Icon(Icons.terminal, color: _C.textLo),
+                  onPressed: () => widget.onOpenTerminal!(widget.host),
+                ),
+              IconButton(
+                tooltip: 'Ordenar',
+                icon: const Icon(Icons.sort, color: _C.textLo),
+                onPressed: _pickSort,
+              ),
               IconButton(
                 tooltip: 'Favoritos',
                 icon: const Icon(Icons.star_border, color: _C.textLo),
@@ -556,12 +639,6 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                 color: _C.card,
                 onSelected: (v) {
                   switch (v) {
-                    case 'terminal':
-                      // La navegacion (cuantas pantallas cerrar) la decide
-                      // quien nos dio este callback, no esta pantalla -- ella
-                      // no sabe cuantos niveles de Navigator hay por debajo.
-                      widget.onOpenTerminal?.call(widget.host);
-                      break;
                     case 'disconnect':
                       SftpConnectionPool.instance.disconnect(widget.host.id).then((_) {
                         if (!mounted) return;
@@ -575,8 +652,6 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                   }
                 },
                 itemBuilder: (_) => [
-                  if (widget.onOpenTerminal != null)
-                    const PopupMenuItem(value: 'terminal', child: Text('Abrir terminal SSH (sin cortar esto)')),
                   const PopupMenuItem(value: 'disconnect', child: Text('Desconectar y reconectar')),
                 ],
               ),
@@ -662,11 +737,15 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                     ),
                   ])
                 : ListView.builder(
-                    itemCount: _entries.length,
+                    itemCount: _sortedEntries.length,
                     itemBuilder: (context, i) {
-                      final e = _entries[i];
+                      final e = _sortedEntries[i];
                       final path = _fullPath(e);
                       final selected = _selected.containsKey(path);
+                      final dateStr = _fmtDate(e.modified);
+                      final subtitle = e.isDirectory
+                          ? (dateStr.isEmpty ? null : dateStr)
+                          : (dateStr.isEmpty ? _fmtSize(e.size) : '${_fmtSize(e.size)} - $dateStr');
                       return ListTile(
                         leading: _selecting
                             ? Checkbox(value: selected, onChanged: (_) => _toggleSelect(e), activeColor: _C.accent)
@@ -675,9 +754,9 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                                 color: e.isDirectory ? _C.accent : _C.textLo,
                               ),
                         title: Text(e.name, style: const TextStyle(color: _C.textHi, fontSize: 14)),
-                        subtitle: e.isDirectory
+                        subtitle: subtitle == null
                             ? null
-                            : Text(_fmtSize(e.size), style: const TextStyle(color: _C.textLo, fontSize: 11)),
+                            : Text(subtitle, style: const TextStyle(color: _C.textLo, fontSize: 11)),
                         selected: selected,
                         selectedTileColor: _C.cardAlt,
                         onTap: () {

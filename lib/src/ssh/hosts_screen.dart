@@ -11,6 +11,7 @@ import 'ssh_host.dart';
 import 'ssh_hosts_service.dart';
 import 'ssh_credentials_store.dart';
 import '../sftp/sftp_browser_screen.dart';
+import '../sftp/sftp_connection_pool.dart';
 
 class _C {
   static const bg = Color(0xFF1C1C1E);
@@ -88,6 +89,16 @@ class _HostsScreenState extends State<HostsScreen> {
         elevation: 0,
         title: const Text('Hosts', style: TextStyle(color: _C.textHi)),
         iconTheme: const IconThemeData(color: _C.textHi),
+        actions: [
+          IconButton(
+            tooltip: 'Cerrar todas las conexiones SFTP',
+            icon: const Icon(Icons.link_off, color: _C.textLo),
+            onPressed: () async {
+              await SftpConnectionPool.instance.disconnectAll();
+              if (mounted) setState(() {});
+            },
+          ),
+        ],
       ),
       body: hosts.isEmpty
           ? Center(
@@ -142,16 +153,35 @@ class _HostsScreenState extends State<HostsScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (widget.rootfsPath != null)
-              IconButton(
-                icon: const Icon(Icons.folder_open, color: _C.textLo, size: 20),
-                tooltip: 'Explorar archivos (SFTP)',
-                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => SftpBrowserScreen(
-                    host: h,
-                    rootfsPath: widget.rootfsPath!,
-                    onOpenTerminal: widget.onOpenTerminalFromSftp,
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.folder_open, color: _C.textLo, size: 20),
+                    tooltip: 'Explorar archivos (SFTP)',
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => SftpBrowserScreen(
+                        host: h,
+                        rootfsPath: widget.rootfsPath!,
+                        onOpenTerminal: widget.onOpenTerminalFromSftp,
+                      ),
+                    )).then((_) {
+                      // Al volver puede haber cambiado el estado de conexion
+                      // (por ejemplo, si se desconecto desde dentro).
+                      if (mounted) setState(() {});
+                    }),
                   ),
-                )),
+                  if (SftpConnectionPool.instance.isConnected(h.id))
+                    Positioned(
+                      right: 6,
+                      top: 6,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(color: Color(0xFF34C759), shape: BoxShape.circle),
+                      ),
+                    ),
+                ],
               ),
             const Icon(Icons.chevron_right, color: _C.textLo),
           ],
