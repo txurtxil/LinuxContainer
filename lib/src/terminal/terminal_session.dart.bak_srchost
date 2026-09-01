@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter_pty/flutter_pty.dart';
 import 'package:xterm/xterm.dart';
 import '../container/container_manager.dart';
-import '../ssh/ssh_host.dart';
 import 'terminal_recorder.dart';
 
 /// Una sesión de terminal independiente (una pestaña): su propio Terminal,
@@ -20,17 +19,12 @@ class TerminalSession {
   /// casos: ssh lo detecta como terminal interactivo y funciona igual que
   /// si se escribiera a mano.
   final String? customCommand;
-  /// Si esta sesion viene de conectar a un SshHost, se guarda aqui -- para
-  /// poder ofrecer "abrir SFTP de este host" desde la propia terminal.
-  /// En el objeto sesion, no en un mapa por indice: sobrevive si se
-  /// cierran otras pestanas y los indices se desplazan.
-  final SshHost? sourceHost;
 
   Pty? _pty;
   bool _started = false;
   bool get isStarted => _started;
 
-  TerminalSession(this.name, {this.customCommand, this.sourceHost}) : recorder = TerminalRecorder(label: name);
+  TerminalSession(this.name, {this.customCommand}) : recorder = TerminalRecorder(label: name);
 
   /// Arranca el shell con el tamaño dado. Idempotente.
   void start({required int columns, required int rows}) {

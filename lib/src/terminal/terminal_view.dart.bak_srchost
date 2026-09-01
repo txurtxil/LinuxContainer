@@ -16,7 +16,6 @@ import 'selection_handles.dart';
 import '../ssh/ssh_host.dart';
 import '../ssh/ssh_hosts_service.dart';
 import '../ssh/hosts_screen.dart';
-import '../sftp/sftp_browser_screen.dart';
 import '../sftp/sftp_favorites_service.dart';
 
 class TerminalScreen extends StatefulWidget {
@@ -140,7 +139,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       _toast('Máximo $_maxSessions sesiones');
       return;
     }
-    final session = TerminalSession(host.name, customCommand: host.toSshCommand(), sourceHost: host);
+    final session = TerminalSession(host.name, customCommand: host.toSshCommand());
     _sessions.add(session);
     setState(() {
       _activeIndex = _sessions.length - 1;
@@ -151,19 +150,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
         if (mounted) _startActiveSession();
       });
     });
-  }
-
-  void _openSftpForHost(SshHost host) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => SftpBrowserScreen(
-        host: host,
-        rootfsPath: _manager.rootfsPath!,
-        onOpenTerminal: (h) {
-          Navigator.of(context).pop();
-          _connectToHost(h);
-        },
-      ),
-    ));
   }
 
   void _openHosts() {
@@ -511,12 +497,6 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              if (_active.sourceHost != null)
-                IconButton(
-                  tooltip: 'Abrir SFTP de este host',
-                  onPressed: () => _openSftpForHost(_active.sourceHost!),
-                  icon: const Icon(Icons.folder_open, color: Colors.lightBlueAccent, size: 22),
-                ),
               IconButton(
                 tooltip: 'Nueva sesión',
                 onPressed: _sessions.length < _maxSessions ? () => _addSession() : null,
