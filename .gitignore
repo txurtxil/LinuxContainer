@@ -31,3 +31,5 @@ __pycache__/
 .ha_token
 *_key
 *.key
+*.bak_android
+*.backup

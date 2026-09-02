@@ -1,4 +1,3 @@
-// ignore_for_file: use_build_context_synchronously
 // lib/src/agent/agent_dashboard.dart
 //
 // Panel del Agente Autónomo para XTR Terminal.
@@ -43,85 +42,19 @@ class _Provider {
   final String label;
   final String baseUrl;
   final List<String> models;
-  final String keyHint;
   final String note;
-  final bool isLocal;
   final bool editableUrl;
   const _Provider({
     required this.id,
     required this.label,
     this.baseUrl = '',
     this.models = const [],
-    this.keyHint = '',
     this.note = '',
-    this.isLocal = false,
     this.editableUrl = false,
   });
 }
 
 const List<_Provider> _providers = [
-  _Provider(id: 'local', label: 'Local', isLocal: true),
-  _Provider(
-    id: 'lan',
-    label: 'LAN',
-    baseUrl: 'http://192.168.1.50:8080/v1',
-    editableUrl: true,
-    note:
-        'Otro equipo de tu red corriendo llama. Cambia la IP por la del equipo. '
-        'Privado: no sale de tu red.',
-  ),
-  _Provider(
-    id: 'groq',
-    label: 'Groq · gratis',
-    baseUrl: 'https://api.groq.com/openai/v1',
-    models: [
-      'llama-3.3-70b-versatile',
-      'llama-3.1-8b-instant',
-      'qwen/qwen3-32b',
-      'openai/gpt-oss-120b',
-    ],
-    keyHint: 'gsk_...',
-    note:
-        'Gratis sin tarjeta, muy rápido y NO entrena con tus datos. '
-        'La mejor opción gratuita para el agente.',
-  ),
-  _Provider(
-    id: 'gemini',
-    label: 'Gemini · gratis',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-    models: ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
-    keyHint: 'AIza...',
-    note:
-        'Gratis y muy generoso (1500 req/día). OJO: en la capa gratis Google '
-        'entrena con tus prompts. No uses datos sensibles.',
-  ),
-  _Provider(
-    id: 'cerebras',
-    label: 'Cerebras · gratis',
-    baseUrl: 'https://api.cerebras.ai/v1',
-    models: ['llama-3.3-70b', 'llama3.1-8b'],
-    keyHint: 'csk-...',
-    note: '1M tokens/día gratis, muy rápido.',
-  ),
-  _Provider(
-    id: 'openrouter',
-    label: 'OpenRouter',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    models: [
-      'meta-llama/llama-3.3-70b-instruct:free',
-      'deepseek/deepseek-r1:free',
-    ],
-    keyHint: 'sk-or-...',
-    note: 'Muchos modelos; los que terminan en ":free" son gratis.',
-  ),
-  _Provider(
-    id: 'xai',
-    label: 'xAI Grok',
-    baseUrl: 'https://api.x.ai/v1',
-    models: ['grok-3-fast', 'grok-4.3', 'grok-code-fast-1'],
-    keyHint: 'xai-...',
-    note: 'De pago (sin capa gratuita). Necesita créditos en tu cuenta xAI.',
-  ),
   _Provider(
     id: 'gpu_local',
     label: 'GPU Local 🔥',
@@ -157,7 +90,6 @@ class _AgentDashboardState extends State<AgentDashboard> {
   final _scroll = ScrollController();
 
   Timer? _healthTimer;
-  bool _llamaUp = false;
   bool _agentUp = false;
 
   @override
@@ -181,14 +113,12 @@ class _AgentDashboardState extends State<AgentDashboard> {
     });
     _healthTimer =
         Timer.periodic(const Duration(seconds: 5), (_) => _pollHealth());
-    _svc.llamaStarting.addListener(_onSvc);
     _svc.agentStarting.addListener(_onSvc);
   }
 
   @override
   void dispose() {
     _healthTimer?.cancel();
-    _svc.llamaStarting.removeListener(_onSvc);
     _svc.agentStarting.removeListener(_onSvc);
     _input.dispose();
     _scroll.dispose();
@@ -207,11 +137,10 @@ class _AgentDashboardState extends State<AgentDashboard> {
   }
 
   Future<void> _pollHealth() async {
-    final l = _svc.usingRemote ? false : await AgentApi.checkHealth(_svc.llamaPort);
     final a = await AgentApi.checkHealth(_svc.agentPort);
     if (mounted) {
       setState(() {
-        _llamaUp = l;
+
         _agentUp = a;
       });
     }
@@ -502,12 +431,9 @@ class _AgentDashboardState extends State<AgentDashboard> {
   }
 
   String _headerSubtitle() {
-    if (_svc.usingRemote) {
-      final p = _providerById(_svc.sourceId);
-      final m = _svc.remoteModel.isNotEmpty ? ' · ${_svc.remoteModel}' : '';
-      return '${p.label}$m';
-    }
-    return _svc.usingLocalModel ? 'Gemma local' : _svc.llamaModelRef;
+    final p = _providerById(_svc.sourceId);
+    final m = _svc.remoteModel.isNotEmpty ? ' · ${_svc.remoteModel}' : '';
+    return '${p.label}$m';
   }
 
   Widget _header() {
@@ -563,19 +489,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
       child: Row(
         children: [
           Expanded(
-            child: (_svc.sourceId != 'local')
-                ? _remoteSourceCard()
-                : _serviceCard(
-                    name: 'llama-server',
-                    port: _svc.llamaPort,
-                    up: _llamaUp,
-                    starting: _svc.llamaStarting.value,
-                    active: _llamaUp || _svc.llamaLaunched,
-                    onToggle: () => (_llamaUp || _svc.llamaLaunched)
-                        ? _svc.stopLlama()
-                        : _svc.startLlama(),
-                    onLogs: () => _showLogs('llama-server', _svc.llamaLog),
-                  ),
+            child: _remoteSourceCard(),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -731,14 +645,9 @@ class _AgentDashboardState extends State<AgentDashboard> {
   // ---- Configuración --------------------------------------------------------
 
   void _showConfigSheet() {
-    int threads = _svc.llamaThreads;
-    int nCtx = _svc.llamaCtx;
-    String kv = _svc.kvCacheType;
     double temp = _svc.temp;
     double topP = _svc.topP;
     int topK = _svc.topK;
-    final llamaPortCtrl =
-        TextEditingController(text: _svc.llamaPort.toString());
     final agentPortCtrl =
         TextEditingController(text: _svc.agentPort.toString());
 
@@ -774,13 +683,9 @@ class _AgentDashboardState extends State<AgentDashboard> {
                           TextButton(
                             onPressed: () => setS(() {
                               _svc.resetSettings();
-                              threads = _svc.llamaThreads;
-                              nCtx = _svc.llamaCtx;
-                              kv = _svc.kvCacheType;
                               temp = _svc.temp;
                               topP = _svc.topP;
                               topK = _svc.topK;
-                              llamaPortCtrl.text = _svc.llamaPort.toString();
                               agentPortCtrl.text = _svc.agentPort.toString();
                             }),
                             child: const Text('Restablecer',
@@ -800,62 +705,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
                       child: ListView(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                         children: [
-                          if (_svc.usingRemote)
-                            Container(
-                              margin: const EdgeInsets.only(bottom: 16),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: _C.cardAlt,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: _C.border),
-                              ),
-                              child: const Text(
-                                'Estos parámetros aplican al modelo LOCAL. '
-                                'Ahora usas una fuente remota, así que no tienen efecto.',
-                                style: TextStyle(
-                                    color: _C.off, fontSize: 12, height: 1.4),
-                              ),
-                            ),
-                          if (_svc.sourceId == 'local') ...[
-                            _cfgLabel('Inferencia (local · llama.cpp)'),
-                            const SizedBox(height: 10),
-                            _cfgStepper('Hilos (-t)', threads, 1, 8, 1,
-                                (v) => setS(() => threads = v)),
-                            const SizedBox(height: 8),
-                            _cfgChips(
-                                'Contexto (-c)',
-                                const ['4096', '8192', '16384'],
-                                nCtx.toString(),
-                                (v) => setS(() => nCtx = int.parse(v))),
-                            const SizedBox(height: 8),
-                            _cfgChips(
-                                'KV cache',
-                                const ['q4_0', 'q8_0', 'f16'],
-                                kv,
-                                (v) => setS(() => kv = v)),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'q4_0 = más rápido · q8_0 = equilibrio · f16 = sin cuantizar',
-                              style: TextStyle(
-                                  color: _C.off, fontSize: 11.5, height: 1.4),
-                            ),
-                            const SizedBox(height: 22),
-                          ] else
-                            Container(
-                              margin: const EdgeInsets.only(bottom: 16),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: _C.cardAlt,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: _C.border),
-                              ),
-                              child: const Text(
-                                'Hilos, contexto y KV cache son propios de llama.cpp '
-                                '(fuente "Local"). Con GPU Local o fuentes remotas no aplican.',
-                                style: TextStyle(
-                                    color: _C.off, fontSize: 12, height: 1.4),
-                              ),
-                            ),
+
                           _cfgLabel('Muestreo'),
                           const SizedBox(height: 6),
                           _cfgSlider('Temperature', temp, 0.0, 2.0, 40,
@@ -876,10 +726,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
                                 color: _C.off, fontSize: 11.5, height: 1.4),
                           ),
                           const SizedBox(height: 10),
-                          if (_svc.sourceId == 'local') ...[
-                            _cfgPortField('llama-server', llamaPortCtrl),
-                            const SizedBox(height: 10),
-                          ],
+
                           _cfgPortField('agent-server', agentPortCtrl),
                           const SizedBox(height: 22),
                           SizedBox(
@@ -896,22 +743,14 @@ class _AgentDashboardState extends State<AgentDashboard> {
                               icon: const Icon(Icons.save_outlined, size: 18),
                               label: const Text('Guardar'),
                               onPressed: () async {
-                                _svc.llamaThreads = threads;
-                                _svc.llamaCtx = nCtx;
-                                _svc.kvCacheType = kv;
                                 _svc.temp = temp;
                                 _svc.topP = topP;
                                 _svc.topK = topK;
-                                _svc.llamaPort =
-                                    int.tryParse(llamaPortCtrl.text.trim()) ??
-                                        _svc.llamaPort;
                                 _svc.agentPort =
                                     int.tryParse(agentPortCtrl.text.trim()) ??
                                         _svc.agentPort;
                                 await _svc.saveSettings();
-                                final wasLlama = _svc.llamaLaunched;
                                 final wasAgent = _svc.agentLaunched;
-                                if (wasLlama) _svc.stopLlama();
                                 if (wasAgent) _svc.stopAgent();
                                 if (mounted) setState(() {});
                                 if (ctx.mounted) Navigator.pop(ctx);
@@ -1175,16 +1014,13 @@ class _AgentDashboardState extends State<AgentDashboard> {
                                   color: selected ? _C.accent : _C.border),
                               onSelected: (_) => setS(() {
                                 selSource = p.id;
-                                if (!p.isLocal) applyPreset(p);
+                                applyPreset(p);
                               }),
                             );
                           }).toList(),
                         ),
                         const SizedBox(height: 18),
-                        if (prov.isLocal)
-                          ..._localSection(ctx, hfController, setS)
-                        else
-                          ..._remoteSection(
+                        ..._remoteSection(
                               ctx, prov, baseUrlCtrl, modelCtrl, keyCtrl,
                               obscureKey, () => setS(() => obscureKey = !obscureKey),
                               selSource),
@@ -1285,7 +1121,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
         obscureText: obscureKey,
         style: const TextStyle(
             color: _C.textHi, fontSize: 13, fontFamily: 'monospace'),
-        decoration: _fieldDeco(hint: prov.keyHint.isEmpty ? '(opcional)' : prov.keyHint)
+        decoration: _fieldDeco(hint: '(opcional)')
             .copyWith(
           suffixIcon: IconButton(
             icon: Icon(obscureKey ? Icons.visibility_off : Icons.visibility,
@@ -1338,139 +1174,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
     ];
   }
 
-  List<Widget> _localSection(
-    BuildContext ctx,
-    TextEditingController hfController,
-    StateSetter setS,
-  ) {
-    return [
-      _cfgLabel('Modelos locales (.gguf)'),
-      const SizedBox(height: 8),
-      FutureBuilder<List<ModelFile>>(
-        future: _svc.scanLocalModels(),
-        builder: (_, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20),
-              child: Center(
-                  child: SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: _C.accent))),
-            );
-          }
-          final models = snap.data ?? [];
-          if (models.isEmpty) {
-            return const Padding(
-              padding: EdgeInsets.symmetric(vertical: 16),
-              child: Text(
-                  'No hay .gguf válidos en /root/models.\nDescarga uno por HF o cópialo por terminal.',
-                  style: TextStyle(color: _C.off, fontSize: 13, height: 1.5)),
-            );
-          }
-          return Column(
-            children: models.map((m) => _modelRow(ctx, m, setS)).toList(),
-          );
-        },
-      ),
-      const SizedBox(height: 24),
-      _cfgLabel('Descargar de Hugging Face'),
-      const SizedBox(height: 8),
-      const Text(
-        'repo:quant — se descarga al arrancar (requiere internet la primera vez).',
-        style: TextStyle(color: _C.off, fontSize: 12, height: 1.4),
-      ),
-      const SizedBox(height: 10),
-      TextField(
-        controller: hfController,
-        style: const TextStyle(color: _C.textHi, fontSize: 13.5),
-        decoration: _fieldDeco(hint: 'usuario/repo-GGUF:Q4_K_M'),
-      ),
-      const SizedBox(height: 8),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          _suggestionChip('E2B Q4_K_M (rápido)',
-              'unsloth/gemma-4-E2B-it-GGUF:Q4_K_M', hfController),
-          _suggestionChip('E4B Q4_K_M (más calidad)',
-              'unsloth/gemma-4-E4B-it-GGUF:Q4_K_M', hfController),
-        ],
-      ),
-      const SizedBox(height: 14),
-      SizedBox(
-        width: double.infinity,
-        child: ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _C.accent,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 13),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-          icon: const Icon(Icons.cloud_download_outlined, size: 18),
-          label: const Text('Usar este modelo HF'),
-          onPressed: () async {
-            final ref = hfController.text.trim();
-            if (ref.isEmpty) return;
-            await _svc.setHfModel(ref);
-            final wasRunning = _svc.llamaLaunched;
-            if (wasRunning) _svc.stopLlama();
-            if (mounted) setState(() {});
-            if (ctx.mounted) Navigator.pop(ctx);
-            _snack('Modelo HF: $ref. Pulsa ▶ para descargar y arrancar.');
-          },
-        ),
-      ),
-    ];
-  }
 
-  Widget _modelRow(BuildContext sheetCtx, ModelFile m, StateSetter setS) {
-    final selected = !_svc.usingRemote &&
-        _svc.usingLocalModel &&
-        _svc.llamaLocalModelPath == m.prootPath;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: _C.card,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: selected ? _C.accent : _C.border),
-      ),
-      child: ListTile(
-        dense: true,
-        leading: Icon(
-          selected ? Icons.check_circle : Icons.insert_drive_file_outlined,
-          color: selected ? _C.accent : _C.textLo,
-          size: 20,
-        ),
-        title: Text(m.name,
-            style: const TextStyle(color: _C.textHi, fontSize: 13),
-            overflow: TextOverflow.ellipsis),
-        subtitle: Text(m.sizeLabel,
-            style: const TextStyle(color: _C.off, fontSize: 11.5)),
-        onTap: () async {
-          await _svc.setLocalModel(m.prootPath);
-          final wasRunning = _svc.llamaLaunched;
-          if (wasRunning) _svc.stopLlama();
-          if (mounted) setState(() {});
-          if (sheetCtx.mounted) Navigator.pop(sheetCtx);
-          _snack('Modelo local: ${m.name}. Pulsa ▶ para arrancar.');
-        },
-      ),
-    );
-  }
-
-  Widget _suggestionChip(
-      String label, String ref, TextEditingController controller) {
-    return ActionChip(
-      label: Text(label, style: const TextStyle(fontSize: 11.5)),
-      backgroundColor: _C.cardAlt,
-      labelStyle: const TextStyle(color: _C.textLo),
-      side: const BorderSide(color: _C.border),
-      onPressed: () => controller.text = ref,
-    );
-  }
 
   void _showLogs(String title, ValueNotifier<List<String>> log) {
     showModalBottomSheet(
