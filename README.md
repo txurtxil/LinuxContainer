@@ -11,7 +11,7 @@ Repositorio: https://github.com/txurtxil/LinuxContainer
 
 Una app Flutter que arranca un contenedor proot con Debian Bookworm arm64
 de verdad: apt, compiladores, Python, Android SDK, todo. Encima corre un
-agente de IA local (Gemma 4 via LiteRT-LM/MediaPipe sobre la GPU Adreno)
+agente de IA local (Gemma via LiteRT-LM/MediaPipe sobre la GPU Adreno)
 que puede ejecutar comandos, y una terminal con gestion de sesiones SSH y
 SFTP pensada para trabajar comodo desde el movil.
 
@@ -19,7 +19,7 @@ SFTP pensada para trabajar comodo desde el movil.
 
 - Flutter UI -> proot (Debian Bookworm arm64) -> agent_server.py (:8765,
   smolagents FastAPI) <-> MediaPipeServer.kt (:8090, compatible OpenAI) ->
-  LiteRtEngine (Gemma 4 E2B local)
+  LiteRtEngine (Gemma E2B local, GPU)
 - Cada pestana de terminal es una TerminalSession independiente: su propio
   Terminal, TerminalController y Pty. Hasta 5 sesiones simultaneas.
 - Las conexiones SSH (pestanas de terminal) reutilizan el mismo mecanismo:
@@ -32,6 +32,9 @@ SFTP pensada para trabajar comodo desde el movil.
   conexiones SFTP viven en un pool independiente de la pantalla (por eso
   navegar a una pestana SSH no las corta), y se puede saltar de vuelta a
   SSH sin cerrar la sesion sftp.
+- La fuente de inferencia del agente es GPU Local (MediaPipe, 100% en el
+  dispositivo) o Personalizado (cualquier endpoint OpenAI-compatible,
+  incluida una IA en la LAN).
 
 ## Caracteristicas
 
@@ -72,6 +75,14 @@ SFTP pensada para trabajar comodo desde el movil.
 - Conexion persistente: icono para saltar a una pestana SSH del mismo
   host sin cortar la sesion sftp, y viceversa desde la terminal
 
+### Agente de IA
+- Dos fuentes de inferencia, sin mas: GPU Local (MediaPipe/.task o
+  .litertlm, la via recomendada, 100% en el dispositivo) y Personalizado
+  (cualquier endpoint OpenAI-compatible -- otro equipo en la LAN, un
+  proveedor en la nube, lo que sea)
+- Chat con pasos ReAct en streaming, herramientas (ssh_exec, ha_api,
+  lectura/escritura de ficheros del rootfs)
+
 ## Limitaciones conocidas
 
 - Descargar carpetas completas por SFTP no esta soportado, solo ficheros
@@ -89,17 +100,27 @@ SFTP pensada para trabajar comodo desde el movil.
 
 ## Compilar
 
-Requiere Flutter estable, Android SDK API 35, NDK 27, Java 17.
+Requiere Flutter estable, Android SDK API 35, NDK 28, Java 17.
 
     flutter pub get
     flutter analyze lib/
     flutter build apk --release
 
-`flutter build apk` en un host Linux arm64 no funciona (gen_snapshot para
-android-arm64-release no existe en el SDK oficial). Compilar en un host
-x86_64 o usar un dispositivo Android para pruebas locales.
+La APK release incluye arm64-v8a, armeabi-v7a y x86_64. En el Fold7
+(arm64) el motor GPU local se ha confirmado funcionando con Gemma E2B.
 
 ## Historial de versiones (ultimas 6)
+
+### v1.22.0
+Pantalla "Fuente y modelo" recortada a solo GPU Local y Personalizado.
+Fuera el motor local por CPU (llama.cpp/.gguf, con toda su UI de seleccion
+y descarga de modelos) y los proveedores en la nube (Groq, Gemini,
+Cerebras, OpenRouter, xAI). Confirmado en dispositivo: Gemma E2B por GPU
+carga y responde bien.
+
+### v1.21.1
+Cierra el circuito SSH->SFTP->SSH: vuelve a la pestana de origen en vez
+de crear una nueva al salir del explorador SFTP.
 
 ### v1.21.0
 Navegacion SSH<->SFTP visible en ambos sentidos (iconos directos, no en
@@ -119,13 +140,3 @@ subir varios elementos a la vez.
 ### v1.18.0
 SSH: contrasena cifrada en Keystore de Android para conexiones SFTP.
 Carpeta inicial configurable por host (aplica a SSH y SFTP).
-
-### v1.17.0
-SFTP: subir archivos (explorador local propio, sin dependencias nuevas).
-Favoritos de rutas por host, persistentes entre reinicios.
-
-### v1.16.0
-Seleccion de texto: cambio de enfoque tras varios intentos fallidos de
-deducir la geometria del terminal. Calibracion por toque real (onTapUp)
-en vez de calcular a ciegas; barra Copiar/Pegar/Todo independiente de la
-geometria.
