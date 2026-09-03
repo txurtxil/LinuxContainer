@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# agent_server.py — fallback minimo v7.0
-import os, sys, json, socketserver, http.server, urllib.request
+# agent_server.py — v8.0  (solo stdlib, sin dependencias externas)
+import os, sys, json, socketserver, http.server, urllib.request, urllib.error
 
 PORT = int(os.environ.get('AGENT_PORT', '8765'))
 BASE_URL = os.environ.get('LLM_BASE_URL', 'http://127.0.0.1:8090/v1')
@@ -9,13 +9,13 @@ API_KEY = os.environ.get('LLM_API_KEY', 'local')
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        print(f'[agent] {fmt % args}')
+        print(f'[agent] {fmt % args}', flush=True)
 
     def do_GET(self):
         if self.path == '/health':
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'ok')
+            self.wfile.write(b'{"status":"ok"}')
             return
         self.send_response(404)
         self.end_headers()
@@ -41,6 +41,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             self.send_header(k, v)
                     self.end_headers()
                     self.wfile.write(resp.read())
+            except urllib.error.HTTPError as e:
+                self.send_response(e.code)
+                for k, v in e.headers.items():
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(e.read())
             except Exception as e:
                 self.send_response(500)
                 self.send_header('Content-Type', 'application/json')
@@ -51,9 +57,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 def main():
-    print(f'[XTR Agent Server v7.0] Puerto={PORT} BaseURL={BASE_URL} Model={MODEL}')
+    print(f'[XTR Agent Server v8.0] Puerto={PORT} BaseURL={BASE_URL} Model={MODEL}', flush=True)
+    print(f'[XTR] Usando solo stdlib (sin httpx). Escuchando en 0.0.0.0:{PORT}', flush=True)
     with socketserver.TCPServer(('0.0.0.0', PORT), Handler) as httpd:
-        print(f'[XTR] Escuchando en 0.0.0.0:{PORT}')
         httpd.serve_forever()
 
 if __name__ == '__main__':

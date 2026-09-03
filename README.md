@@ -1,4 +1,4 @@
-# LinuxContainer — Dashboard IA v7.0
+# LinuxContainer — Dashboard IA v8.0
 
 > Contenedor Debian completo en Android + Agente IA con MediaPipe GPU local o API remota.
 
@@ -11,13 +11,15 @@
 - **Chat con historial** — guarda y carga conversaciones
 - **Terminal integrada** — acceso directo al shell del contenedor
 - **Foreground service** — mantiene el contenedor vivo en segundo plano
+- **Auto-install de dependencias** — `pip`, `httpx`, `openai` se instalan solos si faltan (v8.0)
+- **Fallback stdlib** — `agent_server.py` usa solo `urllib` (sin dependencias externas)
 
 ## Requisitos
 
 - Android 10+ (API 29+)
 - Dispositivo ARM64 (arm64-v8a) — optimizado para Galaxy Z Fold 7
 - ~500 MB libres para el rootfs Debian
-- Python 3 en el contenedor (se auto-instala si falta en v7.0)
+- Python 3 en el contenedor (se auto-instala si falta)
 
 ## Instalacion rapida
 
@@ -26,8 +28,8 @@
 git clone https://github.com/txurtxil/LinuxContainer.git
 cd LinuxContainer
 
-# 2. Ejecutar el parche v7
-bash patch_agent_v7.sh
+# 2. Ejecutar el parche v8
+bash patch_agent_v8.sh
 
 # 3. Instalar en el dispositivo
 adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
@@ -54,22 +56,18 @@ lib/
       agent_services.dart      # Logica de arranque, MediaPipe, config
       agent_dashboard.dart     # UI del chat y ajustes
       agent_chat.dart          # Controller del chat
-      agent_server.py          # Servidor Python embebido (en assets/)
-    terminal/
-      terminal_view.dart       # Terminal interactiva
-    container/
-      container_manager.dart   # Gestion del rootfs Debian
 assets/
-  agent_server.py            # Copiado automaticamente al rootfs
+  agent_server.py            # Servidor Python embebido (solo stdlib)
 ```
 
 ## Troubleshooting
 
 | Problema | Solucion |
 |----------|----------|
-| `exec: : not found` | Python 3 no estaba en el rootfs. **v7.0** lo busca en multiples rutas y lo instala automaticamente via `apt-get`. |
-| `No existe /root/agent_server.py` | El script se copia automaticamente desde `assets/` al arrancar el agente. Verifica que este en `pubspec.yaml`. |
-| El agente no responde | Revisa los logs (icono de documento). Asegurate de que el contenedor este listo (indicador verde). |
+| `ModuleNotFoundError: No module named 'httpx'` | **v8.0** arreglado: `agent_server.py` usa `urllib` (stdlib). El script de arranque tambien instala `pip` + `httpx` automaticamente si faltan. |
+| `exec: : not found` | Python 3 no estaba en el rootfs. **v8.0** lo busca en multiples rutas y lo instala via `apt-get`. |
+| `No existe /root/agent_server.py` | El script se copia automaticamente desde `assets/` al arrancar el agente. |
+| El agente no responde | Revisa los logs (icono de documento). Asegurate de que el contenedor este listo. |
 | MediaPipe no carga | Verifica que el modelo sea `.task` o `.litertlm`. Prueba con CPU si GPU falla. |
 
 ## Compilacion manual
@@ -82,7 +80,7 @@ flutter build apk --release --split-per-abi
 
 ## Release
 
-Las APKs firmadas se generan automaticamente con el script `patch_agent_v7.sh` y se suben a GitHub Releases via `gh CLI`.
+Las APKs firmadas se generan automaticamente con `patch_agent_v8.sh` y se suben a GitHub Releases via `gh CLI`.
 
 ---
 

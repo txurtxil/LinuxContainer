@@ -1,5 +1,5 @@
-// lib/src/agent/agent_services.dart — v7.0
-// Arregla: python3 no encontrado en rootfs → busqueda en multiples rutas + auto-install.
+// lib/src/agent/agent_services.dart — v8.0
+// Arregla: httpx no instalado → pip install auto + fallback a stdlib.
 
 import 'dart:async';
 import 'dart:convert';
@@ -371,11 +371,13 @@ class AgentServices {
     }
   }
 
-  // ---- ARREGLO CRITICO v7: buscar python3 en rootfs ------------------------
+  // ---- ARREGLO CRITICO v8: python3 + pip install auto ---------------------
   String _agentCommand() {
     final base = effectiveBaseUrl;
     final model = effectiveModel;
     final key = effectiveApiKey;
+    // v8: busca python3, instala pip si falta, instala httpx si el script lo necesita,
+    //     pero el fallback usa stdlib asi que nunca falla por deps.
     return r"""cd /root && \
 if [ ! -f /root/agent_server.py ]; then echo '[ERROR] No existe /root/agent_server.py'; exit 1; fi; \
 PYTHON=''; for P in /root/agent-env/bin/python3 /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do \
@@ -396,6 +398,16 @@ if [ -z "$PYTHON" ]; then \
   echo '[FATAL] No se encontro ni se pudo instalar python3.'; \
   echo '[hint] Entra al contenedor y ejecuta: apt-get update && apt-get install -y python3'; \
   exit 1; fi; \
+# v8: asegurar pip e instalar deps si el script las necesita \
+if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then \
+  echo '[XTR] pip no encontrado. Instalando...'; \
+  "$PYTHON" -m ensurepip --upgrade 2>/dev/null || \
+    (apt-get install -y -qq python3-pip 2>/dev/null); \
+fi; \
+# Instalar deps comunes silenciosamente (no falla si ya estan) \
+echo '[XTR] Verificando dependencias...'; \
+"$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true; \
+"$PYTHON" -m pip install -q httpx openai 2>/dev/null || echo '[warn] No se pudieron instalar deps opcionales (httpx/openai). El fallback usa stdlib.'; \
 if [ -f /root/agent-env/bin/activate ]; then . /root/agent-env/bin/activate; fi; \
 export LLM_BASE_URL='""" + base + r"""' LLM_MODEL='""" + model + r"""' LLM_API_KEY='""" + key + r"""' AGENT_PORT=""" + agentPort.toString() + r"""; \
 echo "[XTR] Usando python: $PYTHON"; \
@@ -420,7 +432,7 @@ exec "$PYTHON" /root/agent_server.py""";
     }
     final src = sourceId == 'gpu_local' ? 'GPU Local (MediaPipe)' : 'Remoto: $remoteBaseUrl';
     agentLog.value = [];
-    _push(agentLog, '[XTR Agent Server v7.0]');
+    _push(agentLog, '[XTR Agent Server v8.0]');
     _push(agentLog, '[fuente: $src | puerto: $agentPort]');
     _push(agentLog, '[Arrancando...]');
     agentStarting.value = true;
