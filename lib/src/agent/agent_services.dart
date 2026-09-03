@@ -1,15 +1,5 @@
-// lib/src/agent/agent_services.dart
-//
-// Gestiona el ciclo de vida de los servicios del agente:
-//   - llama-server (:8080)  -> servidor de inferencia LOCAL (Gemma)
-//   - agent-server (:8765)  -> bucle ReAct (smolagents)
-//
-// La FUENTE de inferencia es configurable: el agente puede usar el llama local,
-// un equipo de la LAN, o un proveedor en la nube compatible con OpenAI (Groq,
-// Gemini, etc.). En modo remoto NO se arranca el llama local.
-//
-// La API key se guarda en almacenamiento privado de la app (no en el rootfs) y
-// se inyecta al agente como variable de entorno EFÍMERA al arrancar.
+// lib/src/agent/agent_services.dart — v7.0
+// Arregla: python3 no encontrado en rootfs → busqueda en multiples rutas + auto-install.
 
 import 'dart:async';
 import 'dart:convert';
@@ -23,24 +13,8 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../container/container_manager.dart';
 
-/// Un fichero .gguf encontrado dentro del rootfs.
-class ModelFile {
-  final String prootPath;
-  final String name;
-  final int sizeBytes;
-  ModelFile(this.prootPath, this.name, this.sizeBytes);
-
-  String get sizeLabel {
-    final mb = sizeBytes / (1024 * 1024);
-    if (mb >= 1024) return '${(mb / 1024).toStringAsFixed(1)} GB';
-    return '${mb.toStringAsFixed(0)} MB';
-  }
-}
-
-/// Control del foreground service nativo (Kotlin) vía MethodChannel.
 class ForegroundService {
-  static const MethodChannel _ch =
-      MethodChannel('linux_container/foreground');
+  static const MethodChannel _ch = MethodChannel('linux_container/foreground');
   static bool _active = false;
 
   static Future<void> start() async {
@@ -71,85 +45,67 @@ class AgentServices {
   final ContainerManager _cm = ContainerManager();
   String? get rootfsPathForView => _cm.rootfsPath;
 
-  // ---- Fuente de inferencia -------------------------------------------------
-  // 'local' = llama-server local; cualquier otro id = endpoint remoto OpenAI.
-
-  String sourceId = 'groq';
+  String sourceId = 'gpu_local';
   String remoteBaseUrl = '';
   String remoteModel = '';
   String remoteApiKey = '';
 
-  bool get usingRemote => sourceId != 'local' && sourceId != 'gpu_local';
-
-  // ---- Modelo local ---------------------------------------------------------
-
-  String llamaModelRef = 'unsloth/gemma-4-E2B-it-GGUF:Q4_K_M';
-
-  String? llamaLocalModelPath =
-      '/root/models/models--ggml-org--gemma-4-E2B-it-GGUF/snapshots/a1dac71d3ab220618f5a7573a52acdc4baf3ae3b/gemma-4-E2B-it-Q8_0.gguf';
-
-  // ---- Parámetros de inferencia local ---------------------------------------
-
-  int llamaThreads = 6;
-  int llamaCtx = 8192;
-  String kvCacheType = 'q4_0';
   double temp = 1.0;
   double topP = 0.95;
   int topK = 64;
-  int llamaPort = 8080;
   int agentPort = 8765;
 
-  static const int _minModelBytes = 200 * 1024 * 1024;
+  static const MethodChannel _mpCh = MethodChannel('xtr/mediapipe');
+  static const EventChannel _mpStream = EventChannel('xtr/mediapipe/stream');
 
-  Pty? _llamaPty;
+  bool mpLoaded = false;
+  bool mpLoading = false;
+  bool mpServerRunning = false;
+  bool mpServerBusy = false;
+  bool mpGenerating = false;
+  String mpStatus = 'Sin cargar.';
+  String mpOutput = '';
+  String mpStats = '';
+  String? mpSelectedPath;
+  bool mpUseGpu = true;
+  List<FileSystemEntity> mpModels = [];
+  String? mpModelsDir;
+
+  StreamSubscription? _mpSub;
+
   Pty? _agentPty;
   Pty? _cronPty;
 
-  final ValueNotifier<List<String>> llamaLog = ValueNotifier<List<String>>([]);
   final ValueNotifier<List<String>> agentLog = ValueNotifier<List<String>>([]);
   final ValueNotifier<List<String>> cronLog = ValueNotifier<List<String>>([]);
-  final ValueNotifier<bool> llamaStarting = ValueNotifier<bool>(false);
   final ValueNotifier<bool> agentStarting = ValueNotifier<bool>(false);
   final ValueNotifier<bool> cronStarting = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> agentFailed = ValueNotifier<bool>(false);
 
-  bool get llamaLaunched => _llamaPty != null;
   bool get agentLaunched => _agentPty != null;
   bool get cronLaunched => _cronPty != null;
-  bool get usingLocalModel =>
-      llamaLocalModelPath != null && llamaLocalModelPath!.trim().isNotEmpty;
 
   String get currentModelLabel {
-    if (usingRemote) return remoteModel.isNotEmpty ? remoteModel : sourceId;
-    if (usingLocalModel) return llamaLocalModelPath!.split('/').last;
-    return llamaModelRef;
+    if (sourceId == 'gpu_local') return 'GPU Local';
+    return remoteModel.isNotEmpty ? remoteModel : 'Personalizado';
   }
 
-  // Base URL OpenAI segun la fuente activa (para el chat).
   String get effectiveBaseUrl {
     if (sourceId == 'gpu_local') return 'http://127.0.0.1:8090/v1';
-    if (usingRemote) {
-      return remoteBaseUrl.isNotEmpty
-          ? remoteBaseUrl
-          : 'http://127.0.0.1:$llamaPort/v1';
-    }
-    return 'http://127.0.0.1:$llamaPort/v1';
+    return remoteBaseUrl.isNotEmpty ? remoteBaseUrl : '';
   }
 
   String get effectiveModel {
     if (sourceId == 'gpu_local') return 'gemma3-local';
-    if (usingRemote) return remoteModel.isNotEmpty ? remoteModel : sourceId;
-    return 'gemma-4-e2b';
+    return remoteModel.isNotEmpty ? remoteModel : 'custom';
   }
 
   String get effectiveApiKey {
     if (sourceId == 'gpu_local') return 'local';
-    if (usingRemote) return remoteApiKey.isNotEmpty ? remoteApiKey : 'not-needed';
-    return 'not-needed';
+    return remoteApiKey.isNotEmpty ? remoteApiKey : 'not-needed';
   }
 
   static const int _maxLogLines = 250;
-
-  // ---- Config persistente ---------------------------------------------------
 
   Future<String> _configFilePath() async {
     final dir = await getApplicationDocumentsDirectory();
@@ -161,23 +117,16 @@ class AgentServices {
       final f = File(await _configFilePath());
       if (!await f.exists()) return;
       final data = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
-      final local = data['localPath'] as String?;
-      final ref = data['hfRef'] as String?;
-      llamaLocalModelPath =
-          (local != null && local.isNotEmpty) ? local : null;
-      if (ref != null && ref.isNotEmpty) llamaModelRef = ref;
-      llamaThreads = (data['threads'] as int?) ?? llamaThreads;
-      llamaCtx = (data['ctx'] as int?) ?? llamaCtx;
-      kvCacheType = (data['kv'] as String?) ?? kvCacheType;
-      temp = (data['temp'] as num?)?.toDouble() ?? temp;
-      topP = (data['topP'] as num?)?.toDouble() ?? topP;
-      topK = (data['topK'] as int?) ?? topK;
-      llamaPort = (data['llamaPort'] as int?) ?? llamaPort;
-      agentPort = (data['agentPort'] as int?) ?? agentPort;
       sourceId = (data['sourceId'] as String?) ?? sourceId;
       remoteBaseUrl = (data['remoteBaseUrl'] as String?) ?? remoteBaseUrl;
       remoteModel = (data['remoteModel'] as String?) ?? remoteModel;
       remoteApiKey = (data['remoteApiKey'] as String?) ?? remoteApiKey;
+      temp = (data['temp'] as num?)?.toDouble() ?? temp;
+      topP = (data['topP'] as num?)?.toDouble() ?? topP;
+      topK = (data['topK'] as int?) ?? topK;
+      agentPort = (data['agentPort'] as int?) ?? agentPort;
+      mpUseGpu = (data['mpUseGpu'] as bool?) ?? mpUseGpu;
+      mpSelectedPath = data['mpSelectedPath'] as String?;
     } catch (_) {}
   }
 
@@ -185,204 +134,321 @@ class AgentServices {
     try {
       final f = File(await _configFilePath());
       await f.writeAsString(jsonEncode({
-        'localPath': llamaLocalModelPath ?? '',
-        'hfRef': llamaModelRef,
-        'threads': llamaThreads,
-        'ctx': llamaCtx,
-        'kv': kvCacheType,
-        'temp': temp,
-        'topP': topP,
-        'topK': topK,
-        'llamaPort': llamaPort,
-        'agentPort': agentPort,
         'sourceId': sourceId,
         'remoteBaseUrl': remoteBaseUrl,
         'remoteModel': remoteModel,
         'remoteApiKey': remoteApiKey,
+        'temp': temp,
+        'topP': topP,
+        'topK': topK,
+        'agentPort': agentPort,
+        'mpUseGpu': mpUseGpu,
+        'mpSelectedPath': mpSelectedPath,
       }));
     } catch (_) {}
   }
 
   Future<void> saveSettings() => _save();
 
-  Future<void> setLocalModel(String prootPath) async {
-    llamaLocalModelPath = prootPath;
-    sourceId = 'local';
-    await _save();
-  }
-
-  Future<void> setHfModel(String ref) async {
-    llamaModelRef = ref.trim();
-    llamaLocalModelPath = null;
-    sourceId = 'local';
-    await _save();
-  }
-
-  Future<void> setLocalSource() async {
-    sourceId = 'local';
-    await _save();
-  }
-
-  Future<void> setRemoteSource({
+  Future<void> setSource({
     required String id,
-    required String baseUrl,
-    required String model,
-    required String apiKey,
+    String? baseUrl,
+    String? model,
+    String? apiKey,
   }) async {
     sourceId = id;
-    remoteBaseUrl = baseUrl.trim();
-    remoteModel = model.trim();
-    remoteApiKey = apiKey.trim();
+    if (baseUrl != null) remoteBaseUrl = baseUrl.trim();
+    if (model != null) remoteModel = model.trim();
+    if (apiKey != null) remoteApiKey = apiKey.trim();
     await _save();
   }
 
   void resetSettings() {
-    llamaThreads = 6;
-    llamaCtx = 8192;
-    kvCacheType = 'q4_0';
     temp = 1.0;
     topP = 0.95;
     topK = 64;
-    llamaPort = 8080;
     agentPort = 8765;
+    mpUseGpu = true;
   }
 
-  Future<List<ModelFile>> scanLocalModels() async {
-    final rootfs = _cm.rootfsPath;
-    if (rootfs == null) return [];
-    final modelsDir = Directory('$rootfs/root/models');
-    if (!await modelsDir.exists()) return [];
-    final out = <ModelFile>[];
-    final seen = <String>{};
+  Future<void> scanMpModels() async {
     try {
-      await for (final entity
-          in modelsDir.list(recursive: true, followLinks: false)) {
-        final p = entity.path;
-        if (!p.toLowerCase().endsWith('.gguf')) continue;
-        final name = p.split('/').last;
-        if (name.toLowerCase().startsWith('mmproj')) continue;
-        final prootPath = p.substring(rootfs.length);
-        if (!seen.add(prootPath)) continue;
-        int size = 0;
-        try {
-          size = await File(p).length();
-        } catch (_) {}
-        if (size < _minModelBytes) continue;
-        out.add(ModelFile(prootPath, name, size));
+      final ext = await getExternalStorageDirectory();
+      if (ext == null) return;
+      final dir = Directory('${ext.path}/models');
+      mpModelsDir = dir.path;
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final found = <FileSystemEntity>[];
+      await for (final e in dir.list()) {
+        final lp = e.path.toLowerCase();
+        if (e is File && (lp.endsWith('.task') || lp.endsWith('.litertlm'))) {
+          found.add(e);
+        }
+      }
+      found.sort((a, b) => a.path.compareTo(b.path));
+      mpModels = found;
+      if (mpSelectedPath == null && found.isNotEmpty) {
+        mpSelectedPath = found.first.path;
+      }
+    } catch (e) {
+      mpStatus = 'Error escaneando: $e';
+    }
+  }
+
+  Future<String?> importMpModel() async {
+    try {
+      final path = await _mpCh.invokeMethod<String>('importModel');
+      if (path != null) {
+        await scanMpModels();
+        mpSelectedPath = path;
+        mpStatus = 'Importado: ${path.split('/').last}';
+      }
+      return path;
+    } on PlatformException catch (e) {
+      mpStatus = 'Error importando: ${e.message}';
+      return null;
+    }
+  }
+
+  Future<void> deleteMpModel(String path) async {
+    try {
+      await File(path).delete();
+      if (mpSelectedPath == path) {
+        mpSelectedPath = null;
+        mpLoaded = false;
+        mpStatus = 'Modelo borrado.';
+      }
+      await scanMpModels();
+    } catch (e) {
+      mpStatus = 'Error borrando: $e';
+    }
+  }
+
+  Future<void> loadMpModel() async {
+    final path = mpSelectedPath;
+    if (path == null) {
+      mpStatus = 'Selecciona un modelo primero.';
+      return;
+    }
+    mpLoading = true;
+    mpLoaded = false;
+    mpStatus = 'Cargando en ${mpUseGpu ? 'GPU' : 'CPU'}...';
+    final t0 = DateTime.now();
+    try {
+      await _mpCh.invokeMethod('load', {'path': path, 'gpu': mpUseGpu});
+      final secs = DateTime.now().difference(t0).inMilliseconds / 1000;
+      mpLoading = false;
+      mpLoaded = true;
+      mpStatus = 'Cargado en ${secs.toStringAsFixed(1)}s (${mpUseGpu ? 'GPU' : 'CPU'}).';
+    } on PlatformException catch (e) {
+      mpLoading = false;
+      mpStatus = 'Fallo al cargar: ${e.message}';
+    }
+  }
+
+  Future<void> unloadMpModel() async {
+    try {
+      await _mpCh.invokeMethod('unload');
+    } catch (_) {}
+    mpLoaded = false;
+    mpStatus = 'Modelo liberado.';
+    mpOutput = '';
+    mpStats = '';
+  }
+
+  void listenMpEvents(Function(Map) onEvent) {
+    _mpSub?.cancel();
+    _mpSub = _mpStream.receiveBroadcastStream().listen(
+      (event) {
+        if (event is Map) onEvent(event);
+      },
+      onError: (_) {
+        mpGenerating = false;
+        mpStatus = 'Error de stream MediaPipe';
+      },
+    );
+  }
+
+  void cancelMpEvents() {
+    _mpSub?.cancel();
+    _mpSub = null;
+  }
+
+  Future<void> generateMpTest(String prompt) async {
+    if (!mpLoaded || mpGenerating) return;
+    mpGenerating = true;
+    mpOutput = '';
+    mpStats = '';
+    try {
+      await _mpCh.invokeMethod('generate', {'prompt': prompt});
+    } on PlatformException catch (e) {
+      mpGenerating = false;
+      mpStatus = 'Fallo al generar: ${e.message}';
+    }
+  }
+
+  void handleMpEvent(Map event) {
+    if (event['stats'] == true) {
+      final tps = (event['tps'] as num?)?.toDouble() ?? 0;
+      final toks = (event['tokens'] as num?)?.toInt() ?? 0;
+      final ttft = (event['ttft'] as num?)?.toDouble() ?? 0;
+      mpGenerating = false;
+      mpStats = '${tps.toStringAsFixed(1)} tok/s · $toks tokens · TTFT ${ttft.toStringAsFixed(2)}s';
+      return;
+    }
+    final partial = event['partial'] as String? ?? '';
+    final done = event['done'] == true;
+    mpOutput += partial;
+    if (done) mpGenerating = false;
+  }
+
+  Future<void> startMpServer() async {
+    if (!mpLoaded) {
+      mpStatus = 'Carga un modelo primero.';
+      return;
+    }
+    mpServerBusy = true;
+    mpStatus = 'Iniciando servidor...';
+    try {
+      await _mpCh.invokeMethod('serverStart',
+          {'port': 8090, 'path': mpSelectedPath, 'gpu': mpUseGpu});
+      mpServerRunning = true;
+      mpServerBusy = false;
+      mpStatus = 'Servidor activo: http://127.0.0.1:8090/v1';
+    } on PlatformException catch (e) {
+      mpServerBusy = false;
+      mpStatus = 'Error servidor: ${e.message}';
+    }
+  }
+
+  Future<void> stopMpServer() async {
+    try {
+      await _mpCh.invokeMethod('serverStop');
+    } catch (_) {}
+    mpServerRunning = false;
+    mpStatus = 'Servidor detenido.';
+  }
+
+  Future<void> syncMpStatus() async {
+    try {
+      final st = await _mpCh.invokeMapMethod<String, dynamic>('serverStatus');
+      if (st == null) return;
+      mpLoaded = st['modelLoaded'] as bool? ?? false;
+      mpServerRunning = st['running'] as bool? ?? false;
+      final path = st['modelPath'] as String? ?? '';
+      if (path.isNotEmpty && mpLoaded) {
+        mpSelectedPath = path;
+        mpStatus = 'Modelo cargado (sesion activa).';
+      }
+      if (mpServerRunning) {
+        mpStatus = 'Servidor activo: http://127.0.0.1:8090/v1';
       }
     } catch (_) {}
-    out.sort((a, b) => a.name.compareTo(b.name));
-    return out;
   }
 
-  // ---- Comandos -------------------------------------------------------------
-
-  String _fmt(double d) => d.toStringAsFixed(2);
-
-  String _llamaCommand() {
-    final modelArg = usingLocalModel
-        ? '-m ${llamaLocalModelPath!.trim()}'
-        : '-hf $llamaModelRef';
-    final kvFlag =
-        kvCacheType == 'f16' ? '' : ' -ctk $kvCacheType -ctv $kvCacheType';
-    return 'cd /root/llama.cpp; ./build/bin/llama-server $modelArg '
-            '--host 127.0.0.1 --port $llamaPort -c $llamaCtx -t $llamaThreads -fa on$kvFlag '
-            '--temp ${_fmt(temp)} --top-p ${_fmt(topP)} --top-k $topK '
-        r'& echo $! > /tmp/llama.pid; wait';
+  Future<bool> ensureAgentScript() async {
+    final rootfs = _cm.rootfsPath;
+    if (rootfs == null) {
+      _push(agentLog, '[error] rootfs no disponible.');
+      return false;
+    }
+    final target = File('$rootfs/root/agent_server.py');
+    if (await target.exists()) {
+      _push(agentLog, '[ok] agent_server.py ya existe en rootfs.');
+      return true;
+    }
+    _push(agentLog, '[..] Copiando agent_server.py desde assets...');
+    try {
+      final bytes = await rootBundle.load('assets/agent_server.py');
+      final data = bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes);
+      await target.writeAsBytes(data);
+      _push(agentLog, '[ok] agent_server.py copiado (${data.length} bytes).');
+      return true;
+    } catch (e) {
+      _push(agentLog, '[error] No se pudo copiar agent_server.py: $e');
+      _push(agentLog, '[hint] Asegurate de que assets/agent_server.py este en pubspec.yaml');
+      return false;
+    }
   }
 
+  // ---- ARREGLO CRITICO v7: buscar python3 en rootfs ------------------------
   String _agentCommand() {
-    final String base;
-    final String model;
-    final String key;
-    if (sourceId == 'gpu_local') {
-      base = 'http://127.0.0.1:8090/v1';
-      model = 'gemma3-local';
-      key = 'local';
-    } else if (usingRemote) {
-      base = remoteBaseUrl.isNotEmpty
-          ? remoteBaseUrl
-          : 'http://127.0.0.1:$llamaPort/v1';
-      model = remoteModel.isNotEmpty ? remoteModel : sourceId;
-      key = remoteApiKey.isNotEmpty ? remoteApiKey : 'not-needed';
-    } else {
-      base = 'http://127.0.0.1:$llamaPort/v1';
-      model = 'gemma-4-e2b';
-      key = 'not-needed';
-    }
-    final env =
-        "LLM_BASE_URL='$base' LLM_MODEL='$model' LLM_API_KEY='$key' "
-        "LLAMA_PORT=$llamaPort AGENT_PORT=$agentPort";
-    return 'cd /root && source /root/agent-env/bin/activate && $env exec python3 /root/agent_server.py';
+    final base = effectiveBaseUrl;
+    final model = effectiveModel;
+    final key = effectiveApiKey;
+    return r"""cd /root && \
+if [ ! -f /root/agent_server.py ]; then echo '[ERROR] No existe /root/agent_server.py'; exit 1; fi; \
+PYTHON=''; for P in /root/agent-env/bin/python3 /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do \
+  if [ -x "$P" ]; then PYTHON="$P"; break; fi; done; \
+if [ -z "$PYTHON" ]; then \
+  echo '[XTR] python3 no encontrado. Intentando instalar...'; \
+  if command -v apt-get >/dev/null 2>&1; then \
+    apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip 2>/dev/null; \
+  elif command -v apk >/dev/null 2>&1; then \
+    apk add --no-cache python3 py3-pip 2>/dev/null; \
+  elif command -v pacman >/dev/null 2>&1; then \
+    pacman -Sy --noconfirm python python-pip 2>/dev/null; \
+  fi; \
+  for P in /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do \
+    if [ -x "$P" ]; then PYTHON="$P"; break; fi; done; \
+fi; \
+if [ -z "$PYTHON" ]; then \
+  echo '[FATAL] No se encontro ni se pudo instalar python3.'; \
+  echo '[hint] Entra al contenedor y ejecuta: apt-get update && apt-get install -y python3'; \
+  exit 1; fi; \
+if [ -f /root/agent-env/bin/activate ]; then . /root/agent-env/bin/activate; fi; \
+export LLM_BASE_URL='""" + base + r"""' LLM_MODEL='""" + model + r"""' LLM_API_KEY='""" + key + r"""' AGENT_PORT=""" + agentPort.toString() + r"""; \
+echo "[XTR] Usando python: $PYTHON"; \
+echo "[XTR] LLM_BASE_URL=$LLM_BASE_URL"; \
+echo "[XTR] Modelo=$LLM_MODEL"; \
+echo "[XTR] Puerto=$AGENT_PORT"; \
+exec "$PYTHON" /root/agent_server.py""";
   }
 
-  // ---- Arranque / parada ----------------------------------------------------
-
-  void startLlama() {
-    if (_llamaPty != null) return;
-    if (usingRemote) {
-      _push(llamaLog, '[lc] Fuente remota activa: no se usa llama local.');
-      return;
-    }
-    if (!_cm.isReady) {
-      _push(llamaLog, '[error] El contenedor Debian aún no está listo.');
-      return;
-    }
-    _push(llamaLog, '[lc] Arrancando llama-server… ($currentModelLabel)');
-    llamaStarting.value = true;
-    final pty = _cm.startProcess(_llamaCommand());
-    _llamaPty = pty;
-    _attach(pty, llamaLog, () {
-      _llamaPty = null;
-      llamaStarting.value = false;
-      _push(llamaLog, '[lc] llama-server finalizó.');
-      _syncForeground();
-    });
-    _syncForeground();
-  }
-
-  void stopLlama() {
-    _push(llamaLog, '[lc] Deteniendo llama-server…');
-    _killService(_llamaPty, '/tmp/llama.pid', 'build/bin/llama-server');
-    _llamaPty = null;
-    llamaStarting.value = false;
-    _syncForeground();
-  }
-
-  void startAgent() {
+  Future<void> startAgent() async {
     if (_agentPty != null) return;
     if (!_cm.isReady) {
-      _push(agentLog, '[error] El contenedor Debian aún no está listo.');
+      _push(agentLog, '[error] El contenedor Debian aun no esta listo.');
+      _push(agentLog, '[hint] Espera a que el contenedor termine de inicializarse.');
+      agentFailed.value = true;
       return;
     }
-    final src = usingRemote ? 'remoto: $remoteBaseUrl ($remoteModel)' : 'local';
-    _push(agentLog, '[XTR Agent Server v1.1]');
+    final ok = await ensureAgentScript();
+    if (!ok) {
+      agentFailed.value = true;
+      return;
+    }
+    final src = sourceId == 'gpu_local' ? 'GPU Local (MediaPipe)' : 'Remoto: $remoteBaseUrl';
+    agentLog.value = [];
+    _push(agentLog, '[XTR Agent Server v7.0]');
     _push(agentLog, '[fuente: $src | puerto: $agentPort]');
     _push(agentLog, '[Arrancando...]');
     agentStarting.value = true;
+    agentFailed.value = false;
     final pty = _cm.startProcess(_agentCommand());
     _agentPty = pty;
     _attach(pty, agentLog, () {
       _agentPty = null;
       agentStarting.value = false;
-      _push(agentLog, '[lc] agent-server finalizó.');
+      _push(agentLog, '[lc] agent-server finalizo.');
       _syncForeground();
     });
     _syncForeground();
   }
 
   void stopAgent() {
-    _push(agentLog, '[lc] Deteniendo agent-server…');
+    _push(agentLog, '[lc] Deteniendo agent-server...');
     _killService(_agentPty, '/tmp/agent.pid', 'agent_server.py');
     _agentPty = null;
     agentStarting.value = false;
+    agentFailed.value = false;
     _syncForeground();
   }
 
   void startCron() {
     if (_cronPty != null) return;
     if (!_cm.isReady) {
-      _push(cronLog, '[error] El contenedor Debian a\u00fan no est\u00e1 listo.');
+      _push(cronLog, '[error] El contenedor Debian aun no esta listo.');
       return;
     }
     _push(cronLog, '[XTR Cron]');
@@ -393,24 +459,22 @@ class AgentServices {
     _attach(pty, cronLog, () {
       _cronPty = null;
       cronStarting.value = false;
-      _push(cronLog, '[lc] cron finaliz\u00f3.');
+      _push(cronLog, '[lc] cron finalizo.');
       _syncForeground();
     });
     _syncForeground();
   }
 
   void stopCron() {
-    _push(cronLog, '[lc] Deteniendo cron\u2026');
+    _push(cronLog, '[lc] Deteniendo cron...');
     _killService(_cronPty, '/tmp/cron.pid', '/usr/sbin/cron');
     _cronPty = null;
     cronStarting.value = false;
     _syncForeground();
   }
 
-  // ---- Internos -------------------------------------------------------------
-
   void _syncForeground() {
-    if (llamaLaunched || agentLaunched || cronLaunched) {
+    if (agentLaunched || cronLaunched) {
       ForegroundService.start();
     } else {
       ForegroundService.stop();

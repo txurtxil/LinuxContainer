@@ -1,26 +1,16 @@
-// lib/src/agent/agent_dashboard.dart
-//
-// Panel del Agente Autónomo para XTR Terminal.
-// - Tarjetas de servicio con start/stop + logs.
-// - Fuente de inferencia: local / LAN / proveedor en la nube (OpenAI-compat).
-// - Selección de modelo local (.gguf) + descarga HF.
-// - Configuración: parámetros de inferencia + puertos.
-// - Chat con pasos ReAct en streaming (SSE).
+// lib/src/agent/agent_dashboard.dart — v7.0
 
-import 'mediapipe_test_screen.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'agent_services.dart';
 import 'agent_chat.dart';
-
-import 'ssh_connections.dart';
 import 'prompt_templates.dart';
-import '../dev/android_sdk_card.dart';
+import 'ssh_connections.dart';
+
 class _C {
   static const bg = Color(0xFF1C1C1E);
   static const card = Color(0xFF2C2C2E);
@@ -32,48 +22,10 @@ class _C {
   static const off = Color(0xFF6B6B70);
   static const err = Color(0xFFFF453A);
   static const accent = Color(0xFF5E9BD6);
+  static const warn = Color(0xFFFF9F0A);
 }
 
 const _mono = TextStyle(fontFamily: 'monospace', fontSize: 12.5, height: 1.35);
-
-/// Preset de un proveedor de inferencia compatible con OpenAI.
-class _Provider {
-  final String id;
-  final String label;
-  final String baseUrl;
-  final List<String> models;
-  final String note;
-  final bool editableUrl;
-  const _Provider({
-    required this.id,
-    required this.label,
-    this.baseUrl = '',
-    this.models = const [],
-    this.note = '',
-    this.editableUrl = false,
-  });
-}
-
-const List<_Provider> _providers = [
-  _Provider(
-    id: 'gpu_local',
-    label: 'GPU Local 🔥',
-    baseUrl: 'http://127.0.0.1:8090/v1',
-    models: ['gemma3-local'],
-    note: 'MediaPipe en GPU Adreno — 100% local y privado. '
-        'Carga un modelo .task desde la pantalla GPU antes de arrancar.',
-  ),
-  _Provider(
-    id: 'custom',
-    label: 'Personalizado',
-    editableUrl: true,
-    note: 'Cualquier endpoint compatible con OpenAI. Acaba la URL en /v1.',
-  ),
-];
-
-_Provider _providerById(String id) =>
-    _providers.firstWhere((p) => p.id == id, orElse: () => _providers.first);
-
 
 class AgentDashboard extends StatefulWidget {
   final VoidCallback? onClose;
@@ -88,9 +40,13 @@ class _AgentDashboardState extends State<AgentDashboard> {
   final _ctrl = AgentController();
   final _input = TextEditingController();
   final _scroll = ScrollController();
+  final _mpPrompt = TextEditingController(
+      text: 'Explica en dos frases que es un agujero negro.');
 
   Timer? _healthTimer;
+  Timer? _bootPollTimer;
   bool _agentUp = false;
+  String _selSource = 'gpu_local';
 
   @override
   void initState() {
@@ -101,26 +57,38 @@ class _AgentDashboardState extends State<AgentDashboard> {
         _scrollToBottom();
       }
     });
-    _svc.loadModelConfig().then((_) {
+    _svc.loadModelConfig().then((_) async {
       if (mounted) {
+        setState(() => _selSource = _svc.sourceId);
+        await _svc.scanMpModels();
+        await _svc.syncMpStatus();
         setState(() {});
         _pollHealth();
       }
     });
-    // Dar tiempo a uvicorn para arrancar antes del primer check
-    Future.delayed(const Duration(seconds: 8), () {
+    Future.delayed(const Duration(seconds: 2), () {
       if (mounted) _pollHealth();
     });
     _healthTimer =
         Timer.periodic(const Duration(seconds: 5), (_) => _pollHealth());
     _svc.agentStarting.addListener(_onSvc);
+    _svc.agentFailed.addListener(_onSvc);
+    _svc.listenMpEvents((e) {
+      if (mounted) {
+        setState(() => _svc.handleMpEvent(e));
+      }
+    });
   }
 
   @override
   void dispose() {
     _healthTimer?.cancel();
+    _bootPollTimer?.cancel();
     _svc.agentStarting.removeListener(_onSvc);
+    _svc.agentFailed.removeListener(_onSvc);
+    _svc.cancelMpEvents();
     _input.dispose();
+    _mpPrompt.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -132,18 +100,30 @@ class _AgentDashboardState extends State<AgentDashboard> {
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), duration: const Duration(seconds: 3)),
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
     );
   }
 
   Future<void> _pollHealth() async {
     final a = await AgentApi.checkHealth(_svc.agentPort);
-    if (mounted) {
-      setState(() {
+    if (mounted) setState(() => _agentUp = a);
+  }
 
-        _agentUp = a;
-      });
-    }
+  void _startBootPoll() {
+    _bootPollTimer?.cancel();
+    int ticks = 0;
+    _bootPollTimer = Timer.periodic(const Duration(seconds: 1), (t) async {
+      ticks++;
+      await _pollHealth();
+      if (_agentUp || ticks >= 12) {
+        t.cancel();
+        if (mounted && !_agentUp && _svc.agentLaunched) {
+          _svc.agentFailed.value = true;
+          _svc.agentStarting.value = false;
+          _snack('El agente no respondio. Revisa los logs.');
+        }
+      }
+    });
   }
 
   void _scrollToBottom() {
@@ -158,123 +138,14 @@ class _AgentDashboardState extends State<AgentDashboard> {
     });
   }
 
-  static const _imgMethod = MethodChannel('xtr/mediapipe');
-  String? _attachedImagePath;
-  bool _useNativeTools = false;
-
-  String? _detectImagePath(String text) {
-    final match = RegExp(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', caseSensitive: false)
-        .firstMatch(text);
-    return match?.group(1);
-  }
-
-  Future<void> _showImageFromRootfs(String relPath) async {
-    final rootfs = _svc.rootfsPathForView;
-    if (rootfs == null) {
-      _snack('El contenedor no esta listo todavia.');
-      return;
-    }
-    final fullPath = '$rootfs$relPath';
-    final file = File(fullPath);
-    if (!await file.exists()) {
-      _snack('No existe: $relPath');
-      return;
-    }
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: _C.card,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              InteractiveViewer(child: Image.file(file)),
-              const SizedBox(height: 8),
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _imageChipIfAny(String text) {
-    final path = _detectImagePath(text);
-    if (path == null) return const SizedBox.shrink();
-    final name = path.split('/').last;
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: InkWell(
-        onTap: () => _showImageFromRootfs(path),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.image_outlined, size: 14, color: _C.accent),
-            const SizedBox(width: 4),
-            Text('Ver $name', style: const TextStyle(color: _C.accent, fontSize: 11.5)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _viewGeneratedImage() async {
-    final pathCtrl = TextEditingController(text: '/root/mired.png');
-    final relPath = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _C.card,
-        title: const Text('Ver imagen del rootfs', style: TextStyle(color: _C.textHi)),
-        content: TextField(
-          controller: pathCtrl,
-          autofocus: true,
-          style: const TextStyle(color: _C.textHi, fontFamily: 'monospace'),
-          decoration: const InputDecoration(hintText: '/root/mired.png'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, pathCtrl.text.trim()),
-            child: const Text('Ver'),
-          ),
-        ],
-      ),
-    );
-    if (relPath == null || relPath.isEmpty) return;
-    await _showImageFromRootfs(relPath);
-  }
-
-  Future<void> _pickChatImage() async {
-    try {
-      final path = await _imgMethod.invokeMethod<String>('testImage');
-      if (path != null && mounted) {
-        setState(() => _attachedImagePath = path);
-      }
-    } on PlatformException catch (e) {
-      if (mounted) _snack('Error eligiendo imagen: \${e.message}');
-    }
-  }
-
-  void _removeAttachedImage() {
-    setState(() => _attachedImagePath = null);
-  }
-
   void _send() {
     final text = _input.text.trim();
     if (text.isEmpty || _ctrl.running.value) return;
     if (!_agentUp) {
       _ctrl.addError(
-          'El agent-server (:${_svc.agentPort}) no responde. Arráncalo primero.');
+          'El agent-server (:${_svc.agentPort}) no responde. Arrancalo primero.');
       _scrollToBottom();
       return;
-    }
-    String imageB64 = '';
-    if (_attachedImagePath != null) {
-      try {
-        imageB64 = base64Encode(File(_attachedImagePath!).readAsBytesSync());
-      } catch (_) {}
     }
     _ctrl.send(
       text,
@@ -282,78 +153,22 @@ class _AgentDashboardState extends State<AgentDashboard> {
       baseUrl: _svc.effectiveBaseUrl,
       model: _svc.effectiveModel,
       apiKey: _svc.effectiveApiKey,
-      imageBase64: imageB64,
-      useNativeTools: _useNativeTools,
     );
     _input.clear();
-    setState(() => _attachedImagePath = null);
     _scrollToBottom();
   }
 
   void _stop() => _ctrl.stop();
 
-  Future<void> _sshTemplate(String taskTemplate) async {
-    final hostCtrl = TextEditingController();
-    final host = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _C.card,
-        title: const Text('Host remoto', style: TextStyle(color: _C.textHi)),
-        content: TextField(
-          controller: hostCtrl,
-          autofocus: true,
-          style: const TextStyle(color: _C.textHi, fontFamily: 'monospace'),
-          decoration: const InputDecoration(
-            hintText: 'usuario@ip (ej: txurtxil@192.168.10.2)',
-            hintStyle: TextStyle(color: _C.off),
-          ),
-          onSubmitted: (v) => Navigator.pop(ctx, v),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, hostCtrl.text.trim()),
-            child: const Text('Usar'),
-          ),
-        ],
-      ),
-    );
-    if (host == null || host.trim().isEmpty) return;
-    _input.text = taskTemplate.replaceAll('{host}', host.trim());
+  void _toggleAgent() {
+    final active = _agentUp || _svc.agentLaunched;
+    if (active) {
+      _svc.stopAgent();
+    } else {
+      _svc.startAgent();
+      _startBootPoll();
+    }
   }
-
-  Widget _sshChips() {
-    Widget chip(String label, String task) => ActionChip(
-          label: Text(label, style: const TextStyle(color: _C.textHi, fontSize: 12)),
-          backgroundColor: _C.card,
-          side: const BorderSide(color: _C.border),
-          onPressed: () => _sshTemplate(task),
-        );
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            chip('🩺 Salud remota',
-                'Usa ssh_exec para conectarte a {host}. Comprueba memoria (free -m), '
-                'carga (uptime o cat /proc/loadavg) y disco (df -h /). Dame un resumen breve.'),
-            const SizedBox(width: 8),
-            chip('🐳 Docker',
-                'Usa ssh_exec para conectarte a {host} y ejecuta docker ps. '
-                'Dime que contenedores estan activos y su estado.'),
-            const SizedBox(width: 8),
-            chip('🥧 Mantenimiento RPi',
-                'Usa ssh_exec para conectarte a {host}. Comprueba temperatura '
-                '(vcgencmd measure_temp si existe), espacio en disco (df -h /) '
-                'y actualizaciones pendientes (apt list --upgradable). Resume el estado.'),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ---- UI -------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -362,67 +177,6 @@ class _AgentDashboardState extends State<AgentDashboard> {
       child: Column(
         children: [
           _header(),
-          _serviceRow(),
-          _cronRow(),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: AndroidSdkCard(),
-          ),
-          const Divider(height: 1, color: _C.border),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: () => showSshLauncher(context, _input),
-                    icon: const Icon(Icons.dns, size: 16, color: _C.accent),
-                    label: const Text('Conexiones SSH',
-                        style: TextStyle(color: _C.accent, fontSize: 12)),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: _C.border),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: () => showPromptLauncher(context, _input),
-                    icon: const Icon(Icons.auto_awesome, size: 16, color: _C.accent),
-                    label: const Text('Plantillas',
-                        style: TextStyle(color: _C.accent, fontSize: 12)),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: _C.border),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                  ),
-                  FilterChip(
-                    selected: _useNativeTools,
-                    onSelected: (v) => setState(() => _useNativeTools = v),
-                    label: Text(_useNativeTools ? 'Nativo' : 'Clasico',
-                        style: TextStyle(
-                            color: _useNativeTools ? Colors.white : _C.accent,
-                            fontSize: 12)),
-                    avatar: Icon(
-                        _useNativeTools ? Icons.bolt : Icons.shield_outlined,
-                        size: 16,
-                        color: _useNativeTools ? Colors.white : _C.accent),
-                    selectedColor: _C.accent,
-                    backgroundColor: _C.card,
-                    side: const BorderSide(color: _C.border),
-                    tooltip: _useNativeTools
-                        ? 'Motor nativo: mas directo, puede saltarse pasos de juicio en tareas largas'
-                        : 'Motor clasico: mas robusto, con guardarrailes probados',
-                  ),
-                ],
-              ),
-            ),
-          ),
           Expanded(child: _chatList()),
           _inputBar(),
         ],
@@ -430,17 +184,16 @@ class _AgentDashboardState extends State<AgentDashboard> {
     );
   }
 
-  String _headerSubtitle() {
-    final p = _providerById(_svc.sourceId);
-    final m = _svc.remoteModel.isNotEmpty ? ' · ${_svc.remoteModel}' : '';
-    return '${p.label}$m';
-  }
-
   Widget _header() {
+    final agentActive = _agentUp || _svc.agentLaunched;
+    final failed = _svc.agentFailed.value;
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 4, 8),
+      padding: const EdgeInsets.fromLTRB(16, 12, 4, 8),
       child: Row(
         children: [
+          const Icon(Icons.smart_toy_outlined, color: _C.accent, size: 20),
+          const SizedBox(width: 8),
           const Text('Agente',
               style: TextStyle(
                   color: _C.textHi,
@@ -450,30 +203,66 @@ class _AgentDashboardState extends State<AgentDashboard> {
           const SizedBox(width: 10),
           Flexible(
             child: Text(
-              _headerSubtitle(),
+              _svc.currentModelLabel,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: _C.textLo, fontSize: 12.5),
+              style: const TextStyle(color: _C.textLo, fontSize: 12),
             ),
           ),
           const Spacer(),
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: failed
+                  ? _C.err
+                  : (_svc.agentStarting.value
+                      ? _C.warn
+                      : (agentActive ? _C.ok : _C.off)),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (_svc.agentStarting.value && !_agentUp)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: _C.accent),
+            )
+          else
+            IconButton(
+              tooltip: agentActive ? 'Detener agente' : 'Arrancar agente',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: _toggleAgent,
+              icon: Icon(
+                agentActive ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                size: 24,
+                color: agentActive ? _C.err : _C.ok,
+              ),
+            ),
+          const SizedBox(width: 4),
           IconButton(
-            tooltip: 'Configuración',
-            onPressed: _showConfigSheet,
+            tooltip: 'Logs del agente',
+            onPressed: () => _showLogs('agent-server', _svc.agentLog),
+            icon: Icon(
+              Icons.article_outlined,
+              size: 20,
+              color: failed ? _C.err : _C.textLo,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Ajustes',
+            onPressed: _showSettingsSheet,
             icon: const Icon(Icons.tune, size: 20, color: _C.textLo),
           ),
           IconButton(
-            tooltip: 'Fuente y modelo',
-            onPressed: _showModelSheet,
-            icon: const Icon(Icons.memory, size: 21, color: _C.textLo),
-          ),
-          IconButton(
-            tooltip: 'Conversaciones',
+            tooltip: 'Historial',
             onPressed: _showHistorySheet,
-            icon: const Icon(Icons.history, size: 21, color: _C.textLo),
+            icon: const Icon(Icons.history, size: 20, color: _C.textLo),
           ),
           if (widget.onClose != null)
             IconButton(
-              tooltip: 'Abrir terminal',
+              tooltip: 'Terminal',
               onPressed: widget.onClose,
               icon: const Icon(Icons.terminal, size: 22, color: _C.textLo),
             ),
@@ -482,174 +271,377 @@ class _AgentDashboardState extends State<AgentDashboard> {
     );
   }
 
-  Widget _serviceRow() {
-    final agentActive = _agentUp || _svc.agentLaunched;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+  Widget _chatList() {
+    return AnimatedBuilder(
+      animation: Listenable.merge([_ctrl.blocks, _ctrl.running]),
+      builder: (context, _) {
+        final blocks = _ctrl.blocks.value;
+        final running = _ctrl.running.value;
+        if (blocks.isEmpty) {
+          final hint = _agentUp
+              ? 'Escribe una tarea para el agente.\n\nEjemplo: "Crea un script en /root/hola.sh que imprima la fecha y ejecutalo".'
+              : (_svc.agentStarting.value
+                  ? 'Arrancando agent-server... espera unos segundos.'
+                  : 'Pulsa el boton verde de play para arrancar el agent-server.');
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(28),
+              child: Text(
+                hint,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: _C.off, fontSize: 13.5, height: 1.5),
+              ),
+            ),
+          );
+        }
+        _scrollToBottom();
+        return ListView.builder(
+          controller: _scroll,
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          itemCount: blocks.length + (running ? 1 : 0),
+          itemBuilder: (context, i) {
+            if (i == blocks.length) return _thinkingRow();
+            return _blockWidget(blocks[i]);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _thinkingRow() {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 12),
       child: Row(
         children: [
-          Expanded(
-            child: _remoteSourceCard(),
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _C.accent),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: _serviceCard(
-              name: 'agent-server',
-              port: _svc.agentPort,
-              up: _agentUp,
-              starting: _svc.agentStarting.value,
-              active: agentActive,
-              onToggle: () =>
-                  agentActive ? _svc.stopAgent() : _svc.startAgent(),
-              onLogs: () => _showLogs('agent-server', _svc.agentLog),
-            ),
-          ),
+          SizedBox(width: 10),
+          Text('razonando...', style: TextStyle(color: _C.textLo, fontSize: 13)),
         ],
       ),
     );
   }
 
-  Widget _cronRow() {
-    final cronActive = _svc.cronLaunched;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      child: _serviceCard(
-        name: 'cron (scheduler)',
-        port: 0,
-        up: cronActive,
-        starting: _svc.cronStarting.value,
-        active: cronActive,
-        onToggle: () => cronActive ? _svc.stopCron() : _svc.startCron(),
-        onLogs: () => _showLogs('cron', _svc.cronLog),
-      ),
-    );
-  }
+  Widget _blockWidget(ChatBlock b) {
+    switch (b.kind) {
+      case 'user':
+        return Container(
+          margin: const EdgeInsets.only(bottom: 16, top: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: _C.cardAlt,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _C.border),
+          ),
+          child: Text(b.text,
+              style: const TextStyle(color: _C.textHi, fontSize: 14, height: 1.4)),
+        );
 
-  Widget _remoteSourceCard() {
-    final p = _providerById(_svc.sourceId);
-    return InkWell(
-      onTap: _showModelSheet,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: _C.card,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _C.accent.withValues(alpha: 0.5)),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.cloud_outlined, size: 18, color: _C.accent),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      case 'thought':
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Text(
+            b.text,
+            style: const TextStyle(
+                color: _C.textLo, fontSize: 13, height: 1.45, fontStyle: FontStyle.italic),
+          ),
+        );
+
+      case 'tool':
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: _C.card,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _C.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  Text(p.label,
+                  const Icon(Icons.terminal_rounded, size: 15, color: _C.accent),
+                  const SizedBox(width: 7),
+                  Text(b.toolName ?? 'tool',
                       style: const TextStyle(
-                          color: _C.textHi,
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w500),
-                      overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 2),
-                  Text(
-                    _svc.remoteModel.isNotEmpty
-                        ? _svc.remoteModel
-                        : 'fuente remota',
-                    style: const TextStyle(color: _C.textLo, fontSize: 11.5),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                          color: _C.accent,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'monospace')),
+                  if (b.step != null) ...[
+                    const Spacer(),
+                    Text('paso ${b.step}',
+                        style: const TextStyle(color: _C.off, fontSize: 11)),
+                  ],
                 ],
               ),
-            ),
-            const Icon(Icons.chevron_right, size: 20, color: _C.off),
-          ],
-        ),
-      ),
-    );
-  }
+              if (b.toolArgs != null && b.toolArgs!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(b.toolArgs!, style: _mono.copyWith(color: _C.textHi)),
+              ],
+            ],
+          ),
+        );
 
-  Widget _serviceCard({
-    required String name,
-    required int port,
-    required bool up,
-    required bool starting,
-    required bool active,
-    required VoidCallback onToggle,
-    required VoidCallback onLogs,
-  }) {
-    final dotColor = up ? _C.ok : (starting ? _C.accent : _C.off);
-    final status = up
-        ? 'Running · :$port'
-        : (starting ? 'Arrancando…' : 'Detenido · :$port');
-    return InkWell(
-      onTap: onLogs,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: _C.card,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _C.border),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 9,
-              height: 9,
-              decoration:
-                  BoxDecoration(color: dotColor, shape: BoxShape.circle),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(name,
-                      style: const TextStyle(
-                          color: _C.textHi,
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 2),
-                  Text(status,
-                      style: TextStyle(
-                          color: up ? _C.textLo : _C.off, fontSize: 11.5)),
-                ],
-              ),
-            ),
-            if (starting && !up)
-              const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: _C.accent),
-              )
-            else
-              IconButton(
-                tooltip: active ? 'Detener' : 'Arrancar',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                onPressed: onToggle,
-                icon: Icon(
-                  active ? Icons.stop_rounded : Icons.play_arrow_rounded,
-                  size: 24,
-                  color: active ? _C.err : _C.ok,
+      case 'observation':
+        return Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          constraints: const BoxConstraints(maxHeight: 220),
+          decoration: BoxDecoration(
+            color: _C.cardAlt,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _C.border),
+          ),
+          child: SingleChildScrollView(
+            child: Text(b.text, style: _mono.copyWith(color: _C.textLo)),
+          ),
+        );
+
+      case 'final':
+        return Container(
+          margin: const EdgeInsets.only(bottom: 16, top: 4),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          decoration: BoxDecoration(
+            color: _C.card,
+            borderRadius: BorderRadius.circular(12),
+            border: const Border(
+                left: BorderSide(color: _C.accent, width: 3),
+                top: BorderSide(color: _C.border),
+                right: BorderSide(color: _C.border),
+                bottom: BorderSide(color: _C.border)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(b.text,
+                  style: const TextStyle(
+                      color: _C.textHi, fontSize: 14.5, height: 1.5)),
+              const SizedBox(height: 6),
+              InkWell(
+                onTap: () async {
+                  await Clipboard.setData(ClipboardData(text: b.text));
+                  if (mounted) _snack('Copiado');
+                },
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.copy_all, size: 14, color: _C.off),
+                    SizedBox(width: 4),
+                    Text('Copiar', style: TextStyle(color: _C.off, fontSize: 11.5)),
+                  ],
                 ),
               ),
-          ],
-        ),
-      ),
+            ],
+          ),
+        );
+
+      case 'error':
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A1D1D),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFF5A2A2A)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.error_outline, size: 16, color: _C.err),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(b.text,
+                    style: const TextStyle(
+                        color: Color(0xFFE5B5B5), fontSize: 13, height: 1.4)),
+              ),
+            ],
+          ),
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _inputBar() {
+    return AnimatedBuilder(
+      animation: _ctrl.running,
+      builder: (context, _) {
+        final running = _ctrl.running.value;
+        return Container(
+          decoration: const BoxDecoration(
+            color: _C.bg,
+            border: Border(top: BorderSide(color: _C.border)),
+          ),
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+          child: Row(
+            children: [
+              IconButton(
+                onPressed: running
+                    ? null
+                    : () async {
+                        final data = await Clipboard.getData('text/plain');
+                        final text = data?.text;
+                        if (text != null && text.isNotEmpty) {
+                          _input.text = _input.text.isEmpty
+                              ? text
+                              : '${_input.text} $text';
+                        }
+                      },
+                icon: const Icon(Icons.content_paste, size: 20, color: _C.off),
+                tooltip: 'Pegar',
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _input,
+                  enabled: !running,
+                  minLines: 1,
+                  maxLines: 6,
+                  style: const TextStyle(color: _C.textHi, fontSize: 14.5),
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _send(),
+                  decoration: InputDecoration(
+                    hintText: running ? 'Ejecutando...' : 'Tarea para el agente...',
+                    hintStyle: const TextStyle(color: _C.off, fontSize: 14),
+                    filled: true,
+                    fillColor: _C.card,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: _C.border),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: _C.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: _C.accent),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              running
+                  ? IconButton(
+                      onPressed: _stop,
+                      style: IconButton.styleFrom(
+                        backgroundColor: _C.card,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.all(12),
+                      ),
+                      icon: const Icon(Icons.stop_rounded, color: _C.err),
+                    )
+                  : IconButton(
+                      onPressed: _send,
+                      style: IconButton.styleFrom(
+                        backgroundColor: _C.accent,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.all(12),
+                      ),
+                      icon: const Icon(Icons.arrow_upward_rounded,
+                          color: Colors.white),
+                    ),
+            ],
+          ),
+        );
+      },
     );
   }
 
-  // ---- Configuración --------------------------------------------------------
+  void _showLogs(String title, ValueNotifier<List<String>> log) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _C.bg,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        final logScroll = ScrollController();
+        return SizedBox(
+          height: MediaQuery.of(ctx).size.height * 0.65,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 14, 8, 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.article_outlined,
+                        size: 18, color: _C.textLo),
+                    const SizedBox(width: 8),
+                    Text('Logs · $title',
+                        style: const TextStyle(
+                            color: _C.textHi,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    IconButton(
+                      tooltip: 'Limpiar',
+                      onPressed: () => log.value = [],
+                      icon: const Icon(Icons.delete_outline,
+                          size: 20, color: _C.textLo),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: const Icon(Icons.close, size: 20, color: _C.textLo),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: _C.border),
+              Expanded(
+                child: ValueListenableBuilder<List<String>>(
+                  valueListenable: log,
+                  builder: (_, lines, __) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (logScroll.hasClients) {
+                        logScroll.jumpTo(logScroll.position.maxScrollExtent);
+                      }
+                    });
+                    if (lines.isEmpty) {
+                      return const Center(
+                        child: Text('Sin logs todavia.',
+                            style: TextStyle(color: _C.off, fontSize: 13)),
+                      );
+                    }
+                    return ListView.builder(
+                      controller: logScroll,
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                      itemCount: lines.length,
+                      itemBuilder: (_, i) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1),
+                        child: Text(lines[i],
+                            style: _mono.copyWith(color: _C.textLo)),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
-  void _showConfigSheet() {
+  void _showSettingsSheet() {
+    final baseUrlCtrl = TextEditingController(text: _svc.remoteBaseUrl);
+    final modelCtrl = TextEditingController(text: _svc.remoteModel);
+    final keyCtrl = TextEditingController(text: _svc.remoteApiKey);
+    bool obscureKey = true;
+
     double temp = _svc.temp;
     double topP = _svc.topP;
     int topK = _svc.topK;
-    final agentPortCtrl =
-        TextEditingController(text: _svc.agentPort.toString());
+    final agentPortCtrl = TextEditingController(text: _svc.agentPort.toString());
 
     showModalBottomSheet(
       context: context,
@@ -665,7 +657,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
               padding: EdgeInsets.only(
                   bottom: MediaQuery.of(ctx).viewInsets.bottom),
               child: SizedBox(
-                height: MediaQuery.of(ctx).size.height * 0.85,
+                height: MediaQuery.of(ctx).size.height * 0.92,
                 child: Column(
                   children: [
                     Padding(
@@ -674,7 +666,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
                         children: [
                           const Icon(Icons.tune, size: 19, color: _C.textLo),
                           const SizedBox(width: 8),
-                          const Text('Configuración',
+                          const Text('Ajustes',
                               style: TextStyle(
                                   color: _C.textHi,
                                   fontSize: 16,
@@ -689,8 +681,7 @@ class _AgentDashboardState extends State<AgentDashboard> {
                               agentPortCtrl.text = _svc.agentPort.toString();
                             }),
                             child: const Text('Restablecer',
-                                style: TextStyle(
-                                    color: _C.textLo, fontSize: 12.5)),
+                                style: TextStyle(color: _C.textLo, fontSize: 12.5)),
                           ),
                           IconButton(
                             onPressed: () => Navigator.pop(ctx),
@@ -705,44 +696,415 @@ class _AgentDashboardState extends State<AgentDashboard> {
                       child: ListView(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                         children: [
+                          _cfgLabel('Fuente de inferencia'),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              _sourceChip('gpu_local', 'GPU Local', setS, baseUrlCtrl, modelCtrl),
+                              _sourceChip('custom', 'Personalizado', setS, baseUrlCtrl, modelCtrl),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
 
-                          _cfgLabel('Muestreo'),
-                          const SizedBox(height: 6),
+                          if (_selSource == 'gpu_local') ...[
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: _C.cardAlt,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: _C.border),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.memory, size: 16, color: _C.accent),
+                                      const SizedBox(width: 8),
+                                      const Text('GPU Local · MediaPipe',
+                                          style: TextStyle(
+                                              color: _C.textHi,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600)),
+                                      const Spacer(),
+                                      if (_svc.mpServerRunning)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: _C.ok.withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: const Text(':8090',
+                                              style: TextStyle(
+                                                  color: _C.ok, fontSize: 11, fontWeight: FontWeight.w600)),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  if (_svc.mpModels.isEmpty)
+                                    Container(
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: _C.card,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: _C.border),
+                                      ),
+                                      child: Text(
+                                        'No hay modelos en:\n${_svc.mpModelsDir ?? "(carpeta de modelos)"}\n\n'
+                                        'Copia un .task (ej: gemma3-1b-it-int4.task) y recarga.',
+                                        style: const TextStyle(color: _C.textLo, fontSize: 11.5, height: 1.45),
+                                      ),
+                                    )
+                                  else
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        color: _C.card,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: _C.border),
+                                      ),
+                                      child: Column(
+                                        children: _svc.mpModels.map((m) {
+                                          final p = m.path;
+                                          final name = p.split('/').last;
+                                          final selected = p == _svc.mpSelectedPath;
+                                          return InkWell(
+                                            onTap: _svc.mpLoaded ? null : () => setS(() => _svc.mpSelectedPath = p),
+                                            child: Padding(
+                                              padding: const EdgeInsets.only(left: 10, right: 4, top: 6, bottom: 6),
+                                              child: Row(
+                                                children: [
+                                                  Icon(
+                                                    selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                                                    size: 16,
+                                                    color: selected ? _C.accent : _C.textLo,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Expanded(
+                                                    child: Text(name,
+                                                        style: TextStyle(
+                                                            color: selected ? _C.textHi : _C.textLo,
+                                                            fontSize: 12),
+                                                        overflow: TextOverflow.ellipsis),
+                                                  ),
+                                                  IconButton(
+                                                    icon: const Icon(Icons.delete_outline, size: 16, color: _C.err),
+                                                    padding: EdgeInsets.zero,
+                                                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                                    onPressed: () async {
+                                                      await _svc.deleteMpModel(p);
+                                                      if (mounted) setS(() {});
+                                                    },
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        }).toList(),
+                                      ),
+                                    ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      TextButton.icon(
+                                        onPressed: () async {
+                                          await _svc.importMpModel();
+                                          if (mounted) setS(() {});
+                                        },
+                                        icon: const Icon(Icons.file_download_outlined, size: 15, color: _C.accent),
+                                        label: const Text('Importar', style: TextStyle(color: _C.accent, fontSize: 12)),
+                                      ),
+                                      TextButton.icon(
+                                        onPressed: () async {
+                                          await _svc.scanMpModels();
+                                          if (mounted) setS(() {});
+                                        },
+                                        icon: const Icon(Icons.refresh, size: 15, color: _C.textLo),
+                                        label: const Text('Recargar', style: TextStyle(color: _C.textLo, fontSize: 12)),
+                                      ),
+                                      const Spacer(),
+                                      const Text('Backend:', style: TextStyle(color: _C.textLo, fontSize: 11.5)),
+                                      const SizedBox(width: 6),
+                                      ToggleButtons(
+                                        isSelected: [_svc.mpUseGpu, !_svc.mpUseGpu],
+                                        onPressed: _svc.mpLoaded
+                                            ? null
+                                            : (i) => setS(() => _svc.mpUseGpu = i == 0),
+                                        borderRadius: BorderRadius.circular(6),
+                                        borderColor: _C.border,
+                                        selectedBorderColor: _C.accent,
+                                        fillColor: _C.accent,
+                                        color: _C.textLo,
+                                        selectedColor: Colors.white,
+                                        constraints: const BoxConstraints(minHeight: 28, minWidth: 44),
+                                        children: const [
+                                          Text('GPU', style: TextStyle(fontSize: 11)),
+                                          Text('CPU', style: TextStyle(fontSize: 11)),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: ElevatedButton.icon(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: _svc.mpLoaded ? _C.card : _C.accent,
+                                            foregroundColor: _svc.mpLoaded ? _C.textLo : Colors.white,
+                                            padding: const EdgeInsets.symmetric(vertical: 10),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          ),
+                                          icon: _svc.mpLoading
+                                              ? const SizedBox(width: 14, height: 14,
+                                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                              : Icon(_svc.mpLoaded ? Icons.check : Icons.bolt, size: 16),
+                                          label: Text(_svc.mpLoaded ? 'Cargado' : 'Cargar'),
+                                          onPressed: (_svc.mpLoading || _svc.mpLoaded) ? null : () async {
+                                            await _svc.loadMpModel();
+                                            if (mounted) setS(() {});
+                                          },
+                                        ),
+                                      ),
+                                      if (_svc.mpLoaded) ...[
+                                        const SizedBox(width: 8),
+                                        OutlinedButton(
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: _C.err,
+                                            side: const BorderSide(color: _C.border),
+                                            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+                                          ),
+                                          onPressed: () async {
+                                            await _svc.unloadMpModel();
+                                            if (mounted) setS(() {});
+                                          },
+                                          child: const Text('Liberar', style: TextStyle(fontSize: 12)),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: _C.card,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: _C.border),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          _svc.mpLoaded ? Icons.check_circle : Icons.info_outline,
+                                          size: 14,
+                                          color: _svc.mpLoaded ? _C.ok : _C.textLo,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(_svc.mpStatus,
+                                              style: const TextStyle(color: _C.textLo, fontSize: 11.5, height: 1.4)),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (_svc.mpLoaded) ...[
+                                    const SizedBox(height: 10),
+                                    TextField(
+                                      controller: _mpPrompt,
+                                      minLines: 1,
+                                      maxLines: 3,
+                                      style: const TextStyle(color: _C.textHi, fontSize: 13),
+                                      decoration: InputDecoration(
+                                        filled: true,
+                                        fillColor: _C.card,
+                                        contentPadding: const EdgeInsets.all(10),
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                          borderSide: const BorderSide(color: _C.border),
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                          borderSide: const BorderSide(color: _C.border),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                          borderSide: const BorderSide(color: _C.accent),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: ElevatedButton.icon(
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: _C.accent,
+                                              foregroundColor: Colors.white,
+                                              padding: const EdgeInsets.symmetric(vertical: 10),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                            ),
+                                            icon: _svc.mpGenerating
+                                                ? const SizedBox(width: 14, height: 14,
+                                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                                : const Icon(Icons.play_arrow_rounded, size: 16),
+                                            label: Text(_svc.mpGenerating ? 'Generando...' : 'Probar'),
+                                            onPressed: (!_svc.mpLoaded || _svc.mpGenerating)
+                                                ? null
+                                                : () async {
+                                                    await _svc.generateMpTest(_mpPrompt.text);
+                                                    if (mounted) setS(() {});
+                                                  },
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: ElevatedButton.icon(
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: _svc.mpServerRunning ? _C.card : _C.accent,
+                                              foregroundColor: _svc.mpServerRunning ? _C.textLo : Colors.white,
+                                              padding: const EdgeInsets.symmetric(vertical: 10),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                            ),
+                                            icon: Icon(
+                                                _svc.mpServerRunning ? Icons.stop : Icons.play_arrow_rounded, size: 16),
+                                            label: Text(_svc.mpServerRunning ? 'Detener :8090' : 'Iniciar :8090'),
+                                            onPressed: _svc.mpServerBusy
+                                                ? null
+                                                : () async {
+                                                    if (_svc.mpServerRunning) {
+                                                      await _svc.stopMpServer();
+                                                    } else {
+                                                      await _svc.startMpServer();
+                                                    }
+                                                    if (mounted) setS(() {});
+                                                  },
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (_svc.mpStats.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                        decoration: BoxDecoration(
+                                          color: _C.accent.withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: _C.accent.withValues(alpha: 0.4)),
+                                        ),
+                                        child: Text(_svc.mpStats,
+                                            style: const TextStyle(
+                                                color: _C.accent,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                                fontFamily: 'monospace')),
+                                      ),
+                                    ],
+                                    if (_svc.mpOutput.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(10),
+                                        decoration: BoxDecoration(
+                                          color: _C.card,
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: _C.border),
+                                        ),
+                                        child: SelectableText(_svc.mpOutput,
+                                            style: const TextStyle(color: _C.textHi, fontSize: 12.5, height: 1.45)),
+                                      ),
+                                    ],
+                                  ],
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                          ],
+
+                          if (_selSource == 'custom') ...[
+                            _cfgLabel('URL base'),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: baseUrlCtrl,
+                              style: const TextStyle(
+                                  color: _C.textHi, fontSize: 13, fontFamily: 'monospace'),
+                              decoration: _fieldDeco(hint: 'https://.../v1'),
+                            ),
+                            const SizedBox(height: 14),
+                            _cfgLabel('Modelo'),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: modelCtrl,
+                              style: const TextStyle(
+                                  color: _C.textHi, fontSize: 13, fontFamily: 'monospace'),
+                              decoration: _fieldDeco(hint: 'nombre-del-modelo'),
+                            ),
+                            const SizedBox(height: 14),
+                            _cfgLabel('API key'),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: keyCtrl,
+                              obscureText: obscureKey,
+                              style: const TextStyle(
+                                  color: _C.textHi, fontSize: 13, fontFamily: 'monospace'),
+                              decoration: _fieldDeco(hint: '(opcional)').copyWith(
+                                suffixIcon: IconButton(
+                                  icon: Icon(
+                                      obscureKey ? Icons.visibility_off : Icons.visibility,
+                                      size: 18, color: _C.off),
+                                  onPressed: () => setS(() => obscureKey = !obscureKey),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'La key se guarda solo en la app (no en el rootfs) y se inyecta al agente como variable de entorno efimera.',
+                              style: TextStyle(color: _C.off, fontSize: 11, height: 1.4),
+                            ),
+                            const SizedBox(height: 18),
+                          ],
+
+                          const Divider(color: _C.border),
+                          const SizedBox(height: 14),
+                          _cfgLabel('Parametros de inferencia'),
+                          const SizedBox(height: 10),
                           _cfgSlider('Temperature', temp, 0.0, 2.0, 40,
-                              temp.toStringAsFixed(2),
-                              (v) => setS(() => temp = v)),
+                              temp.toStringAsFixed(2), (v) => setS(() => temp = v)),
                           _cfgSlider('Top-p', topP, 0.0, 1.0, 20,
-                              topP.toStringAsFixed(2),
-                              (v) => setS(() => topP = v)),
+                              topP.toStringAsFixed(2), (v) => setS(() => topP = v)),
                           const SizedBox(height: 6),
                           _cfgStepper('Top-k', topK, 1, 100, 4,
                               (v) => setS(() => topK = v)),
-                          const SizedBox(height: 22),
-                          _cfgLabel('Puertos'),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'agent_server.py los lee como LLAMA_PORT / AGENT_PORT.',
-                            style: TextStyle(
-                                color: _C.off, fontSize: 11.5, height: 1.4),
+                          const SizedBox(height: 18),
+                          _cfgLabel('Puerto agent-server'),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: agentPortCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(
+                                color: _C.textHi, fontSize: 14, fontFamily: 'monospace'),
+                            decoration: _fieldDeco(),
                           ),
-                          const SizedBox(height: 10),
-
-                          _cfgPortField('agent-server', agentPortCtrl),
-                          const SizedBox(height: 22),
+                          const SizedBox(height: 24),
                           SizedBox(
                             width: double.infinity,
                             child: ElevatedButton.icon(
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: _C.accent,
                                 foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 13),
+                                padding: const EdgeInsets.symmetric(vertical: 13),
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(10)),
                               ),
                               icon: const Icon(Icons.save_outlined, size: 18),
                               label: const Text('Guardar'),
                               onPressed: () async {
+                                await _svc.setSource(
+                                  id: _selSource,
+                                  baseUrl: baseUrlCtrl.text.trim(),
+                                  model: modelCtrl.text.trim(),
+                                  apiKey: keyCtrl.text.trim(),
+                                );
                                 _svc.temp = temp;
                                 _svc.topP = topP;
                                 _svc.topK = topK;
@@ -753,9 +1115,8 @@ class _AgentDashboardState extends State<AgentDashboard> {
                                 final wasAgent = _svc.agentLaunched;
                                 if (wasAgent) _svc.stopAgent();
                                 if (mounted) setState(() {});
-                                if (ctx.mounted) Navigator.pop(ctx);
-                                _snack(
-                                    'Configuración guardada. Reinicia los servicios para aplicar.');
+                                if (mounted) Navigator.pop(ctx);
+                                _snack('Ajustes guardados. Reinicia el agente para aplicar.');
                               },
                             ),
                           ),
@@ -769,6 +1130,221 @@ class _AgentDashboardState extends State<AgentDashboard> {
           },
         );
       },
+    );
+  }
+
+  Widget _sourceChip(String id, String label, StateSetter setS,
+      TextEditingController baseCtrl, TextEditingController modelCtrl) {
+    final selected = id == _selSource;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      showCheckmark: false,
+      labelStyle: TextStyle(
+        color: selected ? Colors.white : _C.textLo,
+        fontSize: 12.5,
+      ),
+      backgroundColor: _C.card,
+      selectedColor: _C.accent,
+      side: BorderSide(color: selected ? _C.accent : _C.border),
+      onSelected: (_) {
+        setState(() => _selSource = id);
+        setS(() {
+          if (id == 'gpu_local') {
+            baseCtrl.text = 'http://127.0.0.1:8090/v1';
+            modelCtrl.text = 'gemma3-local';
+          }
+        });
+      },
+    );
+  }
+
+  void _showHistorySheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _C.bg,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setS) {
+          return SizedBox(
+            height: MediaQuery.of(ctx).size.height * 0.7,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 8, 8),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.history, size: 19, color: _C.textLo),
+                      const SizedBox(width: 8),
+                      const Text('Conversaciones',
+                          style: TextStyle(
+                              color: _C.textHi,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600)),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        icon: const Icon(Icons.close,
+                            size: 20, color: _C.textLo),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1, color: _C.border),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _C.accent,
+                            side: const BorderSide(color: _C.border),
+                            padding: const EdgeInsets.symmetric(vertical: 11),
+                          ),
+                          icon: const Icon(Icons.save_outlined, size: 17),
+                          label: const Text('Guardar actual'),
+                          onPressed: _ctrl.blocks.value.isEmpty
+                              ? null
+                              : () async {
+                                  final name = await _promptName();
+                                  if (name == null) return;
+                                  await _ctrl.saveAs(name);
+                                  setS(() {});
+                                  _snack('Conversacion guardada.');
+                                },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _C.textLo,
+                            side: const BorderSide(color: _C.border),
+                            padding: const EdgeInsets.symmetric(vertical: 11),
+                          ),
+                          icon: const Icon(Icons.add_comment_outlined, size: 17),
+                          label: const Text('Nueva'),
+                          onPressed: () {
+                            _ctrl.clear();
+                            if (mounted) setState(() {});
+                            Navigator.pop(ctx);
+                            _snack('Nueva conversacion.');
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 8, 16, 6),
+                    child: _cfgLabel('Guardadas'),
+                  ),
+                ),
+                Expanded(
+                  child: FutureBuilder<List<SavedChat>>(
+                    future: _ctrl.listSaved(),
+                    builder: (_, snap) {
+                      if (snap.connectionState != ConnectionState.done) {
+                        return const Center(
+                            child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: _C.accent)));
+                      }
+                      final saved = snap.data ?? [];
+                      if (saved.isEmpty) {
+                        return const Center(
+                          child: Text('No hay conversaciones guardadas.',
+                              style: TextStyle(color: _C.off, fontSize: 13)),
+                        );
+                      }
+                      return ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        itemCount: saved.length,
+                        itemBuilder: (_, i) {
+                          final sc = saved[i];
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            decoration: BoxDecoration(
+                              color: _C.card,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: _C.border),
+                            ),
+                            child: ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.chat_bubble_outline,
+                                  color: _C.textLo, size: 18),
+                              title: Text(sc.name,
+                                  style: const TextStyle(
+                                      color: _C.textHi, fontSize: 13.5),
+                                  overflow: TextOverflow.ellipsis),
+                              subtitle: Text(sc.dateLabel,
+                                  style: const TextStyle(
+                                      color: _C.off, fontSize: 11.5)),
+                              trailing: IconButton(
+                                icon: const Icon(Icons.delete_outline,
+                                    size: 19, color: _C.off),
+                                onPressed: () async {
+                                  await _ctrl.deleteSaved(sc.path);
+                                  setS(() {});
+                                },
+                              ),
+                              onTap: () async {
+                                await _ctrl.loadSaved(sc.path);
+                                if (mounted) setState(() {});
+                                if (!mounted) return;
+                                Navigator.pop(ctx);
+                                _scrollToBottom();
+                                _snack('Conversacion cargada.');
+                              },
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  Future<String?> _promptName() {
+    final c = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _C.card,
+        title: const Text('Guardar conversacion',
+            style: TextStyle(color: _C.textHi, fontSize: 16)),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          style: const TextStyle(color: _C.textHi),
+          decoration: _fieldDeco(hint: 'Nombre'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: _C.textLo)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, c.text.trim()),
+            child: const Text('Guardar', style: TextStyle(color: _C.accent)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -857,59 +1433,6 @@ class _AgentDashboardState extends State<AgentDashboard> {
     );
   }
 
-  Widget _cfgChips(String label, List<String> opts, String sel,
-      ValueChanged<String> onSel) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(color: _C.textHi, fontSize: 14)),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          children: opts.map((o) {
-            final selected = o == sel;
-            return ChoiceChip(
-              label: Text(o),
-              selected: selected,
-              showCheckmark: false,
-              labelStyle: TextStyle(
-                color: selected ? Colors.white : _C.textLo,
-                fontSize: 13,
-                fontFamily: 'monospace',
-              ),
-              backgroundColor: _C.card,
-              selectedColor: _C.accent,
-              side: BorderSide(color: selected ? _C.accent : _C.border),
-              onSelected: (_) => onSel(o),
-            );
-          }).toList(),
-        ),
-      ],
-    );
-  }
-
-  Widget _cfgPortField(String label, TextEditingController c) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 120,
-          child: Text(label,
-              style: const TextStyle(color: _C.textHi, fontSize: 14)),
-        ),
-        Expanded(
-          child: TextField(
-            controller: c,
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            style: const TextStyle(
-                color: _C.textHi, fontSize: 14, fontFamily: 'monospace'),
-            decoration: _fieldDeco(),
-          ),
-        ),
-      ],
-    );
-  }
-
   InputDecoration _fieldDeco({String? hint}) {
     return InputDecoration(
       isDense: true,
@@ -931,837 +1454,6 @@ class _AgentDashboardState extends State<AgentDashboard> {
         borderRadius: BorderRadius.circular(8),
         borderSide: const BorderSide(color: _C.accent),
       ),
-    );
-  }
-
-  // ---- Fuente + modelo ------------------------------------------------------
-
-  // ignore: use_build_context_synchronously
-  void openModelSheet() => _showModelSheet();
-  void _showModelSheet() {
-    String selSource = _svc.sourceId;
-    final baseUrlCtrl = TextEditingController(text: _svc.remoteBaseUrl);
-    final modelCtrl = TextEditingController(text: _svc.remoteModel);
-    final keyCtrl = TextEditingController(text: _svc.remoteApiKey);
-    final hfController = TextEditingController(text: _svc.llamaModelRef);
-    bool obscureKey = true;
-
-    void applyPreset(_Provider p) {
-      baseUrlCtrl.text = p.baseUrl;
-      modelCtrl.text = p.models.isNotEmpty ? p.models.first : '';
-    }
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: _C.bg,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setS) {
-          final prov = _providerById(selSource);
-          return Padding(
-            padding:
-                EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-            child: SizedBox(
-              height: MediaQuery.of(ctx).size.height * 0.85,
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 14, 8, 8),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.memory, size: 19, color: _C.textLo),
-                        const SizedBox(width: 8),
-                        const Text('Fuente y modelo',
-                            style: TextStyle(
-                                color: _C.textHi,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600)),
-                        const Spacer(),
-                        IconButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          icon: const Icon(Icons.close,
-                              size: 20, color: _C.textLo),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1, color: _C.border),
-                  Expanded(
-                    child: ListView(
-                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-                      children: [
-                        _cfgLabel('Fuente de inferencia'),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: _providers.map((p) {
-                            final selected = p.id == selSource;
-                            return ChoiceChip(
-                              label: Text(p.label),
-                              selected: selected,
-                              showCheckmark: false,
-                              labelStyle: TextStyle(
-                                color: selected ? Colors.white : _C.textLo,
-                                fontSize: 12.5,
-                              ),
-                              backgroundColor: _C.card,
-                              selectedColor: _C.accent,
-                              side: BorderSide(
-                                  color: selected ? _C.accent : _C.border),
-                              onSelected: (_) => setS(() {
-                                selSource = p.id;
-                                applyPreset(p);
-                              }),
-                            );
-                          }).toList(),
-                        ),
-                        const SizedBox(height: 18),
-                        ..._remoteSection(
-                              ctx, prov, baseUrlCtrl, modelCtrl, keyCtrl,
-                              obscureKey, () => setS(() => obscureKey = !obscureKey),
-                              selSource),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        });
-      },
-    );
-  }
-
-  List<Widget> _remoteSection(
-    BuildContext ctx,
-    _Provider prov,
-    TextEditingController baseUrlCtrl,
-    TextEditingController modelCtrl,
-    TextEditingController keyCtrl,
-    bool obscureKey,
-    VoidCallback toggleObscure,
-    String selSource,
-  ) {
-    return [
-      if (selSource == 'gpu_local') ...[
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          icon: const Icon(Icons.bolt, color: Colors.orangeAccent),
-          label: const Text('Gestionar modelo .task y servidor GPU',
-              style: TextStyle(color: Colors.orangeAccent)),
-          style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: Colors.orangeAccent),
-            minimumSize: const Size(double.infinity, 48),
-          ),
-          onPressed: () {
-            Navigator.pop(ctx);
-            Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const MediaPipeTestScreen()),
-            );
-          },
-        ),
-        const SizedBox(height: 16),
-      ],
-      if (prov.note.isNotEmpty)
-        Container(
-          margin: const EdgeInsets.only(bottom: 16),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: _C.cardAlt,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _C.border),
-          ),
-          child: Text(prov.note,
-              style:
-                  const TextStyle(color: _C.textLo, fontSize: 12.5, height: 1.45)),
-        ),
-      _cfgLabel('URL base'),
-      const SizedBox(height: 8),
-      TextField(
-        controller: baseUrlCtrl,
-        enabled: prov.editableUrl,
-        style: const TextStyle(
-            color: _C.textHi, fontSize: 13, fontFamily: 'monospace'),
-        decoration: _fieldDeco(hint: 'https://.../v1'),
-      ),
-      const SizedBox(height: 16),
-      _cfgLabel('Modelo'),
-      const SizedBox(height: 8),
-      TextField(
-        controller: modelCtrl,
-        style: const TextStyle(
-            color: _C.textHi, fontSize: 13, fontFamily: 'monospace'),
-        decoration: _fieldDeco(hint: 'nombre-del-modelo'),
-      ),
-      if (prov.models.isNotEmpty) ...[
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: prov.models
-              .map((m) => ActionChip(
-                    label: Text(m, style: const TextStyle(fontSize: 11)),
-                    backgroundColor: _C.cardAlt,
-                    labelStyle: const TextStyle(color: _C.textLo),
-                    side: const BorderSide(color: _C.border),
-                    onPressed: () => modelCtrl.text = m,
-                  ))
-              .toList(),
-        ),
-      ],
-      const SizedBox(height: 16),
-      _cfgLabel('API key'),
-      const SizedBox(height: 8),
-      TextField(
-        controller: keyCtrl,
-        obscureText: obscureKey,
-        style: const TextStyle(
-            color: _C.textHi, fontSize: 13, fontFamily: 'monospace'),
-        decoration: _fieldDeco(hint: '(opcional)')
-            .copyWith(
-          suffixIcon: IconButton(
-            icon: Icon(obscureKey ? Icons.visibility_off : Icons.visibility,
-                size: 18, color: _C.off),
-            onPressed: toggleObscure,
-          ),
-        ),
-      ),
-      const SizedBox(height: 6),
-      const Text(
-        'La key se guarda solo en la app (no en el rootfs) y se inyecta al '
-        'agente como variable de entorno efímera.',
-        style: TextStyle(color: _C.off, fontSize: 11, height: 1.4),
-      ),
-      const SizedBox(height: 18),
-      SizedBox(
-        width: double.infinity,
-        child: ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _C.accent,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 13),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10)),
-          ),
-          icon: const Icon(Icons.cloud_done_outlined, size: 18),
-          label: const Text('Usar esta fuente'),
-          onPressed: () async {
-            final base = baseUrlCtrl.text.trim();
-            if (base.isEmpty) {
-              _snack('Indica la URL base (acaba en /v1).');
-              return;
-            }
-            await _svc.setRemoteSource(
-              id: selSource,
-              baseUrl: base,
-              model: modelCtrl.text.trim(),
-              apiKey: keyCtrl.text.trim(),
-            );
-            final wasLlama = _svc.llamaLaunched;
-            final wasAgent = _svc.agentLaunched;
-            if (wasLlama) _svc.stopLlama();
-            if (wasAgent) _svc.stopAgent();
-            if (mounted) setState(() {});
-            if (ctx.mounted) Navigator.pop(ctx);
-            _snack('Fuente remota activa. Arranca el agent-server.');
-          },
-        ),
-      ),
-    ];
-  }
-
-
-
-  void _showLogs(String title, ValueNotifier<List<String>> log) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: _C.bg,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        final logScroll = ScrollController();
-        return SizedBox(
-          height: MediaQuery.of(ctx).size.height * 0.6,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 14, 8, 8),
-                child: Row(
-                  children: [
-                    const Icon(Icons.article_outlined,
-                        size: 18, color: _C.textLo),
-                    const SizedBox(width: 8),
-                    Text('Logs · $title',
-                        style: const TextStyle(
-                            color: _C.textHi,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600)),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: 'Limpiar',
-                      onPressed: () => log.value = [],
-                      icon: const Icon(Icons.delete_outline,
-                          size: 20, color: _C.textLo),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: const Icon(Icons.close, size: 20, color: _C.textLo),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1, color: _C.border),
-              Expanded(
-                child: ValueListenableBuilder<List<String>>(
-                  valueListenable: log,
-                  builder: (_, lines, __) {
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (logScroll.hasClients) {
-                        logScroll.jumpTo(logScroll.position.maxScrollExtent);
-                      }
-                    });
-                    if (lines.isEmpty) {
-                      return const Center(
-                        child: Text('Sin logs todavía.',
-                            style: TextStyle(color: _C.off, fontSize: 13)),
-                      );
-                    }
-                    return ListView.builder(
-                      controller: logScroll,
-                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                      itemCount: lines.length,
-                      itemBuilder: (_, i) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 1),
-                        child: Text(lines[i],
-                            style: _mono.copyWith(color: _C.textLo)),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  // ---- Historial de conversaciones -----------------------------------------
-
-  Future<String?> _promptName() {
-    final c = TextEditingController();
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _C.card,
-        title: const Text('Guardar conversación',
-            style: TextStyle(color: _C.textHi, fontSize: 16)),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          style: const TextStyle(color: _C.textHi),
-          decoration: _fieldDeco(hint: 'Nombre'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar', style: TextStyle(color: _C.textLo)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, c.text.trim()),
-            child: const Text('Guardar', style: TextStyle(color: _C.accent)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showHistorySheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: _C.bg,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setS) {
-          return SizedBox(
-            height: MediaQuery.of(ctx).size.height * 0.7,
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 14, 8, 8),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.history, size: 19, color: _C.textLo),
-                      const SizedBox(width: 8),
-                      const Text('Conversaciones',
-                          style: TextStyle(
-                              color: _C.textHi,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600)),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        icon: const Icon(Icons.close,
-                            size: 20, color: _C.textLo),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1, color: _C.border),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _C.accent,
-                            side: const BorderSide(color: _C.border),
-                            padding: const EdgeInsets.symmetric(vertical: 11),
-                          ),
-                          icon: const Icon(Icons.save_outlined, size: 17),
-                          label: const Text('Guardar actual'),
-                          onPressed: _ctrl.blocks.value.isEmpty
-                              ? null
-                              : () async {
-                                  final name = await _promptName();
-                                  if (name == null) return;
-                                  await _ctrl.saveAs(name);
-                                  setS(() {});
-                                  _snack('Conversación guardada.');
-                                },
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _C.textLo,
-                            side: const BorderSide(color: _C.border),
-                            padding: const EdgeInsets.symmetric(vertical: 11),
-                          ),
-                          icon: const Icon(Icons.add_comment_outlined, size: 17),
-                          label: const Text('Nueva'),
-                          onPressed: () {
-                            _ctrl.clear();
-                            if (mounted) setState(() {});
-                            Navigator.pop(ctx);
-                            _snack('Conversación nueva.');
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 8, 16, 6),
-                    child: _cfgLabel('Guardadas'),
-                  ),
-                ),
-                Expanded(
-                  child: FutureBuilder<List<SavedChat>>(
-                    future: _ctrl.listSaved(),
-                    builder: (_, snap) {
-                      if (snap.connectionState != ConnectionState.done) {
-                        return const Center(
-                            child: SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: _C.accent)));
-                      }
-                      final saved = snap.data ?? [];
-                      if (saved.isEmpty) {
-                        return const Center(
-                          child: Text('No hay conversaciones guardadas.',
-                              style: TextStyle(color: _C.off, fontSize: 13)),
-                        );
-                      }
-                      return ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        itemCount: saved.length,
-                        itemBuilder: (_, i) {
-                          final sc = saved[i];
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            decoration: BoxDecoration(
-                              color: _C.card,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: _C.border),
-                            ),
-                            child: ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.chat_bubble_outline,
-                                  color: _C.textLo, size: 18),
-                              title: Text(sc.name,
-                                  style: const TextStyle(
-                                      color: _C.textHi, fontSize: 13.5),
-                                  overflow: TextOverflow.ellipsis),
-                              subtitle: Text(sc.dateLabel,
-                                  style: const TextStyle(
-                                      color: _C.off, fontSize: 11.5)),
-                              trailing: IconButton(
-                                icon: const Icon(Icons.delete_outline,
-                                    size: 19, color: _C.off),
-                                onPressed: () async {
-                                  await _ctrl.deleteSaved(sc.path);
-                                  setS(() {});
-                                },
-                              ),
-                              onTap: () async {
-                                await _ctrl.loadSaved(sc.path);
-                                if (mounted) setState(() {});
-      if (!mounted) return;
-                                Navigator.pop(ctx);
-                                _scrollToBottom();
-                                _snack('Conversación cargada.');
-                              },
-                            ),
-                          );
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          );
-        });
-      },
-    );
-  }
-
-  Widget _chatList() {
-    return AnimatedBuilder(
-      animation: Listenable.merge([_ctrl.blocks, _ctrl.running]),
-      builder: (context, _) {
-        final blocks = _ctrl.blocks.value;
-        final running = _ctrl.running.value;
-        if (blocks.isEmpty) {
-          final hint = _agentUp
-              ? 'Escribe una tarea para el agente.\nP. ej. "Crea un script en /root/scripts/hola.sh que imprima la fecha y ejecútalo".'
-              : (_svc.usingRemote
-                  ? 'Fuente remota activa.\nArranca solo el agent-server con el botón ▶.'
-                  : 'Arranca llama-server y agent-server\ncon los botones de arriba.');
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(28),
-              child: Text(
-                hint,
-                textAlign: TextAlign.center,
-                style:
-                    const TextStyle(color: _C.off, fontSize: 13.5, height: 1.5),
-              ),
-            ),
-          );
-        }
-        _scrollToBottom();
-        return ListView.builder(
-          controller: _scroll,
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-          itemCount: blocks.length + (running ? 1 : 0),
-          itemBuilder: (context, i) {
-            if (i == blocks.length) return _thinkingRow();
-            return _blockWidget(blocks[i]);
-          },
-        );
-      },
-    );
-  }
-
-  Widget _thinkingRow() {
-    return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 12),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 14,
-            height: 14,
-            child:
-                CircularProgressIndicator(strokeWidth: 2, color: _C.accent),
-          ),
-          SizedBox(width: 10),
-          Text('razonando…', style: TextStyle(color: _C.textLo, fontSize: 13)),
-        ],
-      ),
-    );
-  }
-
-  Widget _blockWidget(ChatBlock b) {
-    switch (b.kind) {
-      case 'user':
-        return Container(
-          margin: const EdgeInsets.only(bottom: 16, top: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: _C.cardAlt,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _C.border),
-          ),
-          child: Text(b.text,
-              style:
-                  const TextStyle(color: _C.textHi, fontSize: 14, height: 1.4)),
-        );
-
-      case 'thought':
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Text(
-            b.text,
-            style: const TextStyle(
-                color: _C.textLo,
-                fontSize: 13,
-                height: 1.45,
-                fontStyle: FontStyle.italic),
-          ),
-        );
-
-      case 'tool':
-        return Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: _C.card,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _C.border),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.terminal_rounded, size: 15, color: _C.accent),
-                  const SizedBox(width: 7),
-                  Text(b.toolName ?? 'tool',
-                      style: const TextStyle(
-                          color: _C.accent,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
-                          fontFamily: 'monospace')),
-                  if (b.step != null) ...[
-                    const Spacer(),
-                    Text('paso ${b.step}',
-                        style: const TextStyle(color: _C.off, fontSize: 11)),
-                  ],
-                ],
-              ),
-              if (b.toolArgs != null && b.toolArgs!.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(b.toolArgs!, style: _mono.copyWith(color: _C.textHi)),
-              ],
-            ],
-          ),
-        );
-
-      case 'observation':
-        return Container(
-          margin: const EdgeInsets.only(bottom: 16),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          constraints: const BoxConstraints(maxHeight: 220),
-          decoration: BoxDecoration(
-            color: _C.cardAlt,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _C.border),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Flexible(
-                child: SingleChildScrollView(
-                  child: Text(b.text, style: _mono.copyWith(color: _C.textLo)),
-                ),
-              ),
-              _imageChipIfAny(b.text),
-            ],
-          ),
-        );
-
-      case 'final':
-        return Container(
-          margin: const EdgeInsets.only(bottom: 16, top: 4),
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-          decoration: BoxDecoration(
-            color: _C.card,
-            borderRadius: BorderRadius.circular(12),
-            border: const Border(
-                left: BorderSide(color: _C.accent, width: 3),
-                top: BorderSide(color: _C.border),
-                right: BorderSide(color: _C.border),
-                bottom: BorderSide(color: _C.border)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(b.text,
-                  style: const TextStyle(
-                      color: _C.textHi, fontSize: 14.5, height: 1.5)),
-              const SizedBox(height: 6),
-              InkWell(
-                onTap: () async {
-                  await Clipboard.setData(ClipboardData(text: b.text));
-                  if (mounted) _snack('Copiado');
-                },
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.copy_all, size: 14, color: _C.off),
-                    SizedBox(width: 4),
-                    Text('Copiar', style: TextStyle(color: _C.off, fontSize: 11.5)),
-                  ],
-                ),
-              ),
-                _imageChipIfAny(b.text),
-            ],
-          ),
-        );
-
-      case 'error':
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFF2A1D1D),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFF5A2A2A)),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.error_outline, size: 16, color: _C.err),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(b.text,
-                    style: const TextStyle(
-                        color: Color(0xFFE5B5B5), fontSize: 13, height: 1.4)),
-              ),
-            ],
-          ),
-        );
-      default:
-        return const SizedBox.shrink();
-    }
-  }
-
-  Widget _inputBar() {
-    return AnimatedBuilder(
-      animation: _ctrl.running,
-      builder: (context, _) {
-        final running = _ctrl.running.value;
-        return Container(
-      decoration: const BoxDecoration(
-        color: _C.bg,
-        border: Border(top: BorderSide(color: _C.border)),
-      ),
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-      child: Row(
-        children: [
-          GestureDetector(
-            onLongPress: _attachedImagePath != null ? _removeAttachedImage : null,
-            child: IconButton(
-              onPressed: running ? null : _pickChatImage,
-              icon: Icon(
-                _attachedImagePath != null ? Icons.image : Icons.attach_file,
-                size: 20,
-                color: _attachedImagePath != null ? _C.accent : _C.off,
-              ),
-              tooltip: _attachedImagePath != null
-                  ? 'Imagen adjunta (mantén pulsado para quitar)'
-                  : 'Adjuntar imagen',
-            ),
-          ),
-          IconButton(
-            onPressed: running
-                ? null
-                : () async {
-                    final data = await Clipboard.getData('text/plain');
-                    final text = data?.text;
-                    if (text != null && text.isNotEmpty) {
-                      _input.text = _input.text.isEmpty
-                          ? text
-                          : '${_input.text} $text';
-                    }
-                  },
-            icon: const Icon(Icons.content_paste, size: 20, color: _C.off),
-            tooltip: 'Pegar',
-          ),
-          IconButton(
-            onPressed: running ? null : _viewGeneratedImage,
-            icon: const Icon(Icons.visibility_outlined, size: 20, color: _C.off),
-            tooltip: 'Ver imagen del rootfs',
-          ),
-          Expanded(
-            child: TextField(
-              controller: _input,
-              enabled: !running,
-              minLines: 1,
-              maxLines: 6,
-              style: const TextStyle(color: _C.textHi, fontSize: 14.5),
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => _send(),
-              decoration: InputDecoration(
-                hintText: _attachedImagePath != null
-                    ? (running ? 'Ejecutando…' : 'Con imagen adjunta…')
-                    : (running ? 'Ejecutando…' : 'Tarea para el agente…'),
-                hintStyle: const TextStyle(color: _C.off, fontSize: 14),
-                filled: true,
-                fillColor: _C.card,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: _C.border),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: _C.border),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: _C.accent),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          running
-              ? IconButton(
-                  onPressed: _stop,
-                  style: IconButton.styleFrom(
-                    backgroundColor: _C.card,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.all(12),
-                  ),
-                  icon: const Icon(Icons.stop_rounded, color: _C.err),
-                )
-              : IconButton(
-                  onPressed: _send,
-                  style: IconButton.styleFrom(
-                    backgroundColor: _C.accent,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.all(12),
-                  ),
-                  icon: const Icon(Icons.arrow_upward_rounded,
-                      color: Colors.white),
-                ),
-          ],
-        ),
-        );
-      },
     );
   }
 }
