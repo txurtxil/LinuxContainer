@@ -1,5 +1,5 @@
-// lib/src/agent/agent_services.dart — v8.0
-// Arregla: httpx no instalado → pip install auto + fallback a stdlib.
+// lib/src/agent/agent_services.dart — v9.0
+// Fix: script de arranque escrito como archivo .sh en rootfs (cero escaping).
 
 import 'dart:async';
 import 'dart:convert';
@@ -106,6 +106,8 @@ class AgentServices {
   }
 
   static const int _maxLogLines = 250;
+
+  static String _shellEscape(String s) => s.replaceAll("'", "'\''");
 
   Future<String> _configFilePath() async {
     final dir = await getApplicationDocumentsDirectory();
@@ -371,51 +373,118 @@ class AgentServices {
     }
   }
 
-  // ---- ARREGLO CRITICO v8: python3 + pip install auto ---------------------
-  String _agentCommand() {
-    final base = effectiveBaseUrl;
-    final model = effectiveModel;
-    final key = effectiveApiKey;
-    // v8: busca python3, instala pip si falta, instala httpx si el script lo necesita,
-    //     pero el fallback usa stdlib asi que nunca falla por deps.
-    return r"""cd /root && \
-if [ ! -f /root/agent_server.py ]; then echo '[ERROR] No existe /root/agent_server.py'; exit 1; fi; \
-PYTHON=''; for P in /root/agent-env/bin/python3 /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do \
-  if [ -x "$P" ]; then PYTHON="$P"; break; fi; done; \
-if [ -z "$PYTHON" ]; then \
-  echo '[XTR] python3 no encontrado. Intentando instalar...'; \
-  if command -v apt-get >/dev/null 2>&1; then \
-    apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip 2>/dev/null; \
-  elif command -v apk >/dev/null 2>&1; then \
-    apk add --no-cache python3 py3-pip 2>/dev/null; \
-  elif command -v pacman >/dev/null 2>&1; then \
-    pacman -Sy --noconfirm python python-pip 2>/dev/null; \
-  fi; \
-  for P in /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do \
-    if [ -x "$P" ]; then PYTHON="$P"; break; fi; done; \
-fi; \
-if [ -z "$PYTHON" ]; then \
-  echo '[FATAL] No se encontro ni se pudo instalar python3.'; \
-  echo '[hint] Entra al contenedor y ejecuta: apt-get update && apt-get install -y python3'; \
-  exit 1; fi; \
-# v8: asegurar pip e instalar deps si el script las necesita \
-if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then \
-  echo '[XTR] pip no encontrado. Instalando...'; \
-  "$PYTHON" -m ensurepip --upgrade 2>/dev/null || \
-    (apt-get install -y -qq python3-pip 2>/dev/null); \
-fi; \
-# Instalar deps comunes silenciosamente (no falla si ya estan) \
-echo '[XTR] Verificando dependencias...'; \
-"$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true; \
-"$PYTHON" -m pip install -q httpx openai 2>/dev/null || echo '[warn] No se pudieron instalar deps opcionales (httpx/openai). El fallback usa stdlib.'; \
-if [ -f /root/agent-env/bin/activate ]; then . /root/agent-env/bin/activate; fi; \
-export LLM_BASE_URL='""" + base + r"""' LLM_MODEL='""" + model + r"""' LLM_API_KEY='""" + key + r"""' AGENT_PORT=""" + agentPort.toString() + r"""; \
-echo "[XTR] Usando python: $PYTHON"; \
-echo "[XTR] LLM_BASE_URL=$LLM_BASE_URL"; \
-echo "[XTR] Modelo=$LLM_MODEL"; \
-echo "[XTR] Puerto=$AGENT_PORT"; \
-exec "$PYTHON" /root/agent_server.py""";
+  // ---- v9: escribir script de arranque como archivo en rootfs -------------
+  Future<bool> _writeStartScript() async {
+    final rootfs = _cm.rootfsPath;
+    if (rootfs == null) {
+      _push(agentLog, '[error] rootfs no disponible para escribir script.');
+      return false;
+    }
+
+    // 1. Variables de entorno (escapadas)
+    final envContent = "export LLM_BASE_URL='" + _shellEscape(effectiveBaseUrl) + "'\n"
+        "export LLM_MODEL='" + _shellEscape(effectiveModel) + "'\n"
+        "export LLM_API_KEY='" + _shellEscape(effectiveApiKey) + "'\n"
+        "export AGENT_PORT='" + agentPort.toString() + "'";
+
+    final envFile = File('$rootfs/root/agent_env.sh');
+    try {
+      await envFile.writeAsString(envContent);
+    } catch (e) {
+      _push(agentLog, '[error] No se pudo escribir agent_env.sh: $e');
+      return false;
+    }
+
+    // 2. Script de arranque (sin variables dinamicas embebidas)
+    const startScript = r'''#!/bin/bash
+set -e
+cd /root
+
+# Verificar que agent_server.py existe
+if [ ! -f /root/agent_server.py ]; then
+  echo '[ERROR] No existe /root/agent_server.py'
+  exit 1
+fi
+
+# Buscar python3 en multiples rutas
+PYTHON=''
+for P in /root/agent-env/bin/python3 /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
+  if [ -x "$P" ]; then PYTHON="$P"; break; fi
+done
+
+# Instalar python3 si falta
+if [ -z "$PYTHON" ]; then
+  echo '[XTR] python3 no encontrado. Intentando instalar...'
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip 2>/dev/null || true
+  elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache python3 py3-pip 2>/dev/null || true
+  elif command -v pacman >/dev/null 2>&1; then
+    pacman -Sy --noconfirm python python-pip 2>/dev/null || true
+  fi
+  for P in /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
+    if [ -x "$P" ]; then PYTHON="$P"; break; fi
+  done
+fi
+
+if [ -z "$PYTHON" ]; then
+  echo '[FATAL] No se encontro ni se pudo instalar python3.'
+  echo '[hint] Entra al contenedor y ejecuta: apt-get update && apt-get install -y python3'
+  exit 1
+fi
+
+# Asegurar pip
+if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
+  echo '[XTR] pip no encontrado. Instalando...'
+  "$PYTHON" -m ensurepip --upgrade 2>/dev/null || true
+  apt-get install -y -qq python3-pip 2>/dev/null || true
+fi
+
+# Instalar deps opcionales (no falla si ya estan o no hay red)
+echo '[XTR] Verificando dependencias...'
+"$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
+"$PYTHON" -m pip install -q httpx openai 2>/dev/null || echo '[warn] No se pudieron instalar deps opcionales (httpx/openai). El fallback usa stdlib.'
+
+# Activar venv si existe
+if [ -f /root/agent-env/bin/activate ]; then
+  . /root/agent-env/bin/activate
+fi
+
+# Cargar variables de entorno
+if [ -f /root/agent_env.sh ]; then
+  . /root/agent_env.sh
+fi
+
+echo "[XTR] Usando python: $PYTHON"
+echo "[XTR] LLM_BASE_URL=$LLM_BASE_URL"
+echo "[XTR] Modelo=$LLM_MODEL"
+echo "[XTR] Puerto=$AGENT_PORT"
+
+exec "$PYTHON" /root/agent_server.py
+''';
+
+    final scriptFile = File('$rootfs/root/start_agent.sh');
+    try {
+      await scriptFile.writeAsString(startScript);
+    } catch (e) {
+      _push(agentLog, '[error] No se pudo escribir start_agent.sh: $e');
+      return false;
+    }
+
+    // 3. Hacer ejecutable
+    try {
+      final chmodPty = _cm.startProcess('chmod +x /root/start_agent.sh');
+      await chmodPty.exitCode;
+    } catch (e) {
+      _push(agentLog, '[warn] No se pudo hacer ejecutable start_agent.sh: $e');
+    }
+
+    _push(agentLog, '[ok] Scripts de arranque escritos en rootfs.');
+    return true;
   }
+
+  // ---- v9: comando simple, sin escaping ------------------------------------
+  String _agentCommand() => 'bash /root/start_agent.sh';
 
   Future<void> startAgent() async {
     if (_agentPty != null) return;
@@ -425,18 +494,29 @@ exec "$PYTHON" /root/agent_server.py""";
       agentFailed.value = true;
       return;
     }
-    final ok = await ensureAgentScript();
-    if (!ok) {
+
+    // 1. Copiar agent_server.py
+    final okScript = await ensureAgentScript();
+    if (!okScript) {
       agentFailed.value = true;
       return;
     }
+
+    // 2. Escribir scripts de arranque (v9: como archivos, no como string)
+    final okStart = await _writeStartScript();
+    if (!okStart) {
+      agentFailed.value = true;
+      return;
+    }
+
     final src = sourceId == 'gpu_local' ? 'GPU Local (MediaPipe)' : 'Remoto: $remoteBaseUrl';
     agentLog.value = [];
-    _push(agentLog, '[XTR Agent Server v8.0]');
+    _push(agentLog, '[XTR Agent Server v9.0]');
     _push(agentLog, '[fuente: $src | puerto: $agentPort]');
     _push(agentLog, '[Arrancando...]');
     agentStarting.value = true;
     agentFailed.value = false;
+
     final pty = _cm.startProcess(_agentCommand());
     _agentPty = pty;
     _attach(pty, agentLog, () {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# agent_server.py — v8.0  (solo stdlib, sin dependencias externas)
+# agent_server.py — v9.0  (solo stdlib, sin dependencias externas)
 import os, sys, json, socketserver, http.server, urllib.request, urllib.error
 
 PORT = int(os.environ.get('AGENT_PORT', '8765'))
@@ -57,7 +57,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 def main():
-    print(f'[XTR Agent Server v8.0] Puerto={PORT} BaseURL={BASE_URL} Model={MODEL}', flush=True)
+    print(f'[XTR Agent Server v9.0] Puerto={PORT} BaseURL={BASE_URL} Model={MODEL}', flush=True)
     print(f'[XTR] Usando solo stdlib (sin httpx). Escuchando en 0.0.0.0:{PORT}', flush=True)
     with socketserver.TCPServer(('0.0.0.0', PORT), Handler) as httpd:
         httpd.serve_forever()
