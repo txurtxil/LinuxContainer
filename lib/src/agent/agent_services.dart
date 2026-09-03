@@ -1,5 +1,7 @@
-// lib/src/agent/agent_services.dart — v9.0
-// Fix: script de arranque escrito como archivo .sh en rootfs (cero escaping).
+// lib/src/agent/agent_services.dart — v11.0
+// Fixes: matar proceso previo + esperar puerto libre + verificar backend :8090
+//        antes de arrancar agente. Script de arranque mata previos y espera.
+//        Health-check en /health incluye estado del backend.
 
 import 'dart:async';
 import 'dart:convert';
@@ -107,7 +109,7 @@ class AgentServices {
 
   static const int _maxLogLines = 250;
 
-  static String _shellEscape(String s) => s.replaceAll("'", "'\''");
+  static String _shellEscape(String s) => s.replaceAll("'", "'\\''");
 
   Future<String> _configFilePath() async {
     final dir = await getApplicationDocumentsDirectory();
@@ -373,7 +375,7 @@ class AgentServices {
     }
   }
 
-  // ---- v9: escribir script de arranque como archivo en rootfs -------------
+  // ---- v11: script de arranque mata previos + espera puerto libre + verifica backend ----
   Future<bool> _writeStartScript() async {
     final rootfs = _cm.rootfsPath;
     if (rootfs == null) {
@@ -385,7 +387,8 @@ class AgentServices {
     final envContent = "export LLM_BASE_URL='" + _shellEscape(effectiveBaseUrl) + "'\n"
         "export LLM_MODEL='" + _shellEscape(effectiveModel) + "'\n"
         "export LLM_API_KEY='" + _shellEscape(effectiveApiKey) + "'\n"
-        "export AGENT_PORT='" + agentPort.toString() + "'";
+        "export AGENT_PORT='" + agentPort.toString() + "'\n"
+        "export AGENT_PID_FILE='/tmp/agent.pid'";
 
     final envFile = File('$rootfs/root/agent_env.sh');
     try {
@@ -395,64 +398,135 @@ class AgentServices {
       return false;
     }
 
-    // 2. Script de arranque (sin variables dinamicas embebidas)
-    const startScript = r'''#!/bin/bash
-set -e
+    // 2. Script de arranque robusto
+    final startScript = r"""#!/bin/bash
+# v11: robusto — mata previos, espera puerto libre, verifica backend, sin set -e
+
 cd /root
 
-# Verificar que agent_server.py existe
-if [ ! -f /root/agent_server.py ]; then
-  echo '[ERROR] No existe /root/agent_server.py'
-  exit 1
-fi
+AGENT_PORT="${AGENT_PORT:-8765}"
+AGENT_PID_FILE="${AGENT_PID_FILE:-/tmp/agent.pid}"
 
-# Buscar python3 en multiples rutas
-PYTHON=''
-for P in /root/agent-env/bin/python3 /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
-  if [ -x "$P" ]; then PYTHON="$P"; break; fi
+# ============================================
+# [1] Matar cualquier agent_server.py previo
+# ============================================
+echo "[XTR v11] Limpiando procesos previos..."
+if [ -f "$AGENT_PID_FILE" ]; then
+    OLD_PID=$(cat "$AGENT_PID_FILE" 2>/dev/null)
+    if [ -n "$OLD_PID" ]; then
+        kill "$OLD_PID" 2>/dev/null || true
+        sleep 0.5
+        kill -9 "$OLD_PID" 2>/dev/null || true
+    fi
+    rm -f "$AGENT_PID_FILE"
+fi
+pkill -9 -f "agent_server.py" 2>/dev/null || true
+pkill -9 -f "python3.*agent_server" 2>/dev/null || true
+sleep 0.6
+
+# ============================================
+# [2] Esperar a que el puerto quede libre
+# ============================================
+echo "[XTR v11] Esperando puerto :$AGENT_PORT libre..."
+for i in $(seq 1 20); do
+    OCCUPIED=0
+    if command -v ss >/dev/null 2>&1; then
+        ss -tln 2>/dev/null | grep -q ":$AGENT_PORT " && OCCUPIED=1
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -tln 2>/dev/null | grep -q ":$AGENT_PORT " && OCCUPIED=1
+    else
+        # Fallback: intentar conectar
+        if timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$AGENT_PORT" 2>/dev/null; then
+            OCCUPIED=1
+        fi
+    fi
+    if [ "$OCCUPIED" = "0" ]; then
+        echo "[ok] Puerto :$AGENT_PORT libre."
+        break
+    fi
+    echo "[wait] Puerto :$AGENT_PORT aun ocupado (intento $i/20)..."
+    sleep 0.5
 done
 
-# Instalar python3 si falta
-if [ -z "$PYTHON" ]; then
-  echo '[XTR] python3 no encontrado. Intentando instalar...'
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip 2>/dev/null || true
-  elif command -v apk >/dev/null 2>&1; then
-    apk add --no-cache python3 py3-pip 2>/dev/null || true
-  elif command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm python python-pip 2>/dev/null || true
-  fi
-  for P in /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
+# ============================================
+# [3] Verificar que agent_server.py existe
+# ============================================
+if [ ! -f /root/agent_server.py ]; then
+    echo "[ERROR] No existe /root/agent_server.py"
+    exit 1
+fi
+
+# ============================================
+# [4] Buscar python3
+# ============================================
+PYTHON=""
+for P in /root/agent-env/bin/python3 /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
     if [ -x "$P" ]; then PYTHON="$P"; break; fi
-  done
+done
+
+if [ -z "$PYTHON" ]; then
+    echo "[XTR] python3 no encontrado. Intentando instalar..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip 2>/dev/null || true
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache python3 py3-pip 2>/dev/null || true
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -Sy --noconfirm python python-pip 2>/dev/null || true
+    fi
+    for P in /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
+        if [ -x "$P" ]; then PYTHON="$P"; break; fi
+    done
 fi
 
 if [ -z "$PYTHON" ]; then
-  echo '[FATAL] No se encontro ni se pudo instalar python3.'
-  echo '[hint] Entra al contenedor y ejecuta: apt-get update && apt-get install -y python3'
-  exit 1
+    echo "[FATAL] No se encontro ni se pudo instalar python3."
+    echo "[hint] Entra al contenedor y ejecuta: apt-get update && apt-get install -y python3"
+    exit 1
 fi
 
-# Asegurar pip
+# ============================================
+# [5] Asegurar pip
+# ============================================
 if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
-  echo '[XTR] pip no encontrado. Instalando...'
-  "$PYTHON" -m ensurepip --upgrade 2>/dev/null || true
-  apt-get install -y -qq python3-pip 2>/dev/null || true
+    echo "[XTR] pip no encontrado. Instalando..."
+    "$PYTHON" -m ensurepip --upgrade 2>/dev/null || true
+    apt-get install -y -qq python3-pip 2>/dev/null || true
 fi
 
-# Instalar deps opcionales (no falla si ya estan o no hay red)
-echo '[XTR] Verificando dependencias...'
+# ============================================
+# [6] Instalar deps opcionales
+# ============================================
+echo "[XTR] Verificando dependencias..."
 "$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
-"$PYTHON" -m pip install -q httpx openai 2>/dev/null || echo '[warn] No se pudieron instalar deps opcionales (httpx/openai). El fallback usa stdlib.'
+"$PYTHON" -m pip install -q httpx openai 2>/dev/null || echo "[warn] No se pudieron instalar deps opcionales (httpx/openai). El fallback usa stdlib."
 
-# Activar venv si existe
+# ============================================
+# [7] Activar venv si existe
+# ============================================
 if [ -f /root/agent-env/bin/activate ]; then
-  . /root/agent-env/bin/activate
+    . /root/agent-env/bin/activate
 fi
 
-# Cargar variables de entorno
+# ============================================
+# [8] Cargar variables de entorno
+# ============================================
 if [ -f /root/agent_env.sh ]; then
-  . /root/agent_env.sh
+    . /root/agent_env.sh
+fi
+
+# ============================================
+# [9] Verificar backend MediaPipe (solo GPU local)
+# ============================================
+if echo "$LLM_BASE_URL" | grep -q "127.0.0.1:8090"; then
+    echo "[XTR] Verificando backend MediaPipe en :8090..."
+    for i in $(seq 1 15); do
+        if curl -sf http://127.0.0.1:8090/v1/models >/dev/null 2>&1; then
+            echo "[ok] Backend MediaPipe responde."
+            break
+        fi
+        echo "[wait] Backend no responde aun (intento $i/15)..."
+        sleep 0.6
+    done
 fi
 
 echo "[XTR] Usando python: $PYTHON"
@@ -460,8 +534,11 @@ echo "[XTR] LLM_BASE_URL=$LLM_BASE_URL"
 echo "[XTR] Modelo=$LLM_MODEL"
 echo "[XTR] Puerto=$AGENT_PORT"
 
+# ============================================
+# [10] Lanzar agente
+# ============================================
 exec "$PYTHON" /root/agent_server.py
-''';
+""";
 
     final scriptFile = File('$rootfs/root/start_agent.sh');
     try {
@@ -479,20 +556,56 @@ exec "$PYTHON" /root/agent_server.py
       _push(agentLog, '[warn] No se pudo hacer ejecutable start_agent.sh: $e');
     }
 
-    _push(agentLog, '[ok] Scripts de arranque escritos en rootfs.');
+    _push(agentLog, '[ok] Scripts de arranque escritos en rootfs (v11).');
     return true;
   }
 
-  // ---- v9: comando simple, sin escaping ------------------------------------
+  // v11: comando simple
   String _agentCommand() => 'bash /root/start_agent.sh';
 
+  // ---- v11: matar previo + esperar liberacion + verificar backend antes de arrancar ----
   Future<void> startAgent() async {
-    if (_agentPty != null) return;
+    // Proteccion contra doble-click
+    if (agentStarting.value) {
+      _push(agentLog, '[warn] El agente ya se esta iniciando. Espera...');
+      return;
+    }
+    if (_agentPty != null) {
+      _push(agentLog, '[warn] El agente ya esta corriendo. Detenlo primero.');
+      return;
+    }
     if (!_cm.isReady) {
       _push(agentLog, '[error] El contenedor Debian aun no esta listo.');
       _push(agentLog, '[hint] Espera a que el contenedor termine de inicializarse.');
       agentFailed.value = true;
       return;
+    }
+
+    // --- GPU Local: verificar que el servidor MediaPipe este corriendo ---
+    if (sourceId == 'gpu_local') {
+      if (!mpServerRunning) {
+        _push(agentLog, '[error] El servidor MediaPipe (:8090) no esta activo.');
+        _push(agentLog, '[hint] Ve a Ajustes -> GPU Local -> Iniciar :8090, o carga un modelo primero.');
+        agentFailed.value = true;
+        return;
+      }
+      // Doble verificacion: health-check real al backend
+      final backendOk = await _checkBackendHealth();
+      if (!backendOk) {
+        _push(agentLog, '[warn] Backend MediaPipe no responde a health-check. Intentando de todos modos...');
+      }
+    }
+
+    // --- Matar cualquier agente previo de forma robusta ---
+    await _killAgentFromContainer();
+    await Future.delayed(const Duration(milliseconds: 800));
+
+    // --- Esperar a que el puerto quede libre ---
+    final portFree = await _waitPortFree(agentPort, timeoutMs: 6000);
+    if (!portFree) {
+      _push(agentLog, '[warn] Puerto :$agentPort sigue ocupado despues de esperar. Forzando limpieza...');
+      await _killAgentFromContainer();
+      await Future.delayed(const Duration(seconds: 1));
     }
 
     // 1. Copiar agent_server.py
@@ -502,7 +615,7 @@ exec "$PYTHON" /root/agent_server.py
       return;
     }
 
-    // 2. Escribir scripts de arranque (v9: como archivos, no como string)
+    // 2. Escribir scripts de arranque (v11)
     final okStart = await _writeStartScript();
     if (!okStart) {
       agentFailed.value = true;
@@ -511,7 +624,7 @@ exec "$PYTHON" /root/agent_server.py
 
     final src = sourceId == 'gpu_local' ? 'GPU Local (MediaPipe)' : 'Remoto: $remoteBaseUrl';
     agentLog.value = [];
-    _push(agentLog, '[XTR Agent Server v9.0]');
+    _push(agentLog, '[XTR Agent Server v11.0]');
     _push(agentLog, '[fuente: $src | puerto: $agentPort]');
     _push(agentLog, '[Arrancando...]');
     agentStarting.value = true;
@@ -526,6 +639,80 @@ exec "$PYTHON" /root/agent_server.py
       _syncForeground();
     });
     _syncForeground();
+  }
+
+  /// Mata agent_server.py desde dentro del contenedor (kill + pkill + rm pidfile)
+  Future<void> _killAgentFromContainer() async {
+    if (!_cm.isReady) return;
+    _push(agentLog, '[..] Limpiando procesos previos en contenedor...');
+    final cleanup = r'P=$(cat /tmp/agent.pid 2>/dev/null); '
+        r'if [ -n "$P" ]; then kill "$P" 2>/dev/null; sleep 0.5; kill -9 "$P" 2>/dev/null; fi; '
+        r'pkill -9 -f "agent_server.py" 2>/dev/null || true; '
+        r'pkill -9 -f "python3.*agent_server" 2>/dev/null || true; '
+        r'rm -f /tmp/agent.pid; '
+        r'exit 0';
+    try {
+      final p = _cm.startProcess(cleanup);
+      await p.exitCode.timeout(const Duration(seconds: 4), onTimeout: () {
+        try { p.kill(); } catch (_) {}
+        return -1;
+      });
+    } catch (_) {}
+  }
+
+  /// Espera activa a que el puerto quede libre dentro del contenedor
+  Future<bool> _waitPortFree(int port, {int timeoutMs = 6000}) async {
+    if (!_cm.isReady) return true;
+    final rootfs = _cm.rootfsPath;
+    if (rootfs == null) return true;
+
+    final t0 = DateTime.now();
+    while (DateTime.now().difference(t0).inMilliseconds < timeoutMs) {
+      try {
+        final checkFile = '/tmp/port_check_$port.txt';
+        final checkCmd = 'ss -tln 2>/dev/null | grep -q ":$port " || netstat -tln 2>/dev/null | grep -q ":$port " && echo occupied > $checkFile || echo free > $checkFile';
+        final pty = _cm.startProcess(checkCmd);
+        await pty.exitCode.timeout(const Duration(seconds: 2), onTimeout: () {
+          try { pty.kill(); } catch (_) {}
+          return -1;
+        });
+        await Future.delayed(const Duration(milliseconds: 300));
+        final f = File('$rootfs$checkFile');
+        if (await f.exists()) {
+          final content = (await f.readAsString()).trim();
+          try { await f.delete(); } catch (_) {}
+          if (content == 'free') {
+            return true;
+          }
+        }
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+    return false;
+  }
+
+  /// Health-check del backend MediaPipe (:8090)
+  Future<bool> _checkBackendHealth() async {
+    if (sourceId != 'gpu_local') return true;
+    try {
+      final rootfs = _cm.rootfsPath;
+      if (rootfs == null) return false;
+      final checkFile = '/tmp/backend_health.txt';
+      final checkCmd = 'curl -sf http://127.0.0.1:8090/v1/models >/dev/null 2>&1 && echo ok > $checkFile || echo fail > $checkFile';
+      final pty = _cm.startProcess(checkCmd);
+      await pty.exitCode.timeout(const Duration(seconds: 4), onTimeout: () {
+        try { pty.kill(); } catch (_) {}
+        return -1;
+      });
+      await Future.delayed(const Duration(milliseconds: 500));
+      final f = File('$rootfs$checkFile');
+      if (await f.exists()) {
+        final content = (await f.readAsString()).trim();
+        try { await f.delete(); } catch (_) {}
+        return content == 'ok';
+      }
+    } catch (_) {}
+    return false;
   }
 
   void stopAgent() {
