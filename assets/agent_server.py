@@ -1,102 +1,142 @@
 #!/usr/bin/env python3
-# agent_server.py — v10.0  (solo stdlib, SO_REUSEADDR, kill previo)
-import os, sys, json, socket, socketserver, http.server, urllib.request, urllib.error
+"""
+XTR Terminal — agent_server.py v10.1
+Servidor FastAPI para el agente IA — ejecuta dentro de proot Debian arm64
+Puerto: 8765 | Venv: /root/agent-env
 
-PORT = int(os.environ.get('AGENT_PORT', '8765'))
-BASE_URL = os.environ.get('LLM_BASE_URL', 'http://127.0.0.1:8090/v1')
-MODEL = os.environ.get('LLM_MODEL', 'gemma3-local')
-API_KEY = os.environ.get('LLM_API_KEY', 'local')
+Endpoints:
+  GET  /health        — Health check
+  POST /run           — Ejecuta tarea (SSE streaming)
+  POST /chat          — Alias de /run
+  GET  /tools         — Lista tools disponibles
+  GET  /gpu/status    — Estado del servidor GPU MediaPipe
+"""
 
-class ReuseAddrTCPServer(socketserver.TCPServer):
-    """Permite reutilizar el puerto inmediatamente (SO_REUSEADDR)."""
-    allow_reuse_address = True
-    daemon_threads = True
+import os
+import sys
+import json
+import logging
+from typing import Any
 
-class Handler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
-        print(f'[agent] {fmt % args}', flush=True)
+try:
+    import httpx
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import StreamingResponse
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel
+    import uvicorn
+except ImportError as e:
+    print(f"[FATAL] Faltan dependencias: {e}", file=sys.stderr)
+    print("[FATAL] Ejecuta: /root/agent-env/bin/pip install fastapi uvicorn pydantic httpx", file=sys.stderr)
+    sys.exit(1)
 
-    def do_GET(self):
-        if self.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(b'{"status":"ok"}')
-            return
-        self.send_response(404)
-        self.end_headers()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("xtr_agent")
 
-    def do_POST(self):
-        if self.path == '/v1/chat/completions':
-            content_len = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_len)
-            try:
-                req = urllib.request.Request(
-                    f'{BASE_URL}/chat/completions',
-                    data=body,
-                    headers={
-                        'Content-Type': 'application/json',
-                        'Authorization': f'Bearer {API_KEY}',
-                    },
-                    method='POST'
-                )
-                with urllib.request.urlopen(req, timeout=300) as resp:
-                    self.send_response(resp.status)
-                    for k, v in resp.headers.items():
-                        if k.lower() not in ('transfer-encoding',):
-                            self.send_header(k, v)
-                    self.end_headers()
-                    self.wfile.write(resp.read())
-            except urllib.error.HTTPError as e:
-                self.send_response(e.code)
-                for k, v in e.headers.items():
-                    self.send_header(k, v)
-                self.end_headers()
-                self.wfile.write(e.read())
-            except Exception as e:
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': str(e)}).encode())
-            return
-        self.send_response(404)
-        self.end_headers()
+app = FastAPI(title="XTR Agent Server", version="10.1")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-def wait_for_port_release(port, timeout=8):
-    """Espera a que el puerto se libere antes de arrancar."""
-    import time
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(1)
-            result = s.connect_ex(('127.0.0.1', port))
-            s.close()
-            if result != 0:
-                return True
-        except Exception:
-            pass
-        time.sleep(0.5)
-    return False
+GPU_LOCAL_PORT = 8090
+GPU_LOCAL_BASE = f"http://127.0.0.1:{GPU_LOCAL_PORT}/v1"
+AGENT_PORT = int(os.environ.get("AGENT_PORT", "8765"))
+MAX_TOKENS = 2048
 
-def main():
-    print(f'[XTR Agent Server v10.0] Puerto={PORT} BaseURL={BASE_URL} Model={MODEL}', flush=True)
+class AgentRequest(BaseModel):
+    task: str
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = "gemma3-local"
+    history: list = []
+    system_prompt: str = ""
+    image_base64: str = ""
+    use_native_tools: bool = False
 
-    # Esperar a que el puerto se libere si estaba ocupado
+class AgentResponse(BaseModel):
+    answer: str
+    thoughts: list = []
+    error: bool = False
+
+async def _is_gpu_server_alive() -> bool:
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
-        if s.connect_ex(('0.0.0.0', PORT)) == 0:
-            print(f'[XTR] Puerto {PORT} ocupado. Esperando liberacion...', flush=True)
-            if not wait_for_port_release(PORT):
-                print(f'[WARN] Puerto {PORT} sigue ocupado. Forzando SO_REUSEADDR...', flush=True)
-        s.close()
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{GPU_LOCAL_BASE}/models")
+            return resp.status_code == 200
     except Exception:
-        pass
+        return False
 
-    print(f'[XTR] Usando solo stdlib + SO_REUSEADDR. Escuchando en 0.0.0.0:{PORT}', flush=True)
-    with ReuseAddrTCPServer(('0.0.0.0', PORT), Handler) as httpd:
-        httpd.serve_forever()
+def sse(d: dict) -> str:
+    return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
 
-if __name__ == '__main__':
-    main()
+async def _direct_chat_gpu(req: AgentRequest):
+    if not await _is_gpu_server_alive():
+        yield {"type": "final", "answer": "⚠ El servidor GPU MediaPipe no está activo. Ve a 'Prueba GPU' en la app para cargar un modelo .task."}
+        return
+
+    messages = []
+    system = req.system_prompt or (
+        "Eres XTR, un asistente IA que se ejecuta completamente en local "
+        "en el dispositivo del usuario. Responde de forma concisa y útil."
+    )
+    messages.append({"role": "system", "content": system})
+    for h in req.history[-10:]:
+        if isinstance(h, dict) and "role" in h and "content" in h:
+            messages.append(h)
+    messages.append({"role": "user", "content": req.task})
+
+    payload = {
+        "model": "gemma",
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
+        "temperature": 0.7,
+        "stream": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{GPU_LOCAL_BASE}/chat/completions",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            answer = data["choices"][0]["message"]["content"]
+            yield {"type": "step", "thought": "Procesando..."}
+            yield {"type": "final", "answer": answer}
+    except Exception as e:
+        yield {"type": "error", "error": str(e)}
+        yield {"type": "final", "answer": f"Error: {str(e)[:200]}"}
+
+@app.get("/health")
+async def health():
+    gpu_alive = await _is_gpu_server_alive()
+    return {"status": "ok", "version": "10.1", "gpu_server_alive": gpu_alive, "gpu_port": GPU_LOCAL_PORT}
+
+@app.post("/run")
+async def run_streaming(req: AgentRequest):
+    if not req.task.strip():
+        raise HTTPException(status_code=400, detail="task no puede estar vacio")
+    async def generate():
+        async for event in _direct_chat_gpu(req):
+            yield sse(event)
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+@app.post("/chat")
+async def chat(req: AgentRequest):
+    async def generate():
+        async for event in _direct_chat_gpu(req):
+            yield sse(event)
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+@app.get("/tools")
+async def list_tools():
+    return {"tools": [{"name": "gpu_chat", "description": "Chat directo con el modelo GPU cargado"}]}
+
+@app.get("/gpu/status")
+async def gpu_status():
+    alive = await _is_gpu_server_alive()
+    return {"active": alive, "port": GPU_LOCAL_PORT}
+
+if __name__ == "__main__":
+    log.info("Iniciando XTR Agent Server v10.1 en puerto %d", AGENT_PORT)
+    log.info("GPU MediaPipe esperado en puerto %d", GPU_LOCAL_PORT)
+    uvicorn.run(app, host="127.0.0.1", port=AGENT_PORT, log_level="warning")
