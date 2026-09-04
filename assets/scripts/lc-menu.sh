@@ -1,5 +1,8 @@
 #!/bin/bash
-# XTR Terminal — Menú de gestión
+# XTR Terminal — Menu de gestion  v10.0
+# Agrega: check_agent_env() para verificacion rapida desde la app
+#         Mejor manejo de errores en setup_agent
+#         Indicador de progreso parseable para UI
 set -o pipefail
 C_RESET='\e[0m'; C_B='\e[1m'; C_DIM='\e[2m'
 C_GRN='\e[1;32m'; C_YEL='\e[1;33m'; C_RED='\e[1;31m'
@@ -17,7 +20,6 @@ header() {
 }
 
 fix_dns() {
-  # Fijar DNS siempre — no verificamos red (ping/curl pueden no estar disponibles)
   echo "nameserver 8.8.8.8" > /etc/resolv.conf
   echo "nameserver 1.1.1.1" >> /etc/resolv.conf
   return 0
@@ -31,6 +33,73 @@ apt_install() {
   echo -e "${C_GRN}✓ Listo${C_RESET}"
 }
 
+# ── Verificacion rapida del entorno IA (usado por la app) ─────
+check_agent_env() {
+  local json=false
+  [[ "$1" == "--json" ]] && json=true
+
+  local python_ok=false venv_ok=false smol_ok=false server_ok=false scripts_ok=false
+  local python_ver="" smol_ver="" msg=""
+
+  # 1. Python3
+  if command -v python3 >/dev/null 2>&1; then
+    python_ok=true
+    python_ver="$(python3 --version 2>/dev/null | awk '{print $2}')"
+  fi
+
+  # 2. Venv
+  [[ -d /root/agent-env && -f /root/agent-env/bin/python3 ]] && venv_ok=true
+
+  # 3. smolagents
+  if $venv_ok; then
+    smol_ver="$(/root/agent-env/bin/pip show smolagents 2>/dev/null | grep Version | cut -d' ' -f2)"
+    [[ -n "$smol_ver" ]] && smol_ok=true
+  fi
+
+  # 4. agent_server.py
+  [[ -f /root/agent_server.py ]] && server_ok=true
+
+  # 5. Scripts auxiliares
+  local missing_scripts=""
+  for script in gen_topologia.sh gen_flujo.sh gen_grafica.py gen_qr.sh gen_scan_red.sh gen_discover_red.sh; do
+    [[ -f "/root/$script" ]] || missing_scripts="$missing_scripts $script"
+  done
+  [[ -z "$missing_scripts" ]] && scripts_ok=true
+
+  # 6. start_agent.sh
+  local start_ok=false
+  [[ -f /root/start_agent.sh && -x /root/start_agent.sh ]] && start_ok=true
+
+  # Resultado global
+  local all_ok=false
+  $python_ok && $venv_ok && $smol_ok && $server_ok && $scripts_ok && $start_ok && all_ok=true
+
+  if $json; then
+    # Salida JSON para la app
+    printf '{"ready":%s,"python":"%s","venv":%s,"smolagents":"%s","server":%s,"scripts":%s,"start":%s,"python_version":"%s","smol_version":"%s"}\n' \
+      "$all_ok" "$python_ok" "$venv_ok" "$smol_ok" "$server_ok" "$scripts_ok" "$start_ok" "$python_ver" "$smol_ver"
+  else
+    # Salida humana
+    hr
+    echo -e "${C_B}Estado del entorno IA:${C_RESET}"
+    hr
+    echo -e "  Python3:     $(_icon $python_ok) ${python_ver:-no instalado}"
+    echo -e "  Venv:        $(_icon $venv_ok) /root/agent-env"
+    echo -e "  smolagents:  $(_icon $smol_ok) ${smol_ver:-no instalado}"
+    echo -e "  Servidor:    $(_icon $server_ok) /root/agent_server.py"
+    echo -e "  Scripts:     $(_icon $scripts_ok) auxiliares"
+    echo -e "  Arranque:    $(_icon $start_ok) /root/start_agent.sh"
+    hr
+    if $all_ok; then
+      echo -e "${C_GRN}✓ Entorno IA completo y listo.${C_RESET}"
+    else
+      echo -e "${C_YEL}⚠ Entorno incompleto. Ejecuta 'Setup Agente IA' (opcion 1).${C_RESET}"
+    fi
+  fi
+}
+
+_icon() { if "$1"; then echo -e "${C_GRN}✓${C_RESET}"; else echo -e "${C_RED}✗${C_RESET}"; fi; }
+
 # ── Setup completo del agente IA ──────────────────────────────
 setup_agent() {
   header
@@ -43,51 +112,68 @@ setup_agent() {
   [[ "$confirm" != "s" && "$confirm" != "S" ]] && return
 
   echo ""
+  local failed=false
 
   # Fix DNS primero
-  fix_dns
+  fix_dns || { echo -e "${C_RED}✗ No se pudo configurar DNS${C_RESET}"; pause; return; }
   echo -e "${C_GRN}✓ DNS configurado${C_RESET}"
 
   # apt update
   echo -e "${C_CYN}▸ Actualizando lista de paquetes...${C_RESET}"
-  apt-get update -q 2>&1 | tail -3
+  if ! apt-get update -q >/dev/null 2>&1; then
+    echo -e "${C_RED}✗ apt-get update fallo. ¿Hay conexion a internet?${C_RESET}"
+    pause; return
+  fi
 
   # Instalar python3 y herramientas
   echo -e "${C_CYN}▸ Instalando Python3 y herramientas base...${C_RESET}"
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
+  if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
     python3 python3-pip python3-venv python3-dev \
     graphviz qrencode python3-matplotlib \
-    git curl wget ca-certificates build-essential openssh-client 2>&1 | tail -5
+    git curl wget ca-certificates build-essential openssh-client 2>&1 | tail -5; then
+    echo -e "${C_RED}✗ Fallo la instalacion de paquetes base${C_RESET}"
+    pause; return
+  fi
 
   # Verificar python3
   if ! command -v python3 >/dev/null 2>&1; then
-    echo -e "${C_RED}✗ python3 no instalado. ¿Hay conexión a internet?${C_RESET}"
+    echo -e "${C_RED}✗ python3 no instalado. ¿Hay conexion a internet?${C_RESET}"
     pause; return
   fi
   echo -e "${C_GRN}✓ $(python3 --version)${C_RESET}"
 
   # Crear venv
   echo -e "${C_CYN}▸ Creando entorno virtual /root/agent-env...${C_RESET}"
-  python3 -m venv /root/agent-env --clear
+  if ! python3 -m venv /root/agent-env --clear 2>/dev/null; then
+    echo -e "${C_RED}✗ No se pudo crear el entorno virtual${C_RESET}"
+    pause; return
+  fi
   echo -e "${C_GRN}✓ Entorno virtual creado${C_RESET}"
 
   # Instalar smolagents
   echo -e "${C_CYN}▸ Instalando smolagents y FastAPI (5-8 min)...${C_RESET}"
-  /root/agent-env/bin/pip install --quiet --upgrade pip
-  /root/agent-env/bin/pip install \
+  /root/agent-env/bin/pip install --quiet --upgrade pip 2>/dev/null || true
+  if /root/agent-env/bin/pip install \
     smolagents "fastapi>=0.111.0" "uvicorn[standard]" \
-    httpx openai requests
-  VER=$(/root/agent-env/bin/pip show smolagents 2>/dev/null | grep Version | cut -d' ' -f2)
-  echo -e "${C_GRN}✓ smolagents $VER instalado${C_RESET}"
+    httpx openai requests 2>&1; then
+    VER=$(/root/agent-env/bin/pip show smolagents 2>/dev/null | grep Version | cut -d' ' -f2)
+    echo -e "${C_GRN}✓ smolagents $VER instalado${C_RESET}"
+  else
+    echo -e "${C_RED}✗ Fallo la instalacion de smolagents${C_RESET}"
+    failed=true
+  fi
 
   # agent_server.py
   echo -e "${C_CYN}▸ Verificando agent_server.py...${C_RESET}"
   if [ ! -f /root/agent_server.py ]; then
-    curl -fsSL \
+    if curl -fsSL \
       "https://raw.githubusercontent.com/txurtxil/LinuxContainer/main/assets/agent_server.py" \
-      -o /root/agent_server.py 2>/dev/null \
-      && echo -e "${C_GRN}✓ agent_server.py descargado${C_RESET}" \
-      || echo -e "${C_YEL}⚠ Descarga fallida — se descargará al arrancar el agente${C_RESET}"
+      -o /root/agent_server.py 2>/dev/null; then
+      echo -e "${C_GRN}✓ agent_server.py descargado${C_RESET}"
+    else
+      echo -e "${C_YEL}⚠ Descarga fallida — se descargara al arrancar el agente${C_RESET}"
+      failed=true
+    fi
   else
     echo -e "${C_GRN}✓ agent_server.py ya existe${C_RESET}"
   fi
@@ -96,12 +182,14 @@ setup_agent() {
   echo -e "${C_CYN}▸ Verificando scripts de imagenes...${C_RESET}"
   for script in gen_topologia.sh gen_flujo.sh gen_grafica.py gen_qr.sh gen_scan_red.sh gen_discover_red.sh; do
     if [ ! -f "/root/$script" ]; then
-      curl -fsSL \
+      if curl -fsSL \
         "https://raw.githubusercontent.com/txurtxil/LinuxContainer/main/assets/scripts/$script" \
-        -o "/root/$script" 2>/dev/null \
-        && chmod +x "/root/$script" \
-        && echo -e "${C_GRN}✓ $script descargado${C_RESET}" \
-        || echo -e "${C_YEL}⚠ $script no se pudo descargar${C_RESET}"
+        -o "/root/$script" 2>/dev/null; then
+        chmod +x "/root/$script" 2>/dev/null || true
+        echo -e "${C_GRN}✓ $script descargado${C_RESET}"
+      else
+        echo -e "${C_YEL}⚠ $script no se pudo descargar${C_RESET}"
+      fi
     else
       echo -e "${C_GRN}✓ $script ya existe${C_RESET}"
     fi
@@ -110,12 +198,14 @@ setup_agent() {
   # Entorno de desarrollo Android
   echo -e "${C_CYN}▸ Verificando install_android_sdk.sh...${C_RESET}"
   if [ ! -f /root/install_android_sdk.sh ]; then
-    curl -fsSL \
+    if curl -fsSL \
       "https://raw.githubusercontent.com/txurtxil/LinuxContainer/main/assets/scripts/install_android_sdk.sh" \
-      -o /root/install_android_sdk.sh 2>/dev/null \
-      && chmod +x /root/install_android_sdk.sh \
-      && echo -e "${C_GRN}✓ install_android_sdk.sh descargado${C_RESET}" \
-      || echo -e "${C_YEL}⚠ install_android_sdk.sh no se pudo descargar${C_RESET}"
+      -o /root/install_android_sdk.sh 2>/dev/null; then
+      chmod +x /root/install_android_sdk.sh
+      echo -e "${C_GRN}✓ install_android_sdk.sh descargado${C_RESET}"
+    else
+      echo -e "${C_YEL}⚠ install_android_sdk.sh no se pudo descargar${C_RESET}"
+    fi
   else
     echo -e "${C_GRN}✓ install_android_sdk.sh ya existe${C_RESET}"
   fi
@@ -130,7 +220,12 @@ STARTEOF
   chmod +x /root/start_agent.sh
 
   hr
-  echo -e "${C_GRN}${C_B}✓ Setup completado${C_RESET}"
+  if $failed; then
+    echo -e "${C_YEL}${C_B}⚠ Setup completado con advertencias${C_RESET}"
+    echo -e "  ${C_DIM}Algunos componentes no se instalaron. Revisa los mensajes arriba.${C_RESET}"
+  else
+    echo -e "${C_GRN}${C_B}✓ Setup completado${C_RESET}"
+  fi
   echo ""
   echo -e "  ${C_DIM}→ Vuelve al Agente en la app y pulsa ▶ en agent-server${C_RESET}"
   echo -e "  ${C_DIM}→ Modelos GPU: pantalla 'Prueba GPU' de la app${C_RESET}"
@@ -147,7 +242,7 @@ menu_packages() {
     echo -e "  ${C_YEL}2${C_RESET})  Editores     ${C_DIM}vim tmux zsh mc${C_RESET}"
     echo -e "  ${C_YEL}3${C_RESET})  OpenSSH      ${C_DIM}(instala y configura)${C_RESET}"
     echo -e "  ${C_YEL}4${C_RESET})  Nginx        ${C_DIM}(proxy inverso)${C_RESET}"
-    echo -e "  ${C_YEL}5${C_RESET})  ngrok        ${C_DIM}(túnel a internet)${C_RESET}"
+    echo -e "  ${C_YEL}5${C_RESET})  ngrok        ${C_DIM}(tunnel a internet)${C_RESET}"
     hr
     echo -e "  ${C_CYN}v${C_RESET})  Volver"
     echo ""
@@ -199,7 +294,7 @@ menu_system() {
     echo -e "  ${C_YEL}3${C_RESET})  Test de red"
     echo -e "  ${C_YEL}4${C_RESET})  Cambiar contraseña de root"
     echo -e "  ${C_YEL}5${C_RESET})  Configurar zona horaria"
-    echo -e "  ${C_YEL}6${C_RESET})  Limpiar caché apt"
+    echo -e "  ${C_YEL}6${C_RESET})  Limpiar cache apt"
     hr
     echo -e "  ${C_CYN}v${C_RESET})  Volver"
     echo ""
@@ -210,7 +305,7 @@ menu_system() {
       3) net_test; pause ;;
       4) passwd root; pause ;;
       5) cfg_timezone; pause ;;
-      6) apt-get clean && apt-get autoclean -y; echo -e "${C_GRN}✓ Caché limpiada${C_RESET}"; pause ;;
+      6) apt-get clean && apt-get autoclean -y; echo -e "${C_GRN}✓ Cache limpiada${C_RESET}"; pause ;;
       v|V) return ;;
     esac
   done
@@ -221,7 +316,7 @@ sys_info() {
   echo -e "${C_B}Kernel:${C_RESET}   $(uname -r 2>/dev/null || echo n/d)"
   echo -e "${C_B}Distro:${C_RESET}   $(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || echo Debian)"
   echo -e "${C_B}Arch:${C_RESET}     $(uname -m)"
-  echo -e "${C_B}CPU:${C_RESET}      $(nproc) núcleos"
+  echo -e "${C_B}CPU:${C_RESET}      $(nproc) nucleos"
   echo -e "${C_B}Memoria:${C_RESET}  $(free -h 2>/dev/null | awk '/Mem:/{print $3" / "$2}')"
   echo -e "${C_B}Disco:${C_RESET}    $(df -h / 2>/dev/null | awk 'NR==2{print $3" / "$2" ("$5")"}')"
   echo -e "${C_B}Python3:${C_RESET}  $(python3 --version 2>/dev/null || echo 'no instalado')"
@@ -243,7 +338,7 @@ cfg_timezone() {
     ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime && \
     echo "$tz" > /etc/timezone && \
     echo -e "${C_GRN}✓ Zona: $tz${C_RESET}" || \
-    echo -e "${C_RED}✗ Zona no válida${C_RESET}"
+    echo -e "${C_RED}✗ Zona no valida${C_RESET}"
 }
 
 # ── Backup / restaurar clave SSH del agente ───────────────────
@@ -315,7 +410,7 @@ ssh_key_menu() {
   done
 }
 
-# ── Menú principal ────────────────────────────────────────────
+# ── Menu principal ────────────────────────────────────────────
 main_menu() {
   while true; do
     header
@@ -335,9 +430,15 @@ main_menu() {
       3) menu_system ;;
       4) ssh_key_menu ;;
       s|S) clear; echo -e "${C_GRN}▸ Shell. Escribe ${C_B}lc-menu${C_RESET}${C_GRN} para volver.${C_RESET}"; echo ""; return 0 ;;
-      q|Q) touch "$MARKER"; clear; echo -e "${C_DIM}Menú desactivado. Escribe ${C_B}lc-menu${C_RESET}${C_DIM} para reabrirlo.${C_RESET}"; echo ""; return 0 ;;
+      q|Q) touch "$MARKER"; clear; echo -e "${C_DIM}Menu desactivado. Escribe ${C_B}lc-menu${C_RESET}${C_DIM} para reabrirlo.${C_RESET}"; echo ""; return 0 ;;
     esac
   done
 }
+
+# ── Entrada directa (sin menu) para la app ────────────────────
+if [[ "${1:-}" == "check" ]]; then
+  check_agent_env --json
+  exit 0
+fi
 
 main_menu

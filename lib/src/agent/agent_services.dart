@@ -1,8 +1,6 @@
-// lib/src/agent/agent_services.dart — v11.2
-// Fixes: matar proceso previo + esperar puerto libre + verificar backend :8090
-//        antes de arrancar agente. Script de arranque mata previos y espera.
-//        Health-check en /health incluye estado del backend.
-//        v11.2: fix sintaxis strings raw en Dart (no usar \' dentro de r'...')
+// lib/src/agent/agent_services.dart — v10.0
+// Agrega: checkAgentEnv() y setupAgentEnv() con indicador visual en ajustes
+//         Boton de "Preparar entorno IA" con reloj de arena -> check verde
 
 import 'dart:async';
 import 'dart:convert';
@@ -78,6 +76,7 @@ class AgentServices {
 
   Pty? _agentPty;
   Pty? _cronPty;
+  Pty? _envSetupPty;
 
   final ValueNotifier<List<String>> agentLog = ValueNotifier<List<String>>([]);
   final ValueNotifier<List<String>> cronLog = ValueNotifier<List<String>>([]);
@@ -85,8 +84,16 @@ class AgentServices {
   final ValueNotifier<bool> cronStarting = ValueNotifier<bool>(false);
   final ValueNotifier<bool> agentFailed = ValueNotifier<bool>(false);
 
+  // ── Estado del entorno IA (nuevo v10) ───────────────────────
+  final ValueNotifier<bool> envChecking = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> envReady = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> envSetupRunning = ValueNotifier<bool>(false);
+  final ValueNotifier<String> envStatus = ValueNotifier<String>('');
+  final ValueNotifier<List<String>> envLog = ValueNotifier<List<String>>([]);
+
   bool get agentLaunched => _agentPty != null;
   bool get cronLaunched => _cronPty != null;
+  bool get envSetupActive => _envSetupPty != null;
 
   String get currentModelLabel {
     if (sourceId == 'gpu_local') return 'GPU Local';
@@ -110,7 +117,7 @@ class AgentServices {
 
   static const int _maxLogLines = 250;
 
-  static String _shellEscape(String s) => s.replaceAll("'", "'\\''");
+  static String _shellEscape(String s) => s.replaceAll("'", "'\''");
 
   Future<String> _configFilePath() async {
     final dir = await getApplicationDocumentsDirectory();
@@ -175,6 +182,292 @@ class AgentServices {
     agentPort = 8765;
     mpUseGpu = true;
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  CHECK / SETUP ENTORNO IA  (v10)
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Verifica rapidamente si el entorno IA esta listo.
+  /// Devuelve un mapa con el estado detallado.
+  Future<Map<String, dynamic>> checkAgentEnv() async {
+    envChecking.value = true;
+    envStatus.value = 'Verificando entorno...';
+    try {
+      if (!_cm.isReady) {
+        envReady.value = false;
+        envStatus.value = 'Contenedor no listo';
+        return {'ready': false, 'error': 'contenedor'};
+      }
+
+      // Ejecutar check via lc-menu (modo JSON)
+      final pty = _cm.startProcess('bash /usr/local/bin/lc-menu check');
+      final output = StringBuffer();
+      final completer = Completer<void>();
+
+      pty.output
+          .cast<List<int>>()
+          .transform(const Utf8Decoder(allowMalformed: true))
+          .listen(
+        (data) {
+          output.write(data);
+        },
+        onDone: () => completer.complete(),
+        onError: (_) => completer.complete(),
+        cancelOnError: false,
+      );
+
+      // Timeout de 10s para el check
+      await completer.future.timeout(const Duration(seconds: 10), onTimeout: () {});
+      try { pty.kill(); } catch (_) {}
+
+      final text = output.toString().trim();
+      // Buscar la linea JSON en la salida
+      String? jsonLine;
+      for (final line in LineSplitter.split(text)) {
+        final trimmed = line.trim();
+        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+          jsonLine = trimmed;
+          break;
+        }
+      }
+
+      if (jsonLine != null) {
+        try {
+          final result = jsonDecode(jsonLine) as Map<String, dynamic>;
+          final ready = result['ready'] == true;
+          envReady.value = ready;
+          if (ready) {
+            final pyVer = result['python_version'] ?? '';
+            final smolVer = result['smol_version'] ?? '';
+            envStatus.value = 'Listo · Python $pyVer · smolagents $smolVer';
+          } else {
+            final missing = <String>[];
+            if (result['python'] != true) missing.add('Python3');
+            if (result['venv'] != true) missing.add('venv');
+            if (result['smolagents'] != true) missing.add('smolagents');
+            if (result['server'] != true) missing.add('agent_server.py');
+            envStatus.value = 'Falta: ${missing.join(', ')}';
+          }
+          return result;
+        } catch (_) {}
+      }
+
+      // Fallback: verificacion manual si el JSON fallo
+      return await _checkAgentEnvManual();
+    } catch (e) {
+      envReady.value = false;
+      envStatus.value = 'Error: $e';
+      return {'ready': false, 'error': e.toString()};
+    } finally {
+      envChecking.value = false;
+    }
+  }
+
+  Future<Map<String, dynamic>> _checkAgentEnvManual() async {
+    final results = <String, dynamic>{};
+
+    // python3
+    final pyPty = _cm.startProcess('python3 --version');
+    final pyOut = await _readPtyOutput(pyPty, timeout: const Duration(seconds: 5));
+    final pyOk = pyOut.contains('Python 3');
+    results['python'] = pyOk;
+    results['python_version'] = pyOk ? pyOut.trim() : '';
+
+    // venv
+    final venvPty = _cm.startProcess('test -f /root/agent-env/bin/python3 && echo OK');
+    final venvOut = await _readPtyOutput(venvPty, timeout: const Duration(seconds: 3));
+    results['venv'] = venvOut.contains('OK');
+
+    // smolagents
+    final smolPty = _cm.startProcess('/root/agent-env/bin/pip show smolagents 2>/dev/null | grep Version');
+    final smolOut = await _readPtyOutput(smolPty, timeout: const Duration(seconds: 5));
+    final smolOk = smolOut.contains('Version');
+    results['smolagents'] = smolOk;
+    results['smol_version'] = smolOk
+        ? smolOut.split('Version:').last.trim()
+        : '';
+
+    // agent_server.py
+    final srvPty = _cm.startProcess('test -f /root/agent_server.py && echo OK');
+    final srvOut = await _readPtyOutput(srvPty, timeout: const Duration(seconds: 3));
+    results['server'] = srvOut.contains('OK');
+
+    // scripts
+    final scrPty = _cm.startProcess(
+        'for s in gen_topologia.sh gen_flujo.sh gen_grafica.py gen_qr.sh gen_scan_red.sh gen_discover_red.sh; do test -f /root/\$s || echo MISSING; done');
+    final scrOut = await _readPtyOutput(scrPty, timeout: const Duration(seconds: 3));
+    results['scripts'] = !scrOut.contains('MISSING');
+
+    // start_agent.sh
+    final startPty = _cm.startProcess('test -x /root/start_agent.sh && echo OK');
+    final startOut = await _readPtyOutput(startPty, timeout: const Duration(seconds: 3));
+    results['start'] = startOut.contains('OK');
+
+    final allOk = results['python'] == true &&
+        results['venv'] == true &&
+        results['smolagents'] == true &&
+        results['server'] == true &&
+        results['scripts'] == true &&
+        results['start'] == true;
+
+    results['ready'] = allOk;
+    envReady.value = allOk;
+    if (allOk) {
+      envStatus.value = 'Listo · ${results['python_version']} · smolagents ${results['smol_version']}';
+    } else {
+      envStatus.value = 'Entorno incompleto';
+    }
+    return results;
+  }
+
+  Future<String> _readPtyOutput(Pty pty, {required Duration timeout}) async {
+    final buffer = StringBuffer();
+    final completer = Completer<void>();
+
+    pty.output
+        .cast<List<int>>()
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .listen(
+      (data) => buffer.write(data),
+      onDone: () => completer.complete(),
+      onError: (_) => completer.complete(),
+      cancelOnError: false,
+    );
+
+    await completer.future.timeout(timeout, onTimeout: () {});
+    try { pty.kill(); } catch (_) {}
+    return buffer.toString();
+  }
+
+  /// Ejecuta el setup completo del entorno IA desde la app.
+  /// Muestra progreso en tiempo real via envLog.
+  Future<void> setupAgentEnv() async {
+    if (envSetupRunning.value) return;
+    if (!_cm.isReady) {
+      envStatus.value = 'Contenedor no listo. Espera a la inicializacion.';
+      return;
+    }
+
+    envSetupRunning.value = true;
+    envReady.value = false;
+    envLog.value = [];
+    envStatus.value = 'Preparando entorno IA...';
+    _push(envLog, '[XTR] Iniciando setup del entorno IA...');
+    _push(envLog, '[XTR] Esto puede tardar ~10 minutos.');
+
+    // Comando de setup automatizado (equivalente a lc-menu opcion 1)
+    final setupCmd = r'''set -e
+export DEBIAN_FRONTEND=noninteractive
+echo "[XTR] Configurando DNS..."
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+echo "[XTR] DNS listo"
+
+echo "[XTR] Actualizando paquetes..."
+apt-get update -qq || { echo "[ERROR] apt-get update fallo"; exit 1; }
+
+echo "[XTR] Instalando Python3 y herramientas..."
+apt-get install -y -qq --no-install-recommends --fix-missing \
+  python3 python3-pip python3-venv python3-dev \
+  graphviz qrencode python3-matplotlib \
+  git curl wget ca-certificates build-essential openssh-client \
+  || { echo "[ERROR] Instalacion de paquetes fallida"; exit 1; }
+
+echo "[XTR] Python3: $(python3 --version)"
+
+echo "[XTR] Creando entorno virtual..."
+python3 -m venv /root/agent-env --clear
+
+echo "[XTR] Instalando smolagents + dependencias..."
+/root/agent-env/bin/pip install -q --upgrade pip
+/root/agent-env/bin/pip install -q \
+  smolagents "fastapi>=0.111.0" "uvicorn[standard]" \
+  httpx openai requests \
+  || { echo "[ERROR] pip install fallo"; exit 1; }
+
+echo "[XTR] smolagents: $(/root/agent-env/bin/pip show smolagents 2>/dev/null | grep Version | cut -d' ' -f2)"
+
+echo "[XTR] Descargando scripts..."
+for script in gen_topologia.sh gen_flujo.sh gen_grafica.py gen_qr.sh gen_scan_red.sh gen_discover_red.sh; do
+  if [ ! -f "/root/$script" ]; then
+    curl -fsSL "https://raw.githubusercontent.com/txurtxil/LinuxContainer/main/assets/scripts/$script" \
+      -o "/root/$script" 2>/dev/null && chmod +x "/root/$script" 2>/dev/null || echo "[WARN] $script no descargado"
+  fi
+done
+
+if [ ! -f /root/install_android_sdk.sh ]; then
+  curl -fsSL "https://raw.githubusercontent.com/txurtxil/LinuxContainer/main/assets/scripts/install_android_sdk.sh" \
+    -o /root/install_android_sdk.sh 2>/dev/null && chmod +x /root/install_android_sdk.sh || echo "[WARN] install_android_sdk.sh no descargado"
+fi
+
+echo "[XTR] Escribiendo start_agent.sh..."
+cat > /root/start_agent.sh << 'EOF'
+#!/bin/bash
+source /root/agent-env/bin/activate
+cd /root
+exec uvicorn agent_server:app --host 127.0.0.1 --port 8765 --workers 1
+EOF
+chmod +x /root/start_agent.sh
+
+echo "[XTR] ✓ Setup completado"
+'''; // <-- cierre del raw string
+
+    final pty = _cm.startProcess(setupCmd);
+    _envSetupPty = pty;
+
+    pty.output
+        .cast<List<int>>()
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .listen(
+      (data) {
+        for (final line in const LineSplitter().convert(data)) {
+          if (line.trim().isNotEmpty) {
+            _push(envLog, line);
+            // Actualizar status segun el progreso
+            if (line.contains('Configurando DNS')) envStatus.value = 'Configurando DNS...';
+            if (line.contains('Actualizando paquetes')) envStatus.value = 'Actualizando paquetes (~2 min)...';
+            if (line.contains('Instalando Python3')) envStatus.value = 'Instalando Python3 (~3 min)...';
+            if (line.contains('Creando entorno virtual')) envStatus.value = 'Creando entorno virtual...';
+            if (line.contains('Instalando smolagents')) envStatus.value = 'Instalando smolagents (~5 min)...';
+            if (line.contains('Descargando scripts')) envStatus.value = 'Descargando scripts...';
+            if (line.contains('Setup completado')) envStatus.value = 'Finalizando...';
+          }
+        }
+      },
+      onError: (e) {
+        _push(envLog, '[ERROR] $e');
+      },
+      cancelOnError: false,
+    );
+
+    pty.exitCode.then((code) async {
+      _envSetupPty = null;
+      envSetupRunning.value = false;
+      if (code == 0) {
+        _push(envLog, '[XTR] ✓ Entorno IA preparado correctamente.');
+        // Verificar estado final
+        await checkAgentEnv();
+      } else {
+        _push(envLog, '[XTR] ✗ El setup fallo (codigo $code). Revisa los logs.');
+        envStatus.value = 'Fallo el setup. Revisa los logs.';
+        envReady.value = false;
+      }
+    });
+  }
+
+  void cancelEnvSetup() {
+    if (_envSetupPty != null) {
+      try { _envSetupPty!.kill(); } catch (_) {}
+      _envSetupPty = null;
+    }
+    envSetupRunning.value = false;
+    envStatus.value = 'Cancelado por el usuario.';
+    _push(envLog, '[XTR] Setup cancelado.');
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  MEDIAPIPE / GPU LOCAL
+  // ═══════════════════════════════════════════════════════════════
 
   Future<void> scanMpModels() async {
     try {
@@ -351,6 +644,10 @@ class AgentServices {
     } catch (_) {}
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  //  AGENT SERVER
+  // ═══════════════════════════════════════════════════════════════
+
   Future<bool> ensureAgentScript() async {
     final rootfs = _cm.rootfsPath;
     if (rootfs == null) {
@@ -376,7 +673,6 @@ class AgentServices {
     }
   }
 
-  // ---- v11: script de arranque mata previos + espera puerto libre + verifica backend ----
   Future<bool> _writeStartScript() async {
     final rootfs = _cm.rootfsPath;
     if (rootfs == null) {
@@ -384,12 +680,10 @@ class AgentServices {
       return false;
     }
 
-    // 1. Variables de entorno (escapadas)
     final envContent = "export LLM_BASE_URL='" + _shellEscape(effectiveBaseUrl) + "'\n"
         "export LLM_MODEL='" + _shellEscape(effectiveModel) + "'\n"
         "export LLM_API_KEY='" + _shellEscape(effectiveApiKey) + "'\n"
-        "export AGENT_PORT='" + agentPort.toString() + "'\n"
-        "export AGENT_PID_FILE='/tmp/agent.pid'";
+        "export AGENT_PORT='" + agentPort.toString() + "'";
 
     final envFile = File('$rootfs/root/agent_env.sh');
     try {
@@ -399,140 +693,64 @@ class AgentServices {
       return false;
     }
 
-    // 2. Script de arranque robusto
-    final startScript = r"""#!/bin/bash
-# v11: robusto — mata previos, espera puerto libre, verifica backend, sin set -e
-
+    const startScript = r'''#!/bin/bash
+set -e
 cd /root
 
-AGENT_PORT="${AGENT_PORT:-8765}"
-AGENT_PID_FILE="${AGENT_PID_FILE:-/tmp/agent.pid}"
-
-# ============================================
-# [1] Matar cualquier agent_server.py previo
-# ============================================
-echo "[XTR v11] Limpiando procesos previos..."
-if [ -f "$AGENT_PID_FILE" ]; then
-    OLD_PID=\$(cat "$AGENT_PID_FILE" 2>/dev/null)
-    if [ -n "$OLD_PID" ]; then
-        kill "$OLD_PID" 2>/dev/null || true
-        sleep 0.5
-        kill -9 "$OLD_PID" 2>/dev/null || true
-    fi
-    rm -f "$AGENT_PID_FILE"
-fi
-pkill -9 -f "agent_server.py" 2>/dev/null || true
-pkill -9 -f "python3.*agent_server" 2>/dev/null || true
-sleep 0.6
-
-# ============================================
-# [2] Esperar a que el puerto quede libre
-# ============================================
-echo "[XTR v11] Esperando puerto :\$AGENT_PORT libre..."
-for i in \$(seq 1 20); do
-    OCCUPIED=0
-    if command -v ss >/dev/null 2>&1; then
-        ss -tln 2>/dev/null | grep -q ":\$AGENT_PORT " && OCCUPIED=1
-    elif command -v netstat >/dev/null 2>&1; then
-        netstat -tln 2>/dev/null | grep -q ":\$AGENT_PORT " && OCCUPIED=1
-    else
-        if timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/\$AGENT_PORT" 2>/dev/null; then
-            OCCUPIED=1
-        fi
-    fi
-    if [ "\$OCCUPIED" = "0" ]; then
-        echo "[ok] Puerto :\$AGENT_PORT libre."
-        break
-    fi
-    echo "[wait] Puerto :\$AGENT_PORT aun ocupado (intento \$i/20)..."
-    sleep 0.5
-done
-
-# ============================================
-# [3] Verificar que agent_server.py existe
-# ============================================
 if [ ! -f /root/agent_server.py ]; then
-    echo "[ERROR] No existe /root/agent_server.py"
-    exit 1
+  echo '[ERROR] No existe /root/agent_server.py'
+  exit 1
 fi
 
-# ============================================
-# [4] Buscar python3
-# ============================================
-PYTHON=""
+PYTHON=''
 for P in /root/agent-env/bin/python3 /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
-    if [ -x "\$P" ]; then PYTHON="\$P"; break; fi
+  if [ -x "$P" ]; then PYTHON="$P"; break; fi
 done
 
-if [ -z "\$PYTHON" ]; then
-    echo "[XTR] python3 no encontrado. Intentando instalar..."
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip 2>/dev/null || true
-    elif command -v apk >/dev/null 2>&1; then
-        apk add --no-cache python3 py3-pip 2>/dev/null || true
-    elif command -v pacman >/dev/null 2>&1; then
-        pacman -Sy --noconfirm python python-pip 2>/dev/null || true
-    fi
-    for P in /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
-        if [ -x "\$P" ]; then PYTHON="\$P"; break; fi
-    done
+if [ -z "$PYTHON" ]; then
+  echo '[XTR] python3 no encontrado. Intentando instalar...'
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip 2>/dev/null || true
+  elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache python3 py3-pip 2>/dev/null || true
+  elif command -v pacman >/dev/null 2>&1; then
+    pacman -Sy --noconfirm python python-pip 2>/dev/null || true
+  fi
+  for P in /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
+    if [ -x "$P" ]; then PYTHON="$P"; break; fi
+  done
 fi
 
-if [ -z "\$PYTHON" ]; then
-    echo "[FATAL] No se encontro ni se pudo instalar python3."
-    echo "[hint] Entra al contenedor y ejecuta: apt-get update && apt-get install -y python3"
-    exit 1
+if [ -z "$PYTHON" ]; then
+  echo '[FATAL] No se encontro ni se pudo instalar python3.'
+  exit 1
 fi
 
-# ============================================
-# [5] Asegurar pip
-# ============================================
-if ! "\$PYTHON" -m pip --version >/dev/null 2>&1; then
-    echo "[XTR] pip no encontrado. Instalando..."
-    "\$PYTHON" -m ensurepip --upgrade 2>/dev/null || true
-    apt-get install -y -qq python3-pip 2>/dev/null || true
+if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
+  echo '[XTR] pip no encontrado. Instalando...'
+  "$PYTHON" -m ensurepip --upgrade 2>/dev/null || true
+  apt-get install -y -qq python3-pip 2>/dev/null || true
 fi
 
-# ============================================
-# [6] Instalar deps opcionales
-# ============================================
-echo "[XTR] Verificando dependencias..."
-"\$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
-"\$PYTHON" -m pip install -q httpx openai 2>/dev/null || echo "[warn] No se pudieron instalar deps opcionales (httpx/openai). El fallback usa stdlib."
+echo '[XTR] Verificando dependencias...'
+"$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
+"$PYTHON" -m pip install -q httpx openai 2>/dev/null || echo '[warn] No se pudieron instalar deps opcionales.'
 
-# ============================================
-# [7] Activar venv si existe
-# ============================================
 if [ -f /root/agent-env/bin/activate ]; then
-    . /root/agent-env/bin/activate
+  . /root/agent-env/bin/activate
 fi
 
-# ============================================
-# [8] Cargar variables de entorno
-# ============================================
 if [ -f /root/agent_env.sh ]; then
-    . /root/agent_env.sh
+  . /root/agent_env.sh
 fi
 
-# ============================================
-# [9] Verificar backend MediaPipe (solo GPU local)
-#     NOTA: El agente Python hace su propio health-check al arrancar.
-#     Este bloque es solo informativo; usa python si curl no existe.
-# ============================================
-if echo "\$LLM_BASE_URL" | grep -q "127.0.0.1:8090"; then
-    echo "[XTR] Backend MediaPipe sera verificado por el agente Python al arrancar."
-fi
+echo "[XTR] Usando python: $PYTHON"
+echo "[XTR] LLM_BASE_URL=$LLM_BASE_URL"
+echo "[XTR] Modelo=$LLM_MODEL"
+echo "[XTR] Puerto=$AGENT_PORT"
 
-echo "[XTR] Usando python: \$PYTHON"
-echo "[XTR] LLM_BASE_URL=\$LLM_BASE_URL"
-echo "[XTR] Modelo=\$LLM_MODEL"
-echo "[XTR] Puerto=\$AGENT_PORT"
-
-# ============================================
-# [10] Lanzar agente
-# ============================================
-exec "\$PYTHON" /root/agent_server.py
-""";
+exec "$PYTHON" /root/agent_server.py
+''';
 
     final scriptFile = File('$rootfs/root/start_agent.sh');
     try {
@@ -542,7 +760,6 @@ exec "\$PYTHON" /root/agent_server.py
       return false;
     }
 
-    // 3. Hacer ejecutable
     try {
       final chmodPty = _cm.startProcess('chmod +x /root/start_agent.sh');
       await chmodPty.exitCode;
@@ -550,24 +767,14 @@ exec "\$PYTHON" /root/agent_server.py
       _push(agentLog, '[warn] No se pudo hacer ejecutable start_agent.sh: $e');
     }
 
-    _push(agentLog, '[ok] Scripts de arranque escritos en rootfs (v11).');
+    _push(agentLog, '[ok] Scripts de arranque escritos en rootfs.');
     return true;
   }
 
-  // v11: comando simple
   String _agentCommand() => 'bash /root/start_agent.sh';
 
-  // ---- v11: matar previo + esperar liberacion + verificar backend antes de arrancar ----
   Future<void> startAgent() async {
-    // Proteccion contra doble-click
-    if (agentStarting.value) {
-      _push(agentLog, '[warn] El agente ya se esta iniciando. Espera...');
-      return;
-    }
-    if (_agentPty != null) {
-      _push(agentLog, '[warn] El agente ya esta corriendo. Detenlo primero.');
-      return;
-    }
+    if (_agentPty != null) return;
     if (!_cm.isReady) {
       _push(agentLog, '[error] El contenedor Debian aun no esta listo.');
       _push(agentLog, '[hint] Espera a que el contenedor termine de inicializarse.');
@@ -575,41 +782,12 @@ exec "\$PYTHON" /root/agent_server.py
       return;
     }
 
-    // --- GPU Local: verificar que el servidor MediaPipe este corriendo ---
-    if (sourceId == 'gpu_local') {
-      if (!mpServerRunning) {
-        _push(agentLog, '[error] El servidor MediaPipe (:8090) no esta activo.');
-        _push(agentLog, '[hint] Ve a Ajustes -> GPU Local -> Iniciar :8090, o carga un modelo primero.');
-        agentFailed.value = true;
-        return;
-      }
-      // Doble verificacion: health-check real al backend
-      final backendOk = await _checkBackendHealth();
-      if (!backendOk) {
-        _push(agentLog, '[warn] Backend MediaPipe no responde a health-check. Intentando de todos modos...');
-      }
-    }
-
-    // --- Matar cualquier agente previo de forma robusta ---
-    await _killAgentFromContainer();
-    await Future.delayed(const Duration(milliseconds: 800));
-
-    // --- Esperar a que el puerto quede libre ---
-    final portFree = await _waitPortFree(agentPort, timeoutMs: 6000);
-    if (!portFree) {
-      _push(agentLog, '[warn] Puerto :$agentPort sigue ocupado despues de esperar. Forzando limpieza...');
-      await _killAgentFromContainer();
-      await Future.delayed(const Duration(seconds: 1));
-    }
-
-    // 1. Copiar agent_server.py
     final okScript = await ensureAgentScript();
     if (!okScript) {
       agentFailed.value = true;
       return;
     }
 
-    // 2. Escribir scripts de arranque (v11)
     final okStart = await _writeStartScript();
     if (!okStart) {
       agentFailed.value = true;
@@ -618,7 +796,7 @@ exec "\$PYTHON" /root/agent_server.py
 
     final src = sourceId == 'gpu_local' ? 'GPU Local (MediaPipe)' : 'Remoto: $remoteBaseUrl';
     agentLog.value = [];
-    _push(agentLog, '[XTR Agent Server v11.0]');
+    _push(agentLog, '[XTR Agent Server v10.0]');
     _push(agentLog, '[fuente: $src | puerto: $agentPort]');
     _push(agentLog, '[Arrancando...]');
     agentStarting.value = true;
@@ -633,82 +811,6 @@ exec "\$PYTHON" /root/agent_server.py
       _syncForeground();
     });
     _syncForeground();
-  }
-
-  /// Mata agent_server.py desde dentro del contenedor (kill + pkill + rm pidfile)
-  Future<void> _killAgentFromContainer() async {
-    if (!_cm.isReady) return;
-    _push(agentLog, '[..] Limpiando procesos previos en contenedor...');
-    final cleanup = r'P=\$(cat /tmp/agent.pid 2>/dev/null); '
-        r'if [ -n "\$P" ]; then kill "\$P" 2>/dev/null; sleep 0.5; kill -9 "\$P" 2>/dev/null; fi; '
-        r'pkill -9 -f "agent_server.py" 2>/dev/null || true; '
-        r'pkill -9 -f "python3.*agent_server" 2>/dev/null || true; '
-        r'rm -f /tmp/agent.pid; '
-        r'exit 0';
-    try {
-      final p = _cm.startProcess(cleanup);
-      await p.exitCode.timeout(const Duration(seconds: 4), onTimeout: () {
-        try { p.kill(); } catch (_) {}
-        return -1;
-      });
-    } catch (_) {}
-  }
-
-  /// Espera activa a que el puerto quede libre dentro del contenedor
-  Future<bool> _waitPortFree(int port, {int timeoutMs = 6000}) async {
-    if (!_cm.isReady) return true;
-    final rootfs = _cm.rootfsPath;
-    if (rootfs == null) return true;
-
-    final t0 = DateTime.now();
-    while (DateTime.now().difference(t0).inMilliseconds < timeoutMs) {
-      try {
-        final checkFile = '/tmp/port_check_\$port.txt';
-        final checkCmd = 'ss -tln 2>/dev/null | grep -q ":\$port " || netstat -tln 2>/dev/null | grep -q ":\$port " && echo occupied > \$checkFile || echo free > \$checkFile';
-        final pty = _cm.startProcess(checkCmd);
-        await pty.exitCode.timeout(const Duration(seconds: 2), onTimeout: () {
-          try { pty.kill(); } catch (_) {}
-          return -1;
-        });
-        await Future.delayed(const Duration(milliseconds: 300));
-        final f = File('\$rootfs\$checkFile');
-        if (await f.exists()) {
-          final content = (await f.readAsString()).trim();
-          try { await f.delete(); } catch (_) {}
-          if (content == 'free') {
-            return true;
-          }
-        }
-      } catch (_) {}
-      await Future.delayed(const Duration(milliseconds: 500));
-    }
-    return false;
-  }
-
-  /// Health-check del backend MediaPipe (:8090) usando python (stdlib)
-  /// porque curl puede no estar instalado en el contenedor.
-  Future<bool> _checkBackendHealth() async {
-    if (sourceId != 'gpu_local') return true;
-    try {
-      final rootfs = _cm.rootfsPath;
-      if (rootfs == null) return false;
-      final checkFile = '/tmp/backend_health.txt';
-      // Usar python3 (stdlib) para el health-check; curl puede no existir
-      final checkCmd = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/v1/models', timeout=3); print('ok')\" > \$checkFile 2>/dev/null || echo fail > \$checkFile";
-      final pty = _cm.startProcess(checkCmd);
-      await pty.exitCode.timeout(const Duration(seconds: 5), onTimeout: () {
-        try { pty.kill(); } catch (_) {}
-        return -1;
-      });
-      await Future.delayed(const Duration(milliseconds: 500));
-      final f = File('\$rootfs\$checkFile');
-      if (await f.exists()) {
-        final content = (await f.readAsString()).trim();
-        try { await f.delete(); } catch (_) {}
-        return content == 'ok';
-      }
-    } catch (_) {}
-    return false;
   }
 
   void stopAgent() {
@@ -773,9 +875,9 @@ exec "\$PYTHON" /root/agent_server.py
       held?.kill();
     } catch (_) {}
     if (!_cm.isReady) return;
-    final cleanup = r'P=\$(cat ' +
+    final cleanup = r'P=$(cat ' +
         pidFile +
-        r' 2>/dev/null); if [ -n "\$P" ]; then kill \$P 2>/dev/null; sleep 0.4; kill -9 \$P 2>/dev/null; fi; pkill -9 -f "' +
+        r' 2>/dev/null); if [ -n "$P" ]; then kill $P 2>/dev/null; sleep 0.4; kill -9 $P 2>/dev/null; fi; pkill -9 -f "' +
         pattern +
         r'" 2>/dev/null; rm -f ' +
         pidFile +

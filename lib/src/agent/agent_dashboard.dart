@@ -1,4 +1,6 @@
-// lib/src/agent/agent_dashboard.dart — v7.0
+// lib/src/agent/agent_dashboard.dart — v8.0
+// Agrega: Boton de estado del entorno IA en Ajustes
+//         Reloj de arena durante setup -> Check verde cuando listo
 
 import 'dart:async';
 import 'dart:io';
@@ -73,10 +75,17 @@ class _AgentDashboardState extends State<AgentDashboard> {
         Timer.periodic(const Duration(seconds: 5), (_) => _pollHealth());
     _svc.agentStarting.addListener(_onSvc);
     _svc.agentFailed.addListener(_onSvc);
+    _svc.envReady.addListener(_onSvc);
+    _svc.envChecking.addListener(_onSvc);
+    _svc.envSetupRunning.addListener(_onSvc);
     _svc.listenMpEvents((e) {
       if (mounted) {
         setState(() => _svc.handleMpEvent(e));
       }
+    });
+    // Verificar entorno IA al iniciar (silencioso)
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) _svc.checkAgentEnv();
     });
   }
 
@@ -86,6 +95,9 @@ class _AgentDashboardState extends State<AgentDashboard> {
     _bootPollTimer?.cancel();
     _svc.agentStarting.removeListener(_onSvc);
     _svc.agentFailed.removeListener(_onSvc);
+    _svc.envReady.removeListener(_onSvc);
+    _svc.envChecking.removeListener(_onSvc);
+    _svc.envSetupRunning.removeListener(_onSvc);
     _svc.cancelMpEvents();
     _input.dispose();
     _mpPrompt.dispose();
@@ -632,6 +644,269 @@ class _AgentDashboardState extends State<AgentDashboard> {
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  //  BOTON ENTORNO IA  (v10)
+  // ═══════════════════════════════════════════════════════════════
+
+  Widget _envStatusButton(StateSetter setS) {
+    final checking = _svc.envChecking.value;
+    final setupRunning = _svc.envSetupRunning.value;
+    final ready = _svc.envReady.value;
+    final status = _svc.envStatus.value;
+
+    // Estados combinados
+    final isWorking = checking || setupRunning;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: ready ? _C.ok.withValues(alpha: 0.08) : _C.cardAlt,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: ready
+              ? _C.ok.withValues(alpha: 0.4)
+              : isWorking
+                  ? _C.accent.withValues(alpha: 0.4)
+                  : _C.border,
+        ),
+      ),
+      child: InkWell(
+        onTap: isWorking
+            ? null
+            : () async {
+                if (ready) {
+                  // Ya esta listo, solo verificar de nuevo
+                  await _svc.checkAgentEnv();
+                  setS(() {});
+                } else {
+                  // Mostrar dialogo de confirmacion antes de instalar
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      backgroundColor: _C.card,
+                      title: const Text('Preparar entorno IA',
+                          style: TextStyle(color: _C.textHi, fontSize: 16)),
+                      content: const Text(
+                        'Se instalara Python3, smolagents y las herramientas necesarias.\n\n'
+                        'Requiere conexion a internet.\n'
+                        'Duracion estimada: ~10 minutos.',
+                        style: TextStyle(color: _C.textLo, fontSize: 13, height: 1.5),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Cancelar', style: TextStyle(color: _C.textLo)),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Iniciar', style: TextStyle(color: _C.accent)),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirm == true) {
+                    await _svc.setupAgentEnv();
+                    setS(() {});
+                  }
+                }
+              },
+        borderRadius: BorderRadius.circular(10),
+        child: Row(
+          children: [
+            // Icono de estado
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: ready
+                    ? _C.ok.withValues(alpha: 0.15)
+                    : isWorking
+                        ? _C.accent.withValues(alpha: 0.15)
+                        : _C.card,
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: isWorking
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: _C.accent,
+                        ),
+                      )
+                    : Icon(
+                        ready ? Icons.check_rounded : Icons.build_outlined,
+                        size: 18,
+                        color: ready ? _C.ok : _C.warn,
+                      ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Texto
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    ready
+                        ? 'Entorno IA listo'
+                        : isWorking
+                            ? 'Preparando entorno...'
+                            : 'Entorno IA no preparado',
+                    style: TextStyle(
+                      color: ready ? _C.ok : _C.textHi,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (status.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      status,
+                      style: const TextStyle(
+                        color: _C.textLo,
+                        fontSize: 11.5,
+                        height: 1.3,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            // Accion secundaria
+            if (!isWorking)
+              IconButton(
+                tooltip: ready ? 'Verificar de nuevo' : 'Preparar entorno',
+                onPressed: () async {
+                  if (ready) {
+                    await _svc.checkAgentEnv();
+                  } else {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        backgroundColor: _C.card,
+                        title: const Text('Preparar entorno IA',
+                            style: TextStyle(color: _C.textHi, fontSize: 16)),
+                        content: const Text(
+                          'Se instalara Python3, smolagents y las herramientas necesarias.\n\n'
+                          'Requiere conexion a internet.\n'
+                          'Duracion estimada: ~10 minutos.',
+                          style: TextStyle(color: _C.textLo, fontSize: 13, height: 1.5),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: const Text('Cancelar',
+                                style: TextStyle(color: _C.textLo)),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Iniciar',
+                                style: TextStyle(color: _C.accent)),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirm == true) {
+                      await _svc.setupAgentEnv();
+                    }
+                  }
+                  setS(() {});
+                },
+                icon: Icon(
+                  ready ? Icons.refresh : Icons.arrow_forward,
+                  size: 18,
+                  color: ready ? _C.ok : _C.accent,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEnvSetupLogs() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _C.bg,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        final logScroll = ScrollController();
+        return SizedBox(
+          height: MediaQuery.of(ctx).size.height * 0.6,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 14, 8, 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.build_outlined, size: 18, color: _C.textLo),
+                    const SizedBox(width: 8),
+                    const Text('Setup Entorno IA',
+                        style: TextStyle(
+                            color: _C.textHi,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    if (_svc.envSetupRunning.value)
+                      TextButton(
+                        onPressed: () {
+                          _svc.cancelEnvSetup();
+                          Navigator.pop(ctx);
+                        },
+                        child: const Text('Cancelar',
+                            style: TextStyle(color: _C.err, fontSize: 12)),
+                      ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: const Icon(Icons.close, size: 20, color: _C.textLo),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: _C.border),
+              Expanded(
+                child: ValueListenableBuilder<List<String>>(
+                  valueListenable: _svc.envLog,
+                  builder: (_, lines, __) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (logScroll.hasClients) {
+                        logScroll.jumpTo(logScroll.position.maxScrollExtent);
+                      }
+                    });
+                    if (lines.isEmpty) {
+                      return const Center(
+                        child: Text('Esperando inicio...',
+                            style: TextStyle(color: _C.off, fontSize: 13)),
+                      );
+                    }
+                    return ListView.builder(
+                      controller: logScroll,
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                      itemCount: lines.length,
+                      itemBuilder: (_, i) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1),
+                        child: Text(lines[i],
+                            style: _mono.copyWith(color: _C.textLo)),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   void _showSettingsSheet() {
     final baseUrlCtrl = TextEditingController(text: _svc.remoteBaseUrl);
     final modelCtrl = TextEditingController(text: _svc.remoteModel);
@@ -696,6 +971,24 @@ class _AgentDashboardState extends State<AgentDashboard> {
                       child: ListView(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                         children: [
+                          // ═══ BOTON ENTORNO IA (v10) ═══
+                          _envStatusButton(setS),
+                          const SizedBox(height: 8),
+                          // Boton para ver logs del setup
+                          if (_svc.envSetupRunning.value || _svc.envLog.value.isNotEmpty)
+                            Center(
+                              child: TextButton.icon(
+                                onPressed: _showEnvSetupLogs,
+                                icon: const Icon(Icons.article_outlined,
+                                    size: 14, color: _C.accent),
+                                label: const Text('Ver logs del setup',
+                                    style: TextStyle(color: _C.accent, fontSize: 12)),
+                              ),
+                            ),
+                          const SizedBox(height: 18),
+                          const Divider(color: _C.border),
+                          const SizedBox(height: 18),
+
                           _cfgLabel('Fuente de inferencia'),
                           const SizedBox(height: 10),
                           Wrap(
