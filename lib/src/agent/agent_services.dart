@@ -1,7 +1,8 @@
-// lib/src/agent/agent_services.dart — v11.0
+// lib/src/agent/agent_services.dart — v11.2
 // Fixes: matar proceso previo + esperar puerto libre + verificar backend :8090
 //        antes de arrancar agente. Script de arranque mata previos y espera.
 //        Health-check en /health incluye estado del backend.
+//        v11.2: fix sintaxis strings raw en Dart (no usar \' dentro de r'...')
 
 import 'dart:async';
 import 'dart:convert';
@@ -412,7 +413,7 @@ AGENT_PID_FILE="${AGENT_PID_FILE:-/tmp/agent.pid}"
 # ============================================
 echo "[XTR v11] Limpiando procesos previos..."
 if [ -f "$AGENT_PID_FILE" ]; then
-    OLD_PID=$(cat "$AGENT_PID_FILE" 2>/dev/null)
+    OLD_PID=\$(cat "$AGENT_PID_FILE" 2>/dev/null)
     if [ -n "$OLD_PID" ]; then
         kill "$OLD_PID" 2>/dev/null || true
         sleep 0.5
@@ -427,24 +428,23 @@ sleep 0.6
 # ============================================
 # [2] Esperar a que el puerto quede libre
 # ============================================
-echo "[XTR v11] Esperando puerto :$AGENT_PORT libre..."
-for i in $(seq 1 20); do
+echo "[XTR v11] Esperando puerto :\$AGENT_PORT libre..."
+for i in \$(seq 1 20); do
     OCCUPIED=0
     if command -v ss >/dev/null 2>&1; then
-        ss -tln 2>/dev/null | grep -q ":$AGENT_PORT " && OCCUPIED=1
+        ss -tln 2>/dev/null | grep -q ":\$AGENT_PORT " && OCCUPIED=1
     elif command -v netstat >/dev/null 2>&1; then
-        netstat -tln 2>/dev/null | grep -q ":$AGENT_PORT " && OCCUPIED=1
+        netstat -tln 2>/dev/null | grep -q ":\$AGENT_PORT " && OCCUPIED=1
     else
-        # Fallback: intentar conectar
-        if timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$AGENT_PORT" 2>/dev/null; then
+        if timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/\$AGENT_PORT" 2>/dev/null; then
             OCCUPIED=1
         fi
     fi
-    if [ "$OCCUPIED" = "0" ]; then
-        echo "[ok] Puerto :$AGENT_PORT libre."
+    if [ "\$OCCUPIED" = "0" ]; then
+        echo "[ok] Puerto :\$AGENT_PORT libre."
         break
     fi
-    echo "[wait] Puerto :$AGENT_PORT aun ocupado (intento $i/20)..."
+    echo "[wait] Puerto :\$AGENT_PORT aun ocupado (intento \$i/20)..."
     sleep 0.5
 done
 
@@ -461,10 +461,10 @@ fi
 # ============================================
 PYTHON=""
 for P in /root/agent-env/bin/python3 /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
-    if [ -x "$P" ]; then PYTHON="$P"; break; fi
+    if [ -x "\$P" ]; then PYTHON="\$P"; break; fi
 done
 
-if [ -z "$PYTHON" ]; then
+if [ -z "\$PYTHON" ]; then
     echo "[XTR] python3 no encontrado. Intentando instalar..."
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip 2>/dev/null || true
@@ -474,11 +474,11 @@ if [ -z "$PYTHON" ]; then
         pacman -Sy --noconfirm python python-pip 2>/dev/null || true
     fi
     for P in /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
-        if [ -x "$P" ]; then PYTHON="$P"; break; fi
+        if [ -x "\$P" ]; then PYTHON="\$P"; break; fi
     done
 fi
 
-if [ -z "$PYTHON" ]; then
+if [ -z "\$PYTHON" ]; then
     echo "[FATAL] No se encontro ni se pudo instalar python3."
     echo "[hint] Entra al contenedor y ejecuta: apt-get update && apt-get install -y python3"
     exit 1
@@ -487,9 +487,9 @@ fi
 # ============================================
 # [5] Asegurar pip
 # ============================================
-if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
+if ! "\$PYTHON" -m pip --version >/dev/null 2>&1; then
     echo "[XTR] pip no encontrado. Instalando..."
-    "$PYTHON" -m ensurepip --upgrade 2>/dev/null || true
+    "\$PYTHON" -m ensurepip --upgrade 2>/dev/null || true
     apt-get install -y -qq python3-pip 2>/dev/null || true
 fi
 
@@ -497,8 +497,8 @@ fi
 # [6] Instalar deps opcionales
 # ============================================
 echo "[XTR] Verificando dependencias..."
-"$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
-"$PYTHON" -m pip install -q httpx openai 2>/dev/null || echo "[warn] No se pudieron instalar deps opcionales (httpx/openai). El fallback usa stdlib."
+"\$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
+"\$PYTHON" -m pip install -q httpx openai 2>/dev/null || echo "[warn] No se pudieron instalar deps opcionales (httpx/openai). El fallback usa stdlib."
 
 # ============================================
 # [7] Activar venv si existe
@@ -516,28 +516,22 @@ fi
 
 # ============================================
 # [9] Verificar backend MediaPipe (solo GPU local)
+#     NOTA: El agente Python hace su propio health-check al arrancar.
+#     Este bloque es solo informativo; usa python si curl no existe.
 # ============================================
-if echo "$LLM_BASE_URL" | grep -q "127.0.0.1:8090"; then
-    echo "[XTR] Verificando backend MediaPipe en :8090..."
-    for i in $(seq 1 15); do
-        if curl -sf http://127.0.0.1:8090/v1/models >/dev/null 2>&1; then
-            echo "[ok] Backend MediaPipe responde."
-            break
-        fi
-        echo "[wait] Backend no responde aun (intento $i/15)..."
-        sleep 0.6
-    done
+if echo "\$LLM_BASE_URL" | grep -q "127.0.0.1:8090"; then
+    echo "[XTR] Backend MediaPipe sera verificado por el agente Python al arrancar."
 fi
 
-echo "[XTR] Usando python: $PYTHON"
-echo "[XTR] LLM_BASE_URL=$LLM_BASE_URL"
-echo "[XTR] Modelo=$LLM_MODEL"
-echo "[XTR] Puerto=$AGENT_PORT"
+echo "[XTR] Usando python: \$PYTHON"
+echo "[XTR] LLM_BASE_URL=\$LLM_BASE_URL"
+echo "[XTR] Modelo=\$LLM_MODEL"
+echo "[XTR] Puerto=\$AGENT_PORT"
 
 # ============================================
 # [10] Lanzar agente
 # ============================================
-exec "$PYTHON" /root/agent_server.py
+exec "\$PYTHON" /root/agent_server.py
 """;
 
     final scriptFile = File('$rootfs/root/start_agent.sh');
@@ -645,8 +639,8 @@ exec "$PYTHON" /root/agent_server.py
   Future<void> _killAgentFromContainer() async {
     if (!_cm.isReady) return;
     _push(agentLog, '[..] Limpiando procesos previos en contenedor...');
-    final cleanup = r'P=$(cat /tmp/agent.pid 2>/dev/null); '
-        r'if [ -n "$P" ]; then kill "$P" 2>/dev/null; sleep 0.5; kill -9 "$P" 2>/dev/null; fi; '
+    final cleanup = r'P=\$(cat /tmp/agent.pid 2>/dev/null); '
+        r'if [ -n "\$P" ]; then kill "\$P" 2>/dev/null; sleep 0.5; kill -9 "\$P" 2>/dev/null; fi; '
         r'pkill -9 -f "agent_server.py" 2>/dev/null || true; '
         r'pkill -9 -f "python3.*agent_server" 2>/dev/null || true; '
         r'rm -f /tmp/agent.pid; '
@@ -669,15 +663,15 @@ exec "$PYTHON" /root/agent_server.py
     final t0 = DateTime.now();
     while (DateTime.now().difference(t0).inMilliseconds < timeoutMs) {
       try {
-        final checkFile = '/tmp/port_check_$port.txt';
-        final checkCmd = 'ss -tln 2>/dev/null | grep -q ":$port " || netstat -tln 2>/dev/null | grep -q ":$port " && echo occupied > $checkFile || echo free > $checkFile';
+        final checkFile = '/tmp/port_check_\$port.txt';
+        final checkCmd = 'ss -tln 2>/dev/null | grep -q ":\$port " || netstat -tln 2>/dev/null | grep -q ":\$port " && echo occupied > \$checkFile || echo free > \$checkFile';
         final pty = _cm.startProcess(checkCmd);
         await pty.exitCode.timeout(const Duration(seconds: 2), onTimeout: () {
           try { pty.kill(); } catch (_) {}
           return -1;
         });
         await Future.delayed(const Duration(milliseconds: 300));
-        final f = File('$rootfs$checkFile');
+        final f = File('\$rootfs\$checkFile');
         if (await f.exists()) {
           final content = (await f.readAsString()).trim();
           try { await f.delete(); } catch (_) {}
@@ -691,21 +685,23 @@ exec "$PYTHON" /root/agent_server.py
     return false;
   }
 
-  /// Health-check del backend MediaPipe (:8090)
+  /// Health-check del backend MediaPipe (:8090) usando python (stdlib)
+  /// porque curl puede no estar instalado en el contenedor.
   Future<bool> _checkBackendHealth() async {
     if (sourceId != 'gpu_local') return true;
     try {
       final rootfs = _cm.rootfsPath;
       if (rootfs == null) return false;
       final checkFile = '/tmp/backend_health.txt';
-      final checkCmd = 'curl -sf http://127.0.0.1:8090/v1/models >/dev/null 2>&1 && echo ok > $checkFile || echo fail > $checkFile';
+      // Usar python3 (stdlib) para el health-check; curl puede no existir
+      final checkCmd = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/v1/models', timeout=3); print('ok')\" > \$checkFile 2>/dev/null || echo fail > \$checkFile";
       final pty = _cm.startProcess(checkCmd);
-      await pty.exitCode.timeout(const Duration(seconds: 4), onTimeout: () {
+      await pty.exitCode.timeout(const Duration(seconds: 5), onTimeout: () {
         try { pty.kill(); } catch (_) {}
         return -1;
       });
       await Future.delayed(const Duration(milliseconds: 500));
-      final f = File('$rootfs$checkFile');
+      final f = File('\$rootfs\$checkFile');
       if (await f.exists()) {
         final content = (await f.readAsString()).trim();
         try { await f.delete(); } catch (_) {}
@@ -777,9 +773,9 @@ exec "$PYTHON" /root/agent_server.py
       held?.kill();
     } catch (_) {}
     if (!_cm.isReady) return;
-    final cleanup = r'P=$(cat ' +
+    final cleanup = r'P=\$(cat ' +
         pidFile +
-        r' 2>/dev/null); if [ -n "$P" ]; then kill $P 2>/dev/null; sleep 0.4; kill -9 $P 2>/dev/null; fi; pkill -9 -f "' +
+        r' 2>/dev/null); if [ -n "\$P" ]; then kill \$P 2>/dev/null; sleep 0.4; kill -9 \$P 2>/dev/null; fi; pkill -9 -f "' +
         pattern +
         r'" 2>/dev/null; rm -f ' +
         pidFile +
