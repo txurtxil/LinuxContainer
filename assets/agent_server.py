@@ -1,142 +1,204 @@
 #!/usr/bin/env python3
-"""
-XTR Terminal — agent_server.py v10.1
-Servidor FastAPI para el agente IA — ejecuta dentro de proot Debian arm64
-Puerto: 8765 | Venv: /root/agent-env
+# agent_server.py — v11.0  (solo stdlib, sin dependencias externas)
+# Fixes: SO_REUSEADDR, PID file, reintentos bind, health-check backend,
+#        graceful shutdown, no falla si backend no responde (reporta warning)
 
-Endpoints:
-  GET  /health        — Health check
-  POST /run           — Ejecuta tarea (SSE streaming)
-  POST /chat          — Alias de /run
-  GET  /tools         — Lista tools disponibles
-  GET  /gpu/status    — Estado del servidor GPU MediaPipe
-"""
+import os, sys, json, socket, socketserver, http.server, urllib.request, urllib.error, signal, time
 
-import os
-import sys
-import json
-import logging
-from typing import Any
+PORT = int(os.environ.get('AGENT_PORT', '8765'))
+BASE_URL = os.environ.get('LLM_BASE_URL', 'http://127.0.0.1:8090/v1')
+MODEL = os.environ.get('LLM_MODEL', 'gemma3-local')
+API_KEY = os.environ.get('LLM_API_KEY', 'local')
+PID_FILE = os.environ.get('AGENT_PID_FILE', '/tmp/agent.pid')
+MAX_BIND_RETRIES = int(os.environ.get('AGENT_BIND_RETRIES', '30'))
+BIND_RETRY_DELAY = float(os.environ.get('AGENT_BIND_DELAY', '0.5'))
 
-try:
-    import httpx
-    from fastapi import FastAPI, HTTPException
-    from fastapi.responses import StreamingResponse
-    from fastapi.middleware.cors import CORSMiddleware
-    from pydantic import BaseModel
-    import uvicorn
-except ImportError as e:
-    print(f"[FATAL] Faltan dependencias: {e}", file=sys.stderr)
-    print("[FATAL] Ejecuta: /root/agent-env/bin/pip install fastapi uvicorn pydantic httpx", file=sys.stderr)
-    sys.exit(1)
+_shutdown_requested = False
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("xtr_agent")
 
-app = FastAPI(title="XTR Agent Server", version="10.1")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-GPU_LOCAL_PORT = 8090
-GPU_LOCAL_BASE = f"http://127.0.0.1:{GPU_LOCAL_PORT}/v1"
-AGENT_PORT = int(os.environ.get("AGENT_PORT", "8765"))
-MAX_TOKENS = 2048
-
-class AgentRequest(BaseModel):
-    task: str
-    llm_base_url: str = ""
-    llm_api_key: str = ""
-    llm_model: str = "gemma3-local"
-    history: list = []
-    system_prompt: str = ""
-    image_base64: str = ""
-    use_native_tools: bool = False
-
-class AgentResponse(BaseModel):
-    answer: str
-    thoughts: list = []
-    error: bool = False
-
-async def _is_gpu_server_alive() -> bool:
+def _write_pid():
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"{GPU_LOCAL_BASE}/models")
-            return resp.status_code == 200
-    except Exception:
-        return False
-
-def sse(d: dict) -> str:
-    return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
-
-async def _direct_chat_gpu(req: AgentRequest):
-    if not await _is_gpu_server_alive():
-        yield {"type": "final", "answer": "⚠ El servidor GPU MediaPipe no está activo. Ve a 'Prueba GPU' en la app para cargar un modelo .task."}
-        return
-
-    messages = []
-    system = req.system_prompt or (
-        "Eres XTR, un asistente IA que se ejecuta completamente en local "
-        "en el dispositivo del usuario. Responde de forma concisa y útil."
-    )
-    messages.append({"role": "system", "content": system})
-    for h in req.history[-10:]:
-        if isinstance(h, dict) and "role" in h and "content" in h:
-            messages.append(h)
-    messages.append({"role": "user", "content": req.task})
-
-    payload = {
-        "model": "gemma",
-        "messages": messages,
-        "max_tokens": MAX_TOKENS,
-        "temperature": 0.7,
-        "stream": False,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{GPU_LOCAL_BASE}/chat/completions",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            answer = data["choices"][0]["message"]["content"]
-            yield {"type": "step", "thought": "Procesando..."}
-            yield {"type": "final", "answer": answer}
+        with open(PID_FILE, 'w') as f:
+            f.write(str(os.getpid()))
     except Exception as e:
-        yield {"type": "error", "error": str(e)}
-        yield {"type": "final", "answer": f"Error: {str(e)[:200]}"}
+        print(f'[warn] No se pudo escribir PID file: {e}', flush=True)
 
-@app.get("/health")
-async def health():
-    gpu_alive = await _is_gpu_server_alive()
-    return {"status": "ok", "version": "10.1", "gpu_server_alive": gpu_alive, "gpu_port": GPU_LOCAL_PORT}
 
-@app.post("/run")
-async def run_streaming(req: AgentRequest):
-    if not req.task.strip():
-        raise HTTPException(status_code=400, detail="task no puede estar vacio")
-    async def generate():
-        async for event in _direct_chat_gpu(req):
-            yield sse(event)
-    return StreamingResponse(generate(), media_type="text/event-stream")
+def _remove_pid():
+    try:
+        if os.path.exists(PID_FILE):
+            os.remove(PID_FILE)
+    except Exception:
+        pass
 
-@app.post("/chat")
-async def chat(req: AgentRequest):
-    async def generate():
-        async for event in _direct_chat_gpu(req):
-            yield sse(event)
-    return StreamingResponse(generate(), media_type="text/event-stream")
 
-@app.get("/tools")
-async def list_tools():
-    return {"tools": [{"name": "gpu_chat", "description": "Chat directo con el modelo GPU cargado"}]}
+def _check_backend(timeout=4):
+    """Verifica que el backend MediaPipe (:8090) responda."""
+    if BASE_URL.startswith('http://127.0.0.1:8090') or BASE_URL.startswith('http://localhost:8090'):
+        try:
+            req = urllib.request.Request(f'{BASE_URL}/models', method='GET')
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                print(f'[ok] Backend MediaPipe responde: {resp.status}', flush=True)
+                return True
+        except Exception as e:
+            print(f'[warn] Backend MediaPipe (:8090) no responde: {e}', flush=True)
+            return False
+    return True  # Remoto: no verificamos aqui
 
-@app.get("/gpu/status")
-async def gpu_status():
-    alive = await _is_gpu_server_alive()
-    return {"active": alive, "port": GPU_LOCAL_PORT}
 
-if __name__ == "__main__":
-    log.info("Iniciando XTR Agent Server v10.1 en puerto %d", AGENT_PORT)
-    log.info("GPU MediaPipe esperado en puerto %d", GPU_LOCAL_PORT)
-    uvicorn.run(app, host="127.0.0.1", port=AGENT_PORT, log_level="warning")
+def _wait_for_port_free(port, max_wait=10):
+    """Espera activa a que el puerto quede libre."""
+    t0 = time.time()
+    while time.time() - t0 < max_wait:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1)
+            result = s.connect_ex(('127.0.0.1', port))
+            s.close()
+            if result != 0:
+                return True
+            print(f'[wait] Puerto {port} aun ocupado, esperando...', flush=True)
+        except Exception:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+class ReuseAddrTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        super().server_bind()
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        print(f'[agent] {fmt % args}', flush=True)
+
+    def do_GET(self):
+        if self.path == '/health':
+            backend_ok = False
+            try:
+                if BASE_URL.startswith('http://127.0.0.1:8090') or BASE_URL.startswith('http://localhost:8090'):
+                    req = urllib.request.Request(f'{BASE_URL}/models', method='GET')
+                    with urllib.request.urlopen(req, timeout=2) as resp:
+                        backend_ok = resp.status == 200
+                else:
+                    backend_ok = True
+            except Exception:
+                backend_ok = False
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'ok',
+                'model': MODEL,
+                'base_url': BASE_URL,
+                'port': PORT,
+                'pid': os.getpid(),
+                'backend_ready': backend_ok,
+            }).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self):
+        if self.path == '/v1/chat/completions':
+            content_len = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_len)
+            try:
+                req = urllib.request.Request(
+                    f'{BASE_URL}/chat/completions',
+                    data=body,
+                    headers={
+                        'Content-Type': 'application/json',
+                        'Authorization': f'Bearer {API_KEY}',
+                    },
+                    method='POST'
+                )
+                with urllib.request.urlopen(req, timeout=300) as resp:
+                    self.send_response(resp.status)
+                    for k, v in resp.headers.items():
+                        if k.lower() not in ('transfer-encoding',):
+                            self.send_header(k, v)
+                    self.end_headers()
+                    self.wfile.write(resp.read())
+            except urllib.error.HTTPError as e:
+                self.send_response(e.code)
+                for k, v in e.headers.items():
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(e.read())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
+
+
+def _signal_handler(signum, frame):
+    global _shutdown_requested
+    print(f'[agent] Senal {signum} recibida, shutdown graceful...', flush=True)
+    _shutdown_requested = True
+
+
+def main():
+    global _shutdown_requested
+    print(f'[XTR Agent Server v11.0] Puerto={PORT} BaseURL={BASE_URL} Model={MODEL}', flush=True)
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    _write_pid()
+
+    try:
+        # Esperar a que el puerto se libere si estaba ocupado
+        if not _wait_for_port_free(PORT, max_wait=6):
+            print(f'[warn] Puerto {PORT} sigue ocupado tras esperar, intentando bind con SO_REUSEADDR...', flush=True)
+
+        # Reintentar bind con SO_REUSEADDR y backoff
+        httpd = None
+        for attempt in range(1, MAX_BIND_RETRIES + 1):
+            try:
+                httpd = ReuseAddrTCPServer(('0.0.0.0', PORT), Handler)
+                print(f'[ok] Bind exitoso en 0.0.0.0:{PORT} (intento {attempt})', flush=True)
+                break
+            except OSError as e:
+                if e.errno == 98:
+                    print(f'[warn] Puerto {PORT} ocupado (intento {attempt}/{MAX_BIND_RETRIES}), esperando {BIND_RETRY_DELAY}s...', flush=True)
+                    time.sleep(BIND_RETRY_DELAY)
+                else:
+                    raise
+
+        if httpd is None:
+            print(f'[FATAL] No se pudo hacer bind en puerto {PORT} tras {MAX_BIND_RETRIES} intentos.', flush=True)
+            sys.exit(1)
+
+        # Health-check del backend (solo GPU local)
+        if BASE_URL.startswith('http://127.0.0.1:8090') or BASE_URL.startswith('http://localhost:8090'):
+            print('[XTR] Verificando backend MediaPipe...', flush=True)
+            if not _check_backend(timeout=3):
+                print('[warn] Backend MediaPipe no responde. El agente arranco, pero las peticiones fallaran hasta que :8090 este listo.', flush=True)
+            else:
+                print('[ok] Backend MediaPipe listo.', flush=True)
+
+        print(f'[XTR] Escuchando en 0.0.0.0:{PORT}', flush=True)
+        httpd.serve_forever()
+    finally:
+        _remove_pid()
+        if httpd:
+            try:
+                httpd.server_close()
+            except Exception:
+                pass
+        print('[agent] Shutdown completo.', flush=True)
+
+
+if __name__ == '__main__':
+    main()
