@@ -655,10 +655,8 @@ echo "[XTR] ✓ Setup completado"
       return false;
     }
     final target = File('$rootfs/root/agent_server.py');
-    if (await target.exists()) {
-      _push(agentLog, '[ok] agent_server.py ya existe en rootfs.');
-      return true;
-    }
+    // FIX v10b: Siempre copiar para asegurar la version correcta.
+    // Las versiones viejas no tenian el endpoint /run y respondian 404.
     _push(agentLog, '[..] Copiando agent_server.py desde assets...');
     try {
       final bytes = await rootBundle.load('assets/agent_server.py');
