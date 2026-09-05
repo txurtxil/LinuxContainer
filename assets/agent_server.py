@@ -131,6 +131,24 @@ TOOL RESULT [bash]: -rw-r--r-- 1 root root 48210 network_map.png
 - Keep each bash command SHORT and SIMPLE (one command, no chains of echoes). Long one-liners with quotes always fail.
 - NEVER write "TOOL RESULT" text yourself. Tool results are provided by the system only. Inventing tool output is a critical failure.
 - PROOT ENVIRONMENT: raw-socket operations FAIL inside this container. `nmap -sn` (ARP ping) returns 0 hosts, and `-sS`/`-O` need root raw sockets. For host discovery use a ping sweep loop + `ip neigh show`, or `nmap -sn -PS22,80,443 --unprivileged`. For port scans use `nmap -sT -sV --unprivileged`. NEVER report "0 hosts up" as a network problem without trying these fallbacks first.
+- NEVER emit <think> blocks or "think aloud". Reason SILENTLY and output ONLY tool calls or <final>. Thinking text wastes the response budget and is a critical failure. /no_think
+"""
+
+# Versión compacta del system prompt para contextos pequeños (Qwen3 litertlm
+# tiene KV cache de 2048 tokens; el prompt completo son ~1400). Se usa como
+# rescate cuando el motor rechaza por "too long".
+SYSTEM_PROMPT_COMPACT = """You are an autonomous agent with root access inside a Debian proot container on Android. Execute REAL actions with tools.
+
+TOOL FORMAT (exactly):
+<tool>name</tool><args>{"k":"v"}</args>
+Tools: bash(command,timeout=30), netscan(subnet,ports,timeout), netmap(subnet,output), audit(output), python(code), read_file(path,limit), write_file(path,content), list_dir(path), remember(key,value), recall(key)
+Finish with: <final>answer</final>
+
+RULES:
+1. NEVER emit <think> or reasoning text. Output ONLY tool calls or <final>. /no_think
+2. For security audits ALWAYS use tool `audit`. For LAN discovery use `netscan`; for topology maps use `netmap`. Never hand-write long shell one-liners.
+3. Keep bash commands SHORT and SIMPLE.
+4. NEVER invent TOOL RESULT text. Verify created files with list_dir before claiming success.
 """
 
 # ---------------------------------------------------------------------------
@@ -827,11 +845,14 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
             if "too long" in err or "Exceeding the maximum" in err:
                 # Contexto desbordado: NO añadir el error al historial
                 # (cada reintento sumaba +100 tokens y nunca convergia).
-                # Recorta a la mitad los mensajes intermedios y reintenta.
+                # 1) cambia al system prompt compacto (cabe en ctx 2048)
+                # 2) recorta los mensajes intermedios y reintenta.
+                messages[0] = {"role": "system",
+                               "content": SYSTEM_PROMPT_COMPACT}
                 while len(messages) > 4:
                     del messages[2]
                 messages.append({"role": "system", "content": (
-                    "Context trimmed. Answer briefly and act now: "
+                    "Context trimmed. /no_think — act NOW with only "
                     "<tool>...</tool><args>{...}</args> or <final>...</final>.")})
                 goal_log("ctx", "emergency_trim", {"messages": len(messages)})
             else:
@@ -839,6 +860,23 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
             continue
 
         emit("chunk", {"step": step_num, "text": reply})
+
+        # Qwen3 "piensa en voz alta" con <think>…</think> y se gasta todo el
+        # presupuesto de respuesta sin llegar a la herramienta. Se recorta
+        # TODO el razonamiento antes de parsear y de guardar en el historial.
+        import re as _re_think
+        clean = _re_think.sub(r"<think>.*?</think>", " ", reply,
+                              flags=_re_think.DOTALL)
+        clean = _re_think.sub(r"<think>.*$", " ", clean,
+                              flags=_re_think.DOTALL).strip()  # think sin cerrar
+        if not clean:
+            messages.append({"role": "system", "content": (
+                "Do NOT think aloud. /no_think — Reply with ONLY "
+                "<tool>…</tool><args>{…}</args> or <final>…</final>, "
+                "nothing else.")})
+            emit("nudge", {"step": step_num, "reason": "think_stripped"})
+            continue
+        reply = clean
         messages.append({"role": "assistant", "content": reply})
 
         final_text = parse_final(reply)
