@@ -670,7 +670,7 @@ def llm_chat(messages, base_url=None, model=None, api_key=None):
         "temperature": 0.15,
         "top_p": 0.9,
         "top_k": 40,
-        "max_tokens": 1024,
+        "max_tokens": 640,
     }
     url = f"{base_url}/chat/completions"
     try:
@@ -728,10 +728,13 @@ def parse_final(text):
 
 
 # ---------------------------------------------------------------------------
-# Compresión de contexto (Gemma local tiene límite de 4096 tokens)
+# Compresión de contexto
+# (Gemma local: 4096 tokens; Qwen3-4B-Instruct-2507 litertlm: 2048.
+#  Presupuesto seguro para el peor caso: ~4000 chars ~= 1000-1300 tokens,
+#  dejando sitio para la respuesta del modelo dentro de 2048.)
 # ---------------------------------------------------------------------------
 
-MAX_CONTEXT_CHARS = 12000  # ~3000 tokens, deja margen para la respuesta
+MAX_CONTEXT_CHARS = 4000  # ~1000-1300 tokens, cabe en ctx 2048 de Qwen3
 
 
 def _compress_context(messages):
@@ -773,11 +776,13 @@ _goals_lock = threading.Lock()
 
 def _build_system_prompt():
     prompt = SYSTEM_PROMPT
-    episodes = db_last_episodes(5)
+    # Memoria corta: con ctx de 2048 (Qwen3 litertlm) el system prompt
+    # no puede crecer sin control; 3 episodios x 120 chars max.
+    episodes = db_last_episodes(3)
     if episodes:
-        prompt += "\n## RECENT MEMORY (last episodes)\n"
+        prompt += "\n## RECENT MEMORY\n"
         for ep in episodes:
-            result = (ep["result"] or "")[:300]
+            result = (ep["result"] or "")[:120]
             prompt += f"- [{ep['status']}] {ep['goal']}: {result}\n"
     return prompt
 
@@ -818,8 +823,19 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
                              model=ov.get("model"), api_key=ov.get("api_key"))
         except Exception as exc:
             err = f"LLM error: {exc}"
-            messages.append({"role": "system", "content": err})
             emit("error", {"step": step_num, "error": err})
+            if "too long" in err or "Exceeding the maximum" in err:
+                # Contexto desbordado: NO añadir el error al historial
+                # (cada reintento sumaba +100 tokens y nunca convergia).
+                # Recorta a la mitad los mensajes intermedios y reintenta.
+                while len(messages) > 4:
+                    del messages[2]
+                messages.append({"role": "system", "content": (
+                    "Context trimmed. Answer briefly and act now: "
+                    "<tool>...</tool><args>{...}</args> or <final>...</final>.")})
+                goal_log("ctx", "emergency_trim", {"messages": len(messages)})
+            else:
+                messages.append({"role": "system", "content": err[:400]})
             continue
 
         emit("chunk", {"step": step_num, "text": reply})
@@ -848,7 +864,7 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
             state["steps"].append(
                 {"step": step_num, "tool": name, "args": args, "result": result})
 
-            obs = f"TOOL RESULT [{name}]: {json.dumps(result, ensure_ascii=False)[:2500]}"
+            obs = f"TOOL RESULT [{name}]: {json.dumps(result, ensure_ascii=False)[:900]}"
             messages.append({"role": "user", "content": obs})
 
             if result.get("exit_code", 0) != 0 or result.get("error"):
