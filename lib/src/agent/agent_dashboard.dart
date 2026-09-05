@@ -1062,59 +1062,129 @@ class _AgentDashboardState extends State<AgentDashboard>
   }
 
   Future<void> _showImageGallery() async {
+    List<dynamic> images = const [];
     try {
       final resp = await http
           .get(Uri.parse('http://127.0.0.1:8765/files/images'))
           .timeout(const Duration(seconds: 8));
-      final images =
-          (json.decode(resp.body)['images'] as List?) ?? const [];
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          backgroundColor: _C.card,
-          title: const Text('Imagenes del agente',
-              style: TextStyle(color: _C.textHi, fontSize: 15)),
-          content: SizedBox(
-            width: 400,
-            height: 400,
-            child: images.isEmpty
-                ? const Center(
-                    child: Text('Aun no hay imagenes generadas',
-                        style: TextStyle(color: _C.textLo)))
-                : GridView.builder(
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            crossAxisSpacing: 8,
-                            mainAxisSpacing: 8),
-                    itemCount: images.length,
-                    itemBuilder: (c, i) {
-                      final p = images[i]['path'].toString();
-                      return GestureDetector(
-                        onTap: () {
-                          Navigator.of(context).pop();
-                          _showImageFullscreen(p);
-                        },
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.network(_fileUrl(p),
-                              fit: BoxFit.cover,
-                              cacheWidth: 480,
-                              errorBuilder: (c2, e, st) => Container(
-                                  color: _C.cardAlt,
-                                  child: const Icon(Icons.broken_image,
-                                      color: _C.off))),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ),
-      );
+      images = (json.decode(resp.body)['images'] as List?) ?? const [];
     } catch (e) {
       _snack('Agente no disponible');
+      return;
     }
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (dlgCtx, setDlg) {
+          Future<void> deleteImg(String p) async {
+            try {
+              final r = await http.delete(Uri.parse(
+                  'http://127.0.0.1:8765/file?path=${Uri.encodeComponent(p)}'));
+              if (r.statusCode == 200) {
+                setDlg(() =>
+                    images = images.where((e) => e['path'] != p).toList());
+                _snack('Imagen borrada');
+              } else {
+                _snack('No se pudo borrar');
+              }
+            } catch (_) {
+              _snack('Agente no disponible');
+            }
+          }
+
+          Future<void> exportImg(String p) async {
+            try {
+              final r = await http.get(Uri.parse(_fileUrl(p)));
+              if (r.statusCode != 200) throw 'http ${r.statusCode}';
+              final dir = await getApplicationDocumentsDirectory();
+              final name = p.split('/').last;
+              final f = File('${dir.path}/$name');
+              await f.writeAsBytes(r.bodyBytes);
+              await Clipboard.setData(ClipboardData(text: f.path));
+              _snack('Exportada (ruta copiada): ${f.path}');
+            } catch (e) {
+              _snack('Error exportando: $e');
+            }
+          }
+
+          return AlertDialog(
+            backgroundColor: _C.card,
+            title: const Text('Imagenes del agente',
+                style: TextStyle(color: _C.textHi, fontSize: 15)),
+            content: SizedBox(
+              width: 400,
+              height: 400,
+              child: images.isEmpty
+                  ? const Center(
+                      child: Text('Aun no hay imagenes generadas',
+                          style: TextStyle(color: _C.textLo)))
+                  : GridView.builder(
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2,
+                              crossAxisSpacing: 8,
+                              mainAxisSpacing: 8),
+                      itemCount: images.length,
+                      itemBuilder: (c, i) {
+                        final p = images[i]['path'].toString();
+                        return Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            GestureDetector(
+                              onTap: () {
+                                Navigator.of(dlgCtx).pop();
+                                _showImageFullscreen(p);
+                              },
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.network(_fileUrl(p),
+                                    fit: BoxFit.cover,
+                                    cacheWidth: 480,
+                                    errorBuilder: (c2, e, st) => Container(
+                                        color: _C.cardAlt,
+                                        child: const Icon(
+                                            Icons.broken_image,
+                                            color: _C.off))),
+                              ),
+                            ),
+                            Positioned(
+                              top: 2,
+                              right: 2,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _galBtn(Icons.download, _C.accent,
+                                      () => exportImg(p)),
+                                  const SizedBox(width: 4),
+                                  _galBtn(Icons.delete_outline, _C.err,
+                                      () => deleteImg(p)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _galBtn(IconData icon, Color color, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(5),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.65),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Icon(icon, color: color, size: 16),
+      ),
+    );
   }
 
   Widget _blockWidget(ChatBlock b) {

@@ -106,7 +106,7 @@ class AgentServices {
   }
 
   String get effectiveModel {
-    if (sourceId == 'gpu_local') return 'gemma3-local';
+    if (sourceId == 'gpu_local') return 'local-model';
     return remoteModel.isNotEmpty ? remoteModel : 'custom';
   }
 

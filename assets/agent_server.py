@@ -408,6 +408,10 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2
 def tool_netmap(subnet="", output="/root/scan_red.png"):
     """Escanea la LAN (netscan) y genera el mapa topologico PNG en una sola
     llamada. Determinista: no depende de que el modelo escriba codigo."""
+    # Fuerza ruta absoluta: el modelo a veces manda "netmap.png" a secas y
+    # luego la galeria no encuentra el archivo.
+    if output and not output.startswith("/"):
+        output = "/root/" + output
     scan = tool_netscan(subnet=subnet)
     if scan.get("exit_code") != 0:
         return scan
@@ -696,6 +700,22 @@ def check_backend_alive():
         return False
 
 
+def detect_small_ctx_model(base_url=None, api_key=None):
+    """True si el modelo servido es de contexto pequeno (Qwen3 litertlm,
+    ctx 2048). Pregunta a /models: el servidor local devuelve el nombre
+    del fichero cargado (p.ej. qwen3_4b_instruct_2507....litertlm)."""
+    base = (base_url or LLM_BASE_URL).rstrip("/")
+    try:
+        status, raw = _http_get(f"{base}/models", timeout=5.0)
+        if status == 200:
+            data = json.loads(raw)
+            ids = " ".join(str(m.get("id", "")) for m in data.get("data", []))
+            return "qwen" in ids.lower()
+    except Exception:
+        pass
+    return False
+
+
 def llm_chat(messages, base_url=None, model=None, api_key=None):
     base_url = (base_url or LLM_BASE_URL).rstrip("/")
     model = model or LLM_MODEL
@@ -829,8 +849,15 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
     state = GOALS[goal_id]
     deadline = time.time() + AGENT_GOAL_TIMEOUT
 
+    # Con modelos de contexto pequeno (Qwen3, ctx 2048) arranca DIRECTO con
+    # el prompt compacto: el completo (~1400 tok) ya desborda en el paso 1.
+    small_ctx = detect_small_ctx_model(ov.get("base_url"), ov.get("api_key"))
+    base_prompt = SYSTEM_PROMPT_COMPACT if small_ctx else _build_system_prompt()
+    if small_ctx:
+        goal_log("ctx", "compact_prompt_from_start", {"model": "qwen"})
+
     messages = [
-        {"role": "system", "content": _build_system_prompt()},
+        {"role": "system", "content": base_prompt},
         {"role": "user", "content": f"GOAL: {goal}"},
     ]
 
@@ -899,6 +926,15 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
 
         final_text = parse_final(reply)
         if final_text is not None:
+            # El modelo a veces remata con un final vacio o trivial
+            # ("answer", "done") sin haber hecho nada: no vale como cierre
+            # si en esta tarea no se ha ejecutado aun ninguna herramienta.
+            if (len(final_text.strip()) < 8 and not state["steps"]):
+                messages.append({"role": "system", "content": (
+                    "That final was empty/useless. Do the task: call a tool "
+                    "NOW (<tool>…</tool><args>{…}</args>).")})
+                emit("nudge", {"step": step_num, "reason": "trivial_final"})
+                continue
             status = "done" if not final_text.startswith("BLOCKED:") else "failed"
             break
 
@@ -1168,7 +1204,21 @@ class AgentHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         path, qs = self._query()
-        if path == "/memory":
+        if path == "/file":
+            # Borrado de archivos generados (imagenes de la galeria).
+            # Misma restriccion que do_GET /file: solo /root y /tmp.
+            target = qs.get("path", "")
+            if not target.startswith(("/root/", "/tmp/")):
+                self._send_json({"error": "path fuera de /root,/tmp"}, status=403)
+                return
+            try:
+                os.remove(target)
+                self._send_json({"status": "deleted", "path": target})
+            except FileNotFoundError:
+                self._send_json({"error": "no existe"}, status=404)
+            except OSError as exc:
+                self._send_json({"error": str(exc)}, status=500)
+        elif path == "/memory":
             if qs.get("confirm") != "yes":
                 self._send_json(
                     {"error": "refused: pass ?confirm=yes to wipe all memory"},
