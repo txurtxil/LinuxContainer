@@ -87,14 +87,17 @@ object MediaPipeServer {
             val temperature = req.optDouble("temperature", 0.8).toFloat()
             val topP = req.optDouble("top_p", 0.95).toFloat()
             val topK = req.optInt("top_k", 40)
-            val prompt = buildGemmaPrompt(messages)
+            val prompt = buildPrompt(messages)
 
             if (!InferenceEngine.isLoaded) {
                 return json(Response.Status.INTERNAL_ERROR,
                     errObj("El modelo no está cargado en el motor."))
             }
             val tools = req.optJSONArray("tools")
-            if (tools != null && tools.length() > 0) {
+            // El formato nativo <|tool>declaration:...<tool|> es de Gemma 4.
+            // Con Qwen3 cargado se ignora: el agente usa su propio protocolo
+            // de texto <tool>…</tool>, que Qwen3 sigue por prompt.
+            if (!isQwenModel() && tools != null && tools.length() > 0) {
                 val toolPrompt = buildGemma4ToolPrompt(messages, tools)
                 // Temperatura baja fija: la sintaxis de tool_call necesita
                 // precision exacta, no creatividad. Ignoramos la temperatura
@@ -105,7 +108,9 @@ object MediaPipeServer {
                 return if (parsed != null) toolCallResponseJson(parsed.first, parsed.second, toolPrompt)
                        else chatResponseJson(outT, toolPrompt)
             }
-            val imageInfo = extractImageFromMessages(messages)
+            // Qwen3-4B-Instruct-2507 es texto puro (sin vision): con Qwen
+            // cargado, las imagenes se omiten y solo va el texto.
+            val imageInfo = if (isQwenModel()) null else extractImageFromMessages(messages)
             if (imageInfo != null) {
                 val (imgText, imagePath) = imageInfo
                 val (err, out) = InferenceEngine.generateWithImage(imgText, imagePath, temperature, topK, topP)
@@ -114,6 +119,56 @@ object MediaPipeServer {
             }
             return if (stream) streamChat(prompt, temperature, topK, topP)
             else blockingChat(prompt, temperature, topK, topP)
+        }
+
+        /** El modelo cargado es de la familia Qwen (por nombre de fichero). */
+        private fun isQwenModel(): Boolean =
+            (InferenceEngine.loadedPath ?: "").lowercase().contains("qwen")
+
+        /** Elige la plantilla de chat segun la familia del modelo cargado. */
+        private fun buildPrompt(messages: JSONArray): String =
+            if (isQwenModel()) buildQwenPrompt(messages) else buildGemmaPrompt(messages)
+
+        /** Plantilla ChatML de Qwen3 (<|im_start|>…<|im_end|>).
+         *  Qwen3-4B-Instruct-2507 es no-thinking: no emite bloques <think>. */
+        private fun buildQwenPrompt(messages: JSONArray): String {
+            val sb = StringBuilder()
+            var pendingSystem = ""
+            for (i in 0 until messages.length()) {
+                val m = messages.getJSONObject(i)
+                val role = m.optString("role")
+                val content = m.optString("content")
+                when (role) {
+                    "system" -> {
+                        pendingSystem +=
+                            (if (pendingSystem.isEmpty()) "" else "\n") + content
+                    }
+                    "user" -> {
+                        sb.append("<|im_start|>user\n")
+                        if (pendingSystem.isNotEmpty()) {
+                            sb.append(pendingSystem).append("\n\n")
+                            pendingSystem = ""
+                        }
+                        sb.append(content).append("<|im_end|>\n")
+                    }
+                    "assistant" -> {
+                        sb.append("<|im_start|>assistant\n").append(content)
+                            .append("<|im_end|>\n")
+                    }
+                    "tool" -> {
+                        sb.append("<|im_start|>user\n")
+                            .append("[resultado de herramienta] ").append(content)
+                            .append("<|im_end|>\n")
+                    }
+                }
+            }
+            // El system prompt siempre llega primero; si quedo pendiente
+            // (ningun user lo recogio), se emite como turno system inicial.
+            if (pendingSystem.isNotEmpty()) {
+                sb.insert(0, "<|im_start|>system\n$pendingSystem<|im_end|>\n")
+            }
+            sb.append("<|im_start|>assistant\n")
+            return sb.toString()
         }
 
         /** Convierte los mensajes OpenAI a la plantilla de turnos de Gemma. */

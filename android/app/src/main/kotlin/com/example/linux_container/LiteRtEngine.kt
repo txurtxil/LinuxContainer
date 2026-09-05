@@ -42,6 +42,11 @@ object LiteRtEngine {
     var cacheDirPath: String? = null
         private set
 
+    /** Contexto (KV cache) con el que se cargó el modelo actual. */
+    @Volatile
+    var loadedMaxTokens: Int = 0
+        private set
+
     private val genLock = ReentrantLock()
 
     val isLoaded: Boolean get() = engine != null
@@ -50,39 +55,59 @@ object LiteRtEngine {
      * Carga un modelo .litertlm. Devuelve null si OK, o el mensaje de error.
      * engine.initialize() puede tardar 10s+ en modelos grandes; el llamante
      * debe ejecutarlo fuera del hilo de UI.
+     *
+     * v14.1 — cadena de reintentos automática:
+     *  - Modelos Qwen3 (p.ej. Qwen3-4B-Instruct-2507) traen KV cache de 2048:
+     *    forzar maxNumTokens=4096 hace fallar la creación del engine
+     *    ("Failed to create engine: UNKNOWN ... compiled_model_executor").
+     *  - Si el backend pedido (GPU) no compila en el chip, cae a CPU.
+     * Orden: [GPU|CPU según useGpu] x [2048, 4096 para qwen / 4096, 2048 resto].
      */
     @Synchronized
     fun load(context: Context, modelPath: String, useGpu: Boolean): String? {
-        return try {
-            if (engine != null && loadedPath == modelPath && loadedGpu == useGpu) {
-                return null
-            }
-            closeInternal()
-
-            val backend = if (useGpu) Backend.GPU() else Backend.CPU()
-            val config = EngineConfig(
-                modelPath = modelPath,
-                backend = backend,
-                visionBackend = backend,
-                cacheDir = context.cacheDir.path,
-                // Limita el KV-cache (contexto) para no agotar la RAM.
-                // 3072 da margen al system prompt de CodeAgent (tools +
-                // formato ReAct, ~2649 tokens) sin volver al problema de
-                // memoria que causaba 32K por defecto (TTFT 34s + OOM).
-                // Si esto provoca un error de forma de tensor al generar,
-                // prueba 2048 o quita la linea (default del modelo).
-                maxNumTokens = 4096,
-            )
-            val e = Engine(config)
-            e.initialize()
-            engine = e
-            loadedPath = modelPath
-            loadedGpu = useGpu
-            cacheDirPath = context.cacheDir.path
-            null
-        } catch (e: Throwable) {
-            "Error al cargar el modelo: ${e.message}"
+        if (engine != null && loadedPath == modelPath && loadedGpu == useGpu) {
+            return null
         }
+        closeInternal()
+
+        val isQwen = modelPath.lowercase().contains("qwen")
+        // Limita el KV-cache (contexto) para no agotar la RAM.
+        // 4096 da margen al system prompt de CodeAgent (tools + formato
+        // ReAct) sin volver al problema de memoria que causaba 32K por
+        // defecto (TTFT 34s + OOM). Qwen3-4B-Instruct-2507 va a 2048.
+        val tokenPrefs = if (isQwen) listOf(2048, 4096) else listOf(4096, 2048)
+        val backendPrefs = if (useGpu) listOf(true, false) else listOf(false)
+        val errors = StringBuilder()
+        for (gpu in backendPrefs) {
+            for (maxTok in tokenPrefs) {
+                try {
+                    val backend = if (gpu) Backend.GPU() else Backend.CPU()
+                    val config = EngineConfig(
+                        modelPath = modelPath,
+                        backend = backend,
+                        visionBackend = backend,
+                        cacheDir = context.cacheDir.path,
+                        maxNumTokens = maxTok,
+                    )
+                    val e = Engine(config)
+                    e.initialize()
+                    engine = e
+                    loadedPath = modelPath
+                    loadedGpu = gpu
+                    loadedMaxTokens = maxTok
+                    cacheDirPath = context.cacheDir.path
+                    return null
+                } catch (e: Throwable) {
+                    try { closeInternal() } catch (_: Throwable) {}
+                    errors.append("[")
+                        .append(if (gpu) "GPU" else "CPU")
+                        .append("/ctx").append(maxTok).append("] ")
+                        .append(e.message ?: e.javaClass.simpleName)
+                        .append('\n')
+                }
+            }
+        }
+        return "Error al cargar el modelo: ${errors.toString().trim()}"
     }
 
     /**
