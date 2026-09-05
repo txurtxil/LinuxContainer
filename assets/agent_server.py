@@ -1,4 +1,4 @@
-# XTR Agent Server v13.9 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v14.0 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "13.9"
+VERSION = "14.0"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -63,6 +63,7 @@ Available tools:
 - bash(command, timeout=30): run any shell command
 - netscan(subnet, ports, timeout): discover LAN hosts (works inside proot, no raw sockets)
 - netmap(subnet, output): scan LAN + render topology PNG map in one call
+- audit(output): full security audit → Markdown report in one call
 - python(code): execute Python code
 - read_file(path, limit=5000): read a file
 - write_file(path, content): write a file
@@ -126,6 +127,8 @@ TOOL RESULT [bash]: -rw-r--r-- 1 root root 48210 network_map.png
 - If graphviz/dot is missing, install it (apt-get install -y graphviz) or fall back to matplotlib/networkx to render the PNG.
 - If a command is not found (ip, netstat, nmap...), install it with apt-get instead of giving up.
 - For network scanning/mapping, ALWAYS use the native tool `netmap` — it scans AND renders the map PNG in one call. Do NOT write your own scanning/drawing code for this.
+- For security audits, ALWAYS use the native tool `audit` — it produces the full Markdown report in one call. Do NOT write long one-liner shell scripts.
+- Keep each bash command SHORT and SIMPLE (one command, no chains of echoes). Long one-liners with quotes always fail.
 - NEVER write "TOOL RESULT" text yourself. Tool results are provided by the system only. Inventing tool output is a critical failure.
 - PROOT ENVIRONMENT: raw-socket operations FAIL inside this container. `nmap -sn` (ARP ping) returns 0 hosts, and `-sS`/`-O` need root raw sockets. For host discovery use a ping sweep loop + `ip neigh show`, or `nmap -sn -PS22,80,443 --unprivileged`. For port scans use `nmap -sT -sV --unprivileged`. NEVER report "0 hosts up" as a network problem without trying these fallbacks first.
 """
@@ -460,12 +463,142 @@ print('OK', out)
     }
 
 
+def _listening_ports():
+    """Puertos en escucha leyendo /proc/net/{tcp,tcp6,udp,udp6} (sin netlink:
+    ss no funciona en proot)."""
+    listening = []
+    for proto, path in (("tcp", "/proc/net/tcp"), ("tcp6", "/proc/net/tcp6"),
+                        ("udp", "/proc/net/udp"), ("udp6", "/proc/net/udp6")):
+        try:
+            with open(path) as fh:
+                for line in fh.readlines()[1:]:
+                    cols = line.split()
+                    if len(cols) > 3 and cols[3] == "0A" if proto.startswith("tcp") else len(cols) > 3:
+                        if proto.startswith("udp") and cols[3] != "07":
+                            continue
+                        addr = cols[1]
+                        port = int(addr.split(":")[1], 16)
+                        if port not in [p_ for _, p_ in listening]:
+                            listening.append((proto, port))
+        except Exception:
+            pass
+    return sorted(listening, key=lambda x: x[1])
+
+
+def tool_audit(output="/root/audit_security.md"):
+    """Auditoria de seguridad local determinista. Genera informe Markdown con
+    severidades y recomendaciones. No depende del modelo."""
+    findings = []   # (severidad, titulo, detalle)
+    report = []
+
+    # 1) usuarios con shell real
+    shell_users = []
+    try:
+        with open("/etc/passwd") as fh:
+            for line in fh:
+                parts = line.strip().split(":")
+                if len(parts) >= 7 and not parts[6].endswith("nologin") \
+                        and parts[6] not in ("/bin/false", "/bin/sync", ""):
+                    shell_users.append(f"{parts[0]} ({parts[6]})")
+    except Exception as exc:
+        shell_users.append(f"error: {exc}")
+    if len(shell_users) > 1:
+        findings.append(("media", "Multiples usuarios con shell",
+                         "; ".join(shell_users)))
+    else:
+        findings.append(("baja", "Solo root tiene shell", "; ".join(shell_users)))
+
+    # 2) puertos en escucha (via /proc, proot-safe)
+    ports = _listening_ports()
+    risky = {21: "FTP sin cifrar", 23: "Telnet", 3306: "MySQL expuesto",
+             5432: "PostgreSQL expuesto", 5555: "ADB abierto",
+             3389: "RDP", 6379: "Redis sin auth por defecto"}
+    for proto, port in ports:
+        sev = "alta" if port in risky else "info"
+        findings.append((sev, f"Puerto {port}/{proto} en escucha",
+                         risky.get(port, "servicio desconocido — revisar")))
+
+    # 3) SUID en rutas habituales
+    suid = tool_bash("find /bin /sbin /usr/bin /usr/sbin -perm -4000 -type f 2>/dev/null | head -40", timeout=60)
+    suid_files = [l for l in (suid.get("stdout") or "").splitlines() if l.strip()]
+    known_suid = {"sudo", "su", "passwd", "mount", "umount", "ping", "chsh",
+                  "chfn", "newgrp", "gpasswd", "pppd", "proot", "busybox"}
+    odd = [f for f in suid_files
+           if f.split("/")[-1] not in known_suid]
+    if odd:
+        findings.append(("media", f"{len(odd)} binarios SUID no habituales",
+                         "\n".join(odd[:15])))
+
+    # 4) SSH config
+    for cfg in ("/etc/ssh/sshd_config", "/etc/ssh/ssh_config"):
+        try:
+            with open(cfg) as fh:
+                for line in fh:
+                    l_ = line.strip().lower()
+                    if l_.startswith("permitrootlogin") and "yes" in l_:
+                        findings.append(("alta", "SSH permite login como root", cfg))
+                    if l_.startswith("passwordauthentication") and "yes" in l_:
+                        findings.append(("media", "SSH permite autenticacion por password", cfg))
+        except Exception:
+            pass
+
+    # 5) actualizaciones pendientes
+    upd = tool_bash("apt list --upgradable 2>/dev/null | grep -c upgradable || true", timeout=60)
+    n_upd = (upd.get("stdout") or "0").strip()
+    if n_upd.isdigit() and int(n_upd) > 0:
+        findings.append(("media", f"{n_upd} paquetes con actualizacion pendiente",
+                         "ejecuta: apt-get upgrade -y"))
+
+    # ── informe markdown ──
+    order = {"alta": 0, "media": 1, "baja": 2, "info": 3}
+    findings.sort(key=lambda f: order.get(f[0], 9))
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    report.append("# Auditoria de seguridad — XTR Terminal")
+    report.append(f"_Generada: {ts}_\n")
+    alta = sum(1 for f in findings if f[0] == "alta")
+    media = sum(1 for f in findings if f[0] == "media")
+    report.append(f"**Resumen**: {alta} altas · {media} medias · "
+                  f"{len(findings) - alta - media} informativas/bajas\n")
+    report.append("## Hallazgos\n")
+    icon = {"alta": "🔴", "media": "🟠", "baja": "🟡", "info": "ℹ️"}
+    for sev, title, det in findings:
+        report.append(f"### {icon.get(sev, '')} [{sev.upper()}] {title}")
+        report.append(f"```\n{det}\n```\n")
+    report.append("## Recomendaciones de hardening\n")
+    report.append("1. Deshabilita login root por SSH (PermitRootLogin no).")
+    report.append("2. Actualiza paquetes: `apt-get update && apt-get upgrade -y`.")
+    report.append("3. Cierra o protege con firewall los puertos marcados en ALTA.")
+    report.append("4. Revisa binarios SUID no habituales (`chmod u-s` si no los necesitas).")
+    report.append("5. Usa claves SSH en lugar de contraseñas.")
+
+    content = "\n".join(report)
+    try:
+        parent = os.path.dirname(output)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(output, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    except OSError as exc:
+        return {"exit_code": -1, "error": str(exc)}
+
+    return {
+        "exit_code": 0,
+        "report_path": output,
+        "severity_summary": {"alta": alta, "media": media,
+                             "total": len(findings)},
+        "shell_users": shell_users,
+        "listening_ports": [f"{p_}/{pr}" for pr, p_ in ports],
+        "suid_unusual": odd[:15],
+    }
+
+
 TOOLS = {
     "bash": (tool_bash, "Run any shell command. Args: command (str), timeout (int, default 30)"),
     "python": (tool_python, "Execute Python code. Args: code (str)"),
     "read_file": (tool_read_file, "Read a text file. Args: path (str), limit (int, default 5000)"),
     "write_file": (tool_write_file, "Write a file. Args: path (str), content (str)"),
     "list_dir": (tool_list_dir, "List directory contents. Args: path (str, default /root)"),
+    "audit": (tool_audit, "Run a full local security audit and write a Markdown report (users, listening ports via /proc, SUID, SSH config, pending updates, severity + hardening). Args: output (str, default /root/audit_security.md). Use this for ANY security audit request."),
     "netmap": (tool_netmap, "Scan the LAN AND generate the topology map PNG in one call. Args: subnet (str, optional), output (str, default /root/scan_red.png). Returns image_path + hosts JSON. Use this for any network map request."),
     "netscan": (tool_netscan, "Discover hosts on the LAN (proot-safe TCP connect + ARP table). Args: subnet (str, optional, auto-detected), ports (str, comma list), timeout (int, default 2). Returns JSON with hosts, macs and open ports."),
     "remember": (None, "Store a persistent note. Args: key (str), value (str)"),
