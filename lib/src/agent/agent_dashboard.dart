@@ -965,6 +965,7 @@ class _AgentDashboardState extends State<AgentDashboard>
           child: Image.network(
             _fileUrl(path),
             fit: BoxFit.contain,
+            cacheWidth: 900,
             loadingBuilder: (c, w, prog) => prog == null
                 ? w
                 : const Padding(
@@ -1039,6 +1040,7 @@ class _AgentDashboardState extends State<AgentDashboard>
                           borderRadius: BorderRadius.circular(8),
                           child: Image.network(_fileUrl(p),
                               fit: BoxFit.cover,
+                              cacheWidth: 480,
                               errorBuilder: (c2, e, st) => Container(
                                   color: _C.cardAlt,
                                   child: const Icon(Icons.broken_image,
@@ -2317,19 +2319,28 @@ class _AgentDashboardState extends State<AgentDashboard>
           Row(
             children: [
               Expanded(
-                child: _AnimatedActionButton(
-                  label: _svc.mpLoaded ? 'Cargado' : 'Cargar',
-                  icon: _svc.mpLoaded ? Icons.check : Icons.bolt,
-                  loading: _svc.mpLoading,
-                  disabled: _svc.mpLoaded,
-                  color: _svc.mpLoaded ? _C.card : _C.accent,
-                  textColor: _svc.mpLoaded
-                      ? _C.textLo
-                      : Colors.white,
-                  onPressed: () async {
-                    await _svc.loadMpModel();
-                    if (mounted) setS(() {});
-                  },
+                child: _PulseRing(
+                  active: _svc.mpLoading,
+                  color: _C.accent,
+                  child: _ShimmerButton(
+                    active: _svc.mpLoading,
+                    child: _AnimatedActionButton(
+                      label: _svc.mpLoading
+                          ? 'Cargando modelo…'
+                          : (_svc.mpLoaded ? 'Cargado' : 'Cargar'),
+                      icon: _svc.mpLoaded ? Icons.check : Icons.bolt,
+                      loading: _svc.mpLoading,
+                      disabled: _svc.mpLoaded,
+                      color: _svc.mpLoaded ? _C.card : _C.accent,
+                      textColor: _svc.mpLoaded
+                          ? _C.textLo
+                          : Colors.white,
+                      onPressed: () async {
+                        await _svc.loadMpModel();
+                        if (mounted) setS(() {});
+                      },
+                    ),
+                  ),
                 ),
               ),
               if (_svc.mpLoaded) ...[
@@ -3407,26 +3418,37 @@ class _AgentAutonomousPanelState extends State<AgentAutonomousPanel> {
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerRight,
-              child: ElevatedButton.icon(
-                onPressed: (enabled && !_launching) ? _launchGoal : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _AC.purple,
-                  disabledBackgroundColor: _AC.cardAlt,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 20, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                icon: _launching
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.rocket_launch, size: 18),
-                label: Text(_launching ? 'Lanzando…' : 'Lanzar'),
-              ),
+              child: Builder(builder: (context) {
+                final bool busy = _launching || _status == 'running';
+                return _PulseRing(
+                  active: busy,
+                  color: _AC.purple,
+                  child: _ShimmerButton(
+                    active: busy,
+                    baseColor: _AC.purple,
+                    child: ElevatedButton.icon(
+                      onPressed:
+                          (enabled && !busy) ? _launchGoal : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _AC.purple,
+                        disabledBackgroundColor: _AC.cardAlt,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      icon: busy
+                          ? const _WaveThinkingIndicator(
+                              color: Colors.white, size: 18)
+                          : const Icon(Icons.rocket_launch, size: 18),
+                      label: Text(busy
+                          ? (_launching ? 'Lanzando…' : 'Ejecutando…')
+                          : 'Lanzar'),
+                    ),
+                  ),
+                );
+              }),
             ),
           ],
         ),

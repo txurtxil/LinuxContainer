@@ -1,4 +1,4 @@
-# XTR Agent Server v13.5 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v13.6 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
