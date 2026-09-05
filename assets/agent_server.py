@@ -1,4 +1,4 @@
-# XTR Agent Server v13.4.1 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v13.5 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "13.4.1"
+VERSION = "13.5"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -425,6 +425,42 @@ def parse_final(text):
 
 
 # ---------------------------------------------------------------------------
+# Compresión de contexto (Gemma local tiene límite de 4096 tokens)
+# ---------------------------------------------------------------------------
+
+MAX_CONTEXT_CHARS = 12000  # ~3000 tokens, deja margen para la respuesta
+
+
+def _compress_context(messages):
+    """Mantiene el historial por debajo del límite de contexto del LLM local.
+
+    Estrategia: conserva system prompt + goal original + los últimos mensajes;
+    los mensajes antiguos de herramientas se resumen a 300 chars y, si sigue
+    sin caber, se eliminan los más antiguos (el estado real está en memoria).
+    """
+    def total():
+        return sum(len(m.get("content") or "") for m in messages)
+
+    if total() <= MAX_CONTEXT_CHARS:
+        return
+
+    # 1) resume tool results antiguos (todos menos los 4 últimos mensajes)
+    for i in range(2, max(2, len(messages) - 4)):
+        c = messages[i].get("content") or ""
+        if len(c) > 300:
+            role = messages[i].get("role", "")
+            tag = "TOOL RESULT (old, summarized)" if c.startswith("TOOL RESULT") else role
+            messages[i]["content"] = f"[{tag}] {c[:300]}..."
+
+    # 2) si aun no cabe, elimina los mensajes intermedios mas antiguos
+    while total() > MAX_CONTEXT_CHARS and len(messages) > 6:
+        del messages[2]
+        # limpia el aviso tras el goal para que el historial siga teniendo sentido
+
+    goal_log("ctx", "compressed", {"messages": len(messages), "chars": total()})
+
+
+# ---------------------------------------------------------------------------
 # Bucle agéntico (threading)
 # ---------------------------------------------------------------------------
 
@@ -473,6 +509,7 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
         state["current_step"] = step_num
         emit("step", {"step": step_num, "max_steps": max_steps})
 
+        _compress_context(messages)
         try:
             reply = llm_chat(messages, base_url=ov.get("base_url"),
                              model=ov.get("model"), api_key=ov.get("api_key"))
@@ -508,7 +545,7 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
             state["steps"].append(
                 {"step": step_num, "tool": name, "args": args, "result": result})
 
-            obs = f"TOOL RESULT [{name}]: {json.dumps(result, ensure_ascii=False)[:6000]}"
+            obs = f"TOOL RESULT [{name}]: {json.dumps(result, ensure_ascii=False)[:2500]}"
             messages.append({"role": "user", "content": obs})
 
             if result.get("exit_code", 0) != 0 or result.get("error"):

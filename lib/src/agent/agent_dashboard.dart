@@ -721,15 +721,8 @@ class _AgentDashboardState extends State<AgentDashboard>
               ),
             ),
           const SizedBox(width: 4),
-          IconButton(
-            tooltip: 'Logs del agente',
-            onPressed: () => _showLogs('agent-server', _svc.agentLog),
-            icon: Icon(
-              Icons.article_outlined,
-              size: 20,
-              color: failed ? _C.err : _C.textLo,
-            ),
-          ),
+          // Cabecera compacta (Fold pantalla pequena): solo lo esencial
+          // visible; el resto va al menu de overflow (⋯).
           IconButton(
             tooltip: 'Prompts rapidos',
             onPressed: () =>
@@ -739,12 +732,6 @@ class _AgentDashboardState extends State<AgentDashboard>
               size: 20,
               color: _showPromptsPanel ? _C.accent : _C.textLo,
             ),
-          ),
-          IconButton(
-            tooltip: 'Galeria de imagenes',
-            onPressed: _showImageGallery,
-            icon: const Icon(Icons.photo_library_outlined,
-                size: 20, color: _C.textLo),
           ),
           IconButton(
             tooltip: _showAutonomous ? 'Volver al chat' : 'Modo autonomo',
@@ -758,22 +745,54 @@ class _AgentDashboardState extends State<AgentDashboard>
               color: _showAutonomous ? _C.purple : _C.textLo,
             ),
           ),
-          IconButton(
-            tooltip: 'Ajustes',
-            onPressed: _showSettingsSheet,
-            icon: const Icon(Icons.tune, size: 20, color: _C.textLo),
+          PopupMenuButton<String>(
+            tooltip: 'Mas opciones',
+            icon: Icon(Icons.more_vert,
+                size: 20, color: failed ? _C.err : _C.textLo),
+            color: _C.card,
+            onSelected: (v) {
+              switch (v) {
+                case 'logs':
+                  _showLogs('agent-server', _svc.agentLog);
+                  break;
+                case 'gallery':
+                  _showImageGallery();
+                  break;
+                case 'settings':
+                  _showSettingsSheet();
+                  break;
+                case 'history':
+                  _showHistorySheet();
+                  break;
+                case 'terminal':
+                  widget.onClose?.call();
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(
+                value: 'gallery',
+                child: _MenuRow(icon: Icons.photo_library_outlined, label: 'Galeria de imagenes'),
+              ),
+              const PopupMenuItem(
+                value: 'logs',
+                child: _MenuRow(icon: Icons.article_outlined, label: 'Logs del agente'),
+              ),
+              const PopupMenuItem(
+                value: 'settings',
+                child: _MenuRow(icon: Icons.tune, label: 'Ajustes'),
+              ),
+              const PopupMenuItem(
+                value: 'history',
+                child: _MenuRow(icon: Icons.history, label: 'Historial'),
+              ),
+              if (widget.onClose != null)
+                const PopupMenuItem(
+                  value: 'terminal',
+                  child: _MenuRow(icon: Icons.terminal, label: 'Terminal'),
+                ),
+            ],
           ),
-          IconButton(
-            tooltip: 'Historial',
-            onPressed: _showHistorySheet,
-            icon: const Icon(Icons.history, size: 20, color: _C.textLo),
-          ),
-          if (widget.onClose != null)
-            IconButton(
-              tooltip: 'Terminal',
-              onPressed: widget.onClose,
-              icon: const Icon(Icons.terminal, size: 22, color: _C.textLo),
-            ),
         ],
       ),
     );
@@ -2903,6 +2922,24 @@ class _PromptCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// Fila de menu overflow (icono + texto) con la paleta XTR.
+class _MenuRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _MenuRow({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: _C.textLo),
+        const SizedBox(width: 10),
+        Text(label, style: const TextStyle(color: _C.textHi, fontSize: 13.5)),
+      ],
     );
   }
 }
