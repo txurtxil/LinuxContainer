@@ -504,18 +504,17 @@ class _AgentDashboardState extends State<AgentDashboard>
   }
 
   List<_QuickPrompt> get _allPrompts => [
+        // TITULOS Y DESCRIPCIONES EN ESPANOL (para el usuario)
+        // PROMPTS EN INGLES (para que Gemma 2B/4B obedezca)
         _QuickPrompt(
           title: 'Escanear red local',
-          description:
-              'Descubre equipos, puertos y genera mapa topologico',
+          description: 'Descubre equipos, puertos y genera mapa topologico',
           prompt:
-              'Realiza un escaneo completo de la red local (detecta la subred automaticamente con `ip route`). '
-              'Usa nmap para: hosts activos (-sn), puertos comunes (22,80,443,3389,8080,21,445,139,3306,5432), '
-              'identificacion de SO (-O) y servicios (-sV). '
-              'Luego genera una imagen de topologia con Graphviz en /root/scan_red.png mostrando: '
-              'cada equipo con IP, hostname detectado, puertos abiertos, tipo de dispositivo '
-              '(colores diferenciados para router/servidor/movil/IoT/desconocido), conexiones y leyenda. '
-              'Muestra resumen textual con tabla de equipos encontrados.',
+              'Scan the local network. First find the subnet with "ip route". '
+              'Then use nmap to discover active hosts and open ports (22,80,443,3389,8080,21,445,139,3306,5432). '
+              'Identify OS and services. Generate a network topology image with Graphviz at /root/scan_red.png '
+              'showing each device with IP, hostname, open ports, and device type colors. '
+              'Show a text summary table of found hosts.',
           icon: Icons.network_check,
           color: _C.teal,
           category: 'Red',
@@ -524,9 +523,9 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Auditoria de seguridad',
           description: 'Analiza vulnerabilidades basicas del sistema',
           prompt:
-              'Auditoria de seguridad del sistema Debian: usuarios con shell, servicios en escucha, '
-              'permisos SUID sospechosos, firewall, actualizaciones pendientes, configuracion SSH. '
-              'Genera informe markdown en /root/audit_seguridad.md con severidad alta/media/baja y recomendaciones de hardening.',
+              'Run a basic security audit on this Debian system. Check: users with shell, listening services, '
+              'suspicious SUID permissions, firewall rules, pending updates, SSH config. '
+              'Generate a markdown report at /root/audit_security.md with severity (high/medium/low) and hardening recommendations.',
           icon: Icons.security,
           color: _C.err,
           category: 'Red',
@@ -535,9 +534,9 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Monitor de trafico',
           description: 'Captura y analiza trafico de red',
           prompt:
-              'Monitor de trafico con tcpdump/tshark durante 60 segundos. '
-              'Analiza protocolos mas usados, conexiones activas y anomalias. '
-              'Genera grafico de barras en /root/trafico.png con matplotlib. Muestra resumen.',
+              'Monitor network traffic using tcpdump or tshark for 60 seconds. '
+              'Analyze most used protocols, active connections, and anomalies. '
+              'Generate a bar chart with matplotlib at /root/traffic.png showing traffic by protocol. Show text summary.',
           icon: Icons.speed,
           color: _C.warn,
           category: 'Red',
@@ -546,8 +545,8 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Info del sistema',
           description: 'Recursos, procesos y estado del hardware',
           prompt:
-              'Informacion completa del sistema: CPU, RAM, disco, procesos, temperatura, carga, uptime. '
-              'Genera dashboard visual en /root/sysinfo.png con matplotlib.',
+              'Get complete system info: CPU, RAM, disk, processes, temperature, load, uptime. '
+              'Generate a visual dashboard with matplotlib at /root/sysinfo.png. Present data clearly.',
           icon: Icons.computer,
           color: _C.ok,
           category: 'Sistema',
@@ -556,9 +555,9 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Automatizar tarea',
           description: 'Script cron para backup automatico',
           prompt:
-              'Crea /root/backup_auto.sh que: 1) backup comprimido de /root/documentos a /root/backups con fecha, '
-              '2) limpieza de backups >7 dias, 3) log en /var/log/backup.log. '
-              'Configura cron para ejecutar a las 3:00 AM diario. Muestra el script y verifica cron activo.',
+              'Create /root/backup_auto.sh that: 1) compressed backup of /root/documents to /root/backups with date, '
+              '2) cleanup backups older than 7 days, 3) log to /var/log/backup.log. '
+              'Set up a cron job to run daily at 3:00 AM. Show the script and verify cron is active.',
           icon: Icons.schedule,
           color: _C.purple,
           category: 'Sistema',
@@ -567,8 +566,8 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Crear API REST',
           description: 'FastAPI con endpoints basicos',
           prompt:
-              'API REST FastAPI en /root/mi_api/: GET /items, POST /items, GET /items/{id}, persistencia SQLite. '
-              'Incluye script de prueba curl. Ejecuta en segundo plano y verifica.',
+              'Create a REST API with FastAPI in /root/my_api/: GET /items, POST /items, GET /items/{id}, SQLite persistence. '
+              'Include a curl test script. Run in background and verify it responds.',
           icon: Icons.code,
           color: _C.accent,
           category: 'Dev',
@@ -577,9 +576,9 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Generar QR',
           description: 'Codigos QR para URLs, WiFi, etc.',
           prompt:
-              'Genera QR para: 1) https://github.com/txurtxil/LinuxContainer en /root/qr_repo.png, '
-              '2) WiFi SSID:XTR-Guest en /root/qr_wifi.png, 3) telefono +34600000000 en /root/qr_tel.png. '
-              'Usa qrencode. Muestra archivos generados.',
+              'Generate QR codes using qrencode: 1) https://github.com/txurtxil/LinuxContainer to /root/qr_repo.png, '
+              '2) WiFi SSID:XTR-Guest to /root/qr_wifi.png, 3) phone +34600000000 to /root/qr_phone.png. '
+              'Show all generated files.',
           icon: Icons.qr_code,
           color: _C.teal,
           category: 'Dev',
@@ -588,9 +587,9 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Diagrama de flujo',
           description: 'Diagrama del arranque de XTR',
           prompt:
-              'Diagrama de flujo Graphviz en /root/flujo.png del arranque XTR: '
-              'App Flutter -> proot -> setup IA -> carga MediaPipe -> agent-server -> chat. '
-              'Usa rectangulos, rombos, ovalos y colores.',
+              'Generate a flowchart with Graphviz at /root/flowchart.png showing XTR startup: '
+              'App Flutter -> proot -> setup AI -> load MediaPipe -> agent-server -> chat. '
+              'Use different shapes (rectangles, diamonds, ovals) and colors.',
           icon: Icons.account_tree,
           color: _C.orange,
           category: 'Visual',
@@ -599,9 +598,9 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Grafica de datos',
           description: 'Comparativa de modelos IA locales',
           prompt:
-              'Grafica de barras en /root/comparativa.png: Gemma3-1B (15 tok/s, 512MB), '
-              'Gemma3-4B (8 tok/s, 1.2GB), Phi-4 (6 tok/s, 1.5GB), Qwen2.5 (10 tok/s, 900MB). '
-              'Incluye titulo, leyenda, etiquetas y valores.',
+              'Generate a bar chart at /root/comparison.png with matplotlib comparing local AI models: '
+              'Gemma3-1B (15 tok/s, 512MB), Gemma3-4B (8 tok/s, 1.2GB), Phi-4 (6 tok/s, 1.5GB), Qwen2.5 (10 tok/s, 900MB). '
+              'Include title, legend, axis labels, and values on bars.',
           icon: Icons.bar_chart,
           color: _C.ok,
           category: 'Visual',
@@ -610,8 +609,8 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Convertir formato',
           description: 'JSON <-> YAML <-> CSV <-> TOML',
           prompt:
-              'Script /root/convertidor.py que convierta entre JSON/YAML/CSV/TOML. '
-              'Acepta archivo y formato de salida como args. Crea /root/datos.json de prueba y demuestra conversiones.',
+              'Create /root/converter.py that converts between JSON/YAML/CSV/TOML. '
+              'Accept input file and output format as arguments. Create /root/test_data.json with sample data and demonstrate all conversions.',
           icon: Icons.transform,
           color: _C.purple,
           category: 'Util',
@@ -620,8 +619,8 @@ class _AgentDashboardState extends State<AgentDashboard>
           title: 'Encriptar archivo',
           description: 'Cifrado GPG con claves',
           prompt:
-              'Genera par de claves GPG, crea /root/secreto.txt, cifralo a /root/secreto.txt.gpg, '
-              'descifralo para verificar. Muestra comandos y explica. Incluye export de clave publica.',
+              'Generate a GPG key pair, create /root/secret.txt, encrypt it to /root/secret.txt.gpg, '
+              'then decrypt to verify. Show commands used and explain the process. Include how to export the public key.',
           icon: Icons.lock,
           color: _C.err,
           category: 'Util',
@@ -645,9 +644,13 @@ class _AgentDashboardState extends State<AgentDashboard>
       child: Column(
         children: [
           _header(),
-          Expanded(child: _chatList()),
-          if (_showPromptsPanel) _promptsPanel(),
-          _inputBar(),
+          if (_showAutonomous)
+            Expanded(child: AgentAutonomousPanel())
+          else ...[
+            Expanded(child: _chatList()),
+            if (_showPromptsPanel) _promptsPanel(),
+            _inputBar(),
+          ],
         ],
       ),
     );

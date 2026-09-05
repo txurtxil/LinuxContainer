@@ -1,4 +1,4 @@
-# XTR Agent Server v13.1 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v13.3 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "13.2"
+VERSION = "13.3"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -328,13 +328,13 @@ def _http_get(url, timeout=5.0):
         return resp.status, resp.read().decode("utf-8", errors="replace")
 
 
-def _http_post_json(url, payload, timeout=180.0):
+def _http_post_json(url, payload, timeout=180.0, api_key=None):
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {LLM_API_KEY}",
+            "Authorization": f"Bearer {api_key or LLM_API_KEY}",
         })
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.status, resp.read().decode("utf-8", errors="replace")
@@ -351,16 +351,19 @@ def check_backend_alive():
         return False
 
 
-def llm_chat(messages):
+def llm_chat(messages, base_url=None, model=None, api_key=None):
+    base_url = (base_url or LLM_BASE_URL).rstrip("/")
+    model = model or LLM_MODEL
+    api_key = api_key or LLM_API_KEY
     payload = {
-        "model": LLM_MODEL,
+        "model": model,
         "messages": messages,
         "temperature": 0.3,
         "max_tokens": 2048,
     }
-    url = f"{LLM_BASE_URL}/chat/completions"
+    url = f"{base_url}/chat/completions"
     try:
-        status, raw = _http_post_json(url, payload, timeout=180.0)
+        status, raw = _http_post_json(url, payload, timeout=180.0, api_key=api_key)
     except urllib.error.HTTPError as exc:
         body = ""
         try:
@@ -368,7 +371,7 @@ def llm_chat(messages):
         except Exception:
             pass
         raise RuntimeError(
-            f"LLM HTTP {exc.code} en {url} (model={LLM_MODEL}). "
+            f"LLM HTTP {exc.code} en {url} (model={model}). "
             f"Respuesta: {body or exc.reason}. "
             f"Revisa LLM_BASE_URL/LLM_MODEL y que MediaPipe este sirviendo el modelo.")
     data = json.loads(raw)
@@ -432,8 +435,9 @@ def _build_system_prompt():
     return prompt
 
 
-def agent_loop(goal, goal_id, max_steps, event_cb=None):
+def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
     """Bucle agéntico síncrono (corre en un hilo). event_cb(event, data) opcional."""
+    ov = llm_overrides or {}
     state = GOALS[goal_id]
     deadline = time.time() + AGENT_GOAL_TIMEOUT
 
@@ -462,7 +466,8 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None):
         emit("step", {"step": step_num, "max_steps": max_steps})
 
         try:
-            reply = llm_chat(messages)
+            reply = llm_chat(messages, base_url=ov.get("base_url"),
+                             model=ov.get("model"), api_key=ov.get("api_key"))
         except Exception as exc:
             err = f"LLM error: {exc}"
             messages.append({"role": "system", "content": err})
@@ -575,11 +580,30 @@ class AgentHandler(BaseHTTPRequestHandler):
     def _read_json_body(self):
         raw = self._read_body_bytes()
         if not raw:
-            return {}
+            # Ultimo recurso: leer lo que quede con timeout corto (clientes raros)
+            try:
+                import socket
+                self.connection.settimeout(0.5)
+                extra = b""
+                while True:
+                    try:
+                        chunk = self.connection.recv(65536)
+                        if not chunk:
+                            break
+                        extra += chunk
+                    except socket.timeout:
+                        break
+                raw = extra
+            except Exception:
+                pass
+        if not raw:
+            return {"_empty_body": True,
+                    "_headers": {k: v for k, v in self.headers.items()}}
         try:
             return json.loads(raw.decode("utf-8", errors="replace"))
         except json.JSONDecodeError:
-            return {}
+            return {"_bad_json": True, "_raw": raw.decode("utf-8", errors="replace")[:500],
+                    "_headers": {k: v for k, v in self.headers.items()}}
 
     def _query(self):
         from urllib.parse import urlparse, parse_qs
@@ -671,12 +695,25 @@ class AgentHandler(BaseHTTPRequestHandler):
         body = self._read_json_body()
 
         if path in ("/run", "/chat"):
-            message = body.get("message") or body.get("goal") or ""
+            message = (body.get("message") or body.get("task") or
+                       body.get("goal") or body.get("prompt") or
+                       body.get("text") or body.get("input") or "")
             if not message:
-                self._send_json({"error": "missing 'message'"}, status=400)
+                # Diagnostico: devolvemos lo que llego para poder depurar
+                self._send_json({
+                    "error": "missing 'message'",
+                    "debug": body,
+                    "hint": "El server espera JSON: {\"message\": \"...\"} "
+                            "(tambien acepta goal/prompt/text/input)",
+                }, status=400)
                 return
             max_steps = int(body.get("max_steps") or AGENT_MAX_STEPS)
-            self._run_sse(message, max_steps)
+            overrides = {
+                "base_url": body.get("llm_base_url") or None,
+                "model": body.get("llm_model") or None,
+                "api_key": body.get("llm_api_key") or None,
+            }
+            self._run_sse(message, max_steps, overrides)
 
         elif path == "/goal":
             goal = body.get("goal") or ""
@@ -702,7 +739,7 @@ class AgentHandler(BaseHTTPRequestHandler):
 
     # -- SSE /run --------------------------------------------------------------
 
-    def _run_sse(self, message, max_steps):
+    def _run_sse(self, message, max_steps, overrides=None):
         goal_id = f"run-{uuid.uuid4().hex[:12]}"
         with _goals_lock:
             GOALS[goal_id] = {
@@ -715,15 +752,46 @@ class AgentHandler(BaseHTTPRequestHandler):
         import queue as _queue
         q = _queue.Queue()
 
+        def send(data):
+            q.put(f"data: {json.dumps(data, ensure_ascii=False)}\n\n")
+
+        def _summ(result):
+            out = result.get("stdout") or result.get("output") or result.get("content") or ""
+            if not out and result.get("error"):
+                out = f"ERROR: {result['error']}"
+            if not out and result.get("stderr"):
+                out = result["stderr"]
+            return str(out)[:2000]
+
         def event_cb(event, data):
-            if event in ("chunk", "tool_call", "tool_result", "final", "error"):
-                q.put(_sse(event, data))
+            # Formato que espera agent_chat.dart: {type: step|final|error, ...}
+            if event == "chunk":
+                # texto "pensado" sin el marcado de herramientas
+                txt = data.get("text", "")
+                for tag in ("<final>", "</final>"):
+                    txt = txt.replace(tag, "")
+                import re as _re
+                txt = _re.sub(r"<tool>.*?</args>", "", txt, flags=_re.S).strip()
+                if txt:
+                    send({"type": "step", "step": data.get("step"), "thought": txt})
+            elif event == "tool_call":
+                send({"type": "step", "step": data.get("step"),
+                      "tool_calls": [{"name": data.get("tool"),
+                                      "arguments": data.get("args")}]})
+            elif event == "tool_result":
+                send({"type": "step", "step": data.get("step"),
+                      "observation": _summ(data.get("result") or {})})
+            elif event == "error":
+                send({"type": "error", "error": data.get("error", "error")})
+            elif event == "final":
+                send({"type": "final", "answer": data.get("result") or ""})
 
         def run_agent():
             try:
-                agent_loop(message, goal_id, max_steps, event_cb=event_cb)
+                agent_loop(message, goal_id, max_steps, event_cb=event_cb,
+                           llm_overrides=overrides)
             except Exception as exc:
-                q.put(_sse("error", {"error": str(exc)}))
+                send({"type": "error", "error": str(exc)})
             finally:
                 q.put(None)
 
@@ -732,6 +800,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Accel-Buffering", "no")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
         self.end_headers()
 
         threading.Thread(target=run_agent, daemon=True).start()
@@ -744,6 +813,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass  # el cliente cerró el stream
+        finally:
+            self.close_connection = True  # cierra al terminar: fin del stream
 
 
 # ---------------------------------------------------------------------------
