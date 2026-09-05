@@ -1,4 +1,4 @@
-# XTR Agent Server v13.7 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v13.8 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "13.7"
+VERSION = "13.8"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -61,6 +61,7 @@ To use a tool, output EXACTLY:
 
 Available tools:
 - bash(command, timeout=30): run any shell command
+- netscan(subnet, ports, timeout): discover LAN hosts (works inside proot, no raw sockets)
 - python(code): execute Python code
 - read_file(path, limit=5000): read a file
 - write_file(path, content): write a file
@@ -123,6 +124,7 @@ TOOL RESULT [bash]: -rw-r--r-- 1 root root 48210 network_map.png
 - NEVER claim a file was created/saved unless you verified it with ls. If a tool result contains an error, the task is NOT done — fix it first.
 - If graphviz/dot is missing, install it (apt-get install -y graphviz) or fall back to matplotlib/networkx to render the PNG.
 - If a command is not found (ip, netstat, nmap...), install it with apt-get instead of giving up.
+- For network scanning/mapping, PREFER the native tool `netscan` (it always works here). Then render the map from its JSON output with python (graphviz or matplotlib) and verify the PNG with ls.
 - PROOT ENVIRONMENT: raw-socket operations FAIL inside this container. `nmap -sn` (ARP ping) returns 0 hosts, and `-sS`/`-O` need root raw sockets. For host discovery use a ping sweep loop + `ip neigh show`, or `nmap -sn -PS22,80,443 --unprivileged`. For port scans use `nmap -sT -sV --unprivileged`. NEVER report "0 hosts up" as a network problem without trying these fallbacks first.
 """
 
@@ -303,12 +305,89 @@ def tool_list_dir(path="/root"):
         return {"exit_code": -1, "error": str(exc)}
 
 
+def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2):
+    """Descubrimiento de red 100% userspace (TCP connect + tabla ARP).
+    Funciona dentro de proot, a diferencia de nmap -sn (raw sockets)."""
+    import socket
+    import concurrent.futures
+
+    if not subnet:
+        # detecta la subred leyendo /proc/net/route + ip local
+        try:
+            s_ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s_.connect(("8.8.8.8", 80))
+            local_ip = s_.getsockname()[0]
+            s_.close()
+            subnet = ".".join(local_ip.split(".")[:3]) + ".0/24"
+        except Exception as exc:
+            return {"exit_code": -1, "error": f"no pude detectar la subred: {exc}"}
+
+    base = subnet.split("/")[0]
+    parts = base.split(".")[:3]
+    prefix = ".".join(parts)
+    port_list = []
+    for tok in str(ports).split(","):
+        tok = tok.strip()
+        if tok.isdigit():
+            port_list.append(int(tok))
+
+    found = {}
+
+    def probe(host):
+        open_ports = []
+        for port in port_list:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+                    sk.settimeout(timeout)
+                    if sk.connect_ex((host, port)) == 0:
+                        open_ports.append(port)
+            except Exception:
+                pass
+        if open_ports:
+            found[host] = open_ports
+
+    # 1) TCP connect sweep en paralelo (marca hosts con puertos abiertos)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=64) as ex:
+        list(ex.map(probe, [f"{prefix}.{i}" for i in range(1, 255)]))
+
+    # 2) complementa con la tabla ARP (hosts vivos aunque no tengan puertos de la lista)
+    arp_hosts = {}
+    try:
+        with open("/proc/net/arp", "r") as fh:
+            for line in fh.readlines()[1:]:
+                cols = line.split()
+                if len(cols) >= 6 and cols[2] != "0x0" and cols[5] != "00:00:00:00:00:00":
+                    ip, mac = cols[0], cols[4]
+                    if ip.startswith(prefix + "."):
+                        arp_hosts[ip] = mac
+    except Exception:
+        pass
+
+    hosts = []
+    for ip in sorted(set(found) | set(arp_hosts),
+                     key=lambda x: int(x.split(".")[-1])):
+        hosts.append({
+            "ip": ip,
+            "mac": arp_hosts.get(ip, ""),
+            "open_ports": found.get(ip, []),
+        })
+
+    return {
+        "exit_code": 0,
+        "subnet": f"{prefix}.0/24",
+        "hosts_found": len(hosts),
+        "hosts": hosts,
+        "method": "tcp-connect + arp-table (proot safe)",
+    }
+
+
 TOOLS = {
     "bash": (tool_bash, "Run any shell command. Args: command (str), timeout (int, default 30)"),
     "python": (tool_python, "Execute Python code. Args: code (str)"),
     "read_file": (tool_read_file, "Read a text file. Args: path (str), limit (int, default 5000)"),
     "write_file": (tool_write_file, "Write a file. Args: path (str), content (str)"),
     "list_dir": (tool_list_dir, "List directory contents. Args: path (str, default /root)"),
+    "netscan": (tool_netscan, "Discover hosts on the LAN (proot-safe TCP connect + ARP table). Args: subnet (str, optional, auto-detected), ports (str, comma list), timeout (int, default 2). Returns JSON with hosts, macs and open ports."),
     "remember": (None, "Store a persistent note. Args: key (str), value (str)"),
     "recall": (None, "Retrieve a persistent note. Args: key (str)"),
 }

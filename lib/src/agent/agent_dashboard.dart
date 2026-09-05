@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 import 'agent_services.dart';
 import 'agent_chat.dart';
@@ -767,12 +768,19 @@ class _AgentDashboardState extends State<AgentDashboard>
                 case 'terminal':
                   widget.onClose?.call();
                   break;
+                case 'export':
+                  _exportChatTxt();
+                  break;
               }
             },
             itemBuilder: (_) => [
               const PopupMenuItem(
                 value: 'gallery',
                 child: _MenuRow(icon: Icons.photo_library_outlined, label: 'Galeria de imagenes'),
+              ),
+              const PopupMenuItem(
+                value: 'export',
+                child: _MenuRow(icon: Icons.download_outlined, label: 'Exportar chat (.txt)'),
               ),
               const PopupMenuItem(
                 value: 'logs',
@@ -934,6 +942,58 @@ class _AgentDashboardState extends State<AgentDashboard>
   // ═══════════════════════════════════════════════════════════════════
   //  BLOQUES DE CHAT
   // ═══════════════════════════════════════════════════════════════════
+
+  // ── Exportar conversacion a .txt ───────────────────────────────────────
+  Future<void> _exportChatTxt() async {
+    final blocks = _ctrl.blocks.value;
+    if (blocks.isEmpty) {
+      _snack('No hay conversacion que exportar');
+      return;
+    }
+    final buf = StringBuffer()
+      ..writeln('XTR Terminal — conversacion exportada')
+      ..writeln('Fecha: ${DateTime.now()}')
+      ..writeln('=' * 60)
+      ..writeln();
+    for (final b in blocks) {
+      final step = b.step != null ? ' [paso ${b.step}]' : '';
+      switch (b.kind) {
+        case 'user':
+          buf.writeln('\n>>> TU$step:\n${b.text}');
+          break;
+        case 'thought':
+          buf.writeln('\n[pensamiento]$step ${b.text}');
+          break;
+        case 'tool':
+          buf.writeln('[herramienta ${b.toolName}]$step ${b.toolArgs ?? ""}');
+          break;
+        case 'observation':
+          buf.writeln('[resultado]$step ${b.text}');
+          break;
+        case 'final':
+          buf.writeln('\n=== RESPUESTA$step ===\n${b.text}');
+          break;
+        case 'error':
+          buf.writeln('[ERROR]$step ${b.text}');
+          break;
+      }
+    }
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final ts = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .split('.')
+          .first;
+      final f = File('${dir.path}/xtr_chat_$ts.txt');
+      await f.writeAsString(buf.toString());
+      await Clipboard.setData(ClipboardData(text: buf.toString()));
+      if (mounted) _snack('Exportado: ${f.path} (y copiado al portapapeles)');
+    } catch (e) {
+      await Clipboard.setData(ClipboardData(text: buf.toString()));
+      if (mounted) _snack('Copiado al portapapeles (no se pudo guardar archivo)');
+    }
+  }
 
   // ── Visor de imagenes generadas por el agente ──────────────────────────
 
@@ -2062,6 +2122,41 @@ class _AgentDashboardState extends State<AgentDashboard>
                           const SizedBox(height: 6),
                           _cfgStepper('Top-k', topK, 1, 100, 4,
                               (v) => setS(() => topK = v)),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: _C.cardAlt,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: _C.border),
+                            ),
+                            child: const Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(children: [
+                                  Icon(Icons.info_outline,
+                                      size: 13, color: _C.accent),
+                                  SizedBox(width: 6),
+                                  Text('Que hace cada parametro',
+                                      style: TextStyle(
+                                          color: _C.accent,
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w600)),
+                                ]),
+                                SizedBox(height: 8),
+                                Text(
+                                  '• Temperature: creatividad. 0.1-0.3 respuestas precisas y obedientes (recomendado para el agente). >0.7 mas variado pero menos fiable.\n'
+                                  '• Top-p: variedad de vocabulario. 0.9 es un buen equilibrio; bajalo si el modelo divaga.\n'
+                                  '• Top-k: cuantas palabras candidatas considera en cada paso. 40 es el valor tipico; subelo si las respuestas son repetitivas.\n'
+                                  '• GPU/CPU: la GPU carga y genera mucho mas rapido; usa CPU solo si la GPU falla o se queda sin memoria.',
+                                  style: TextStyle(
+                                      color: _C.textLo,
+                                      fontSize: 11.5,
+                                      height: 1.5),
+                                ),
+                              ],
+                            ),
+                          ),
                           const SizedBox(height: 18),
                           _cfgLabel('Puerto agent-server'),
                           const SizedBox(height: 6),
@@ -2336,8 +2431,14 @@ class _AgentDashboardState extends State<AgentDashboard>
                           ? _C.textLo
                           : Colors.white,
                       onPressed: () async {
-                        await _svc.loadMpModel();
-                        if (mounted) setS(() {});
+                        setS(() => _svc.mpLoading = true);
+                        try {
+                          await _svc.loadMpModel();
+                        } finally {
+                          if (mounted) {
+                            setS(() => _svc.mpLoading = false);
+                          }
+                        }
                       },
                     ),
                   ),
