@@ -1,4 +1,4 @@
-# XTR Agent Server v13.8 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v13.9 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "13.8"
+VERSION = "13.9"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -62,6 +62,7 @@ To use a tool, output EXACTLY:
 Available tools:
 - bash(command, timeout=30): run any shell command
 - netscan(subnet, ports, timeout): discover LAN hosts (works inside proot, no raw sockets)
+- netmap(subnet, output): scan LAN + render topology PNG map in one call
 - python(code): execute Python code
 - read_file(path, limit=5000): read a file
 - write_file(path, content): write a file
@@ -124,7 +125,8 @@ TOOL RESULT [bash]: -rw-r--r-- 1 root root 48210 network_map.png
 - NEVER claim a file was created/saved unless you verified it with ls. If a tool result contains an error, the task is NOT done — fix it first.
 - If graphviz/dot is missing, install it (apt-get install -y graphviz) or fall back to matplotlib/networkx to render the PNG.
 - If a command is not found (ip, netstat, nmap...), install it with apt-get instead of giving up.
-- For network scanning/mapping, PREFER the native tool `netscan` (it always works here). Then render the map from its JSON output with python (graphviz or matplotlib) and verify the PNG with ls.
+- For network scanning/mapping, ALWAYS use the native tool `netmap` — it scans AND renders the map PNG in one call. Do NOT write your own scanning/drawing code for this.
+- NEVER write "TOOL RESULT" text yourself. Tool results are provided by the system only. Inventing tool output is a critical failure.
 - PROOT ENVIRONMENT: raw-socket operations FAIL inside this container. `nmap -sn` (ARP ping) returns 0 hosts, and `-sS`/`-O` need root raw sockets. For host discovery use a ping sweep loop + `ip neigh show`, or `nmap -sn -PS22,80,443 --unprivileged`. For port scans use `nmap -sT -sV --unprivileged`. NEVER report "0 hosts up" as a network problem without trying these fallbacks first.
 """
 
@@ -381,12 +383,90 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2
     }
 
 
+def tool_netmap(subnet="", output="/root/scan_red.png"):
+    """Escanea la LAN (netscan) y genera el mapa topologico PNG en una sola
+    llamada. Determinista: no depende de que el modelo escriba codigo."""
+    scan = tool_netscan(subnet=subnet)
+    if scan.get("exit_code") != 0:
+        return scan
+    hosts = scan["hosts"]
+
+    # script de dibujo con matplotlib (si falta, intenta instalarlo)
+    draw = f"""
+import json, math, sys
+hosts = json.loads('{json.dumps(hosts)}')
+out = {output!r}
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+except ImportError:
+    sys.exit(42)
+
+n = max(len(hosts), 1)
+fig, ax = plt.subplots(figsize=(10, 8))
+fig.patch.set_facecolor('#1C1C1E')
+ax.set_facecolor('#1C1C1E')
+ax.axis('off')
+R = 3.0
+colors = {{'router': '#FF9F0A', 'device': '#5E9BD6'}}
+for i, h in enumerate(hosts):
+    ang = 2 * math.pi * i / n
+    x, y = R * math.cos(ang), R * math.sin(ang)
+    is_router = h['ip'].endswith('.1')
+    c = colors['router'] if is_router else colors['device']
+    ax.plot([0, x], [0, y], color='#3A3A3C', lw=1.2, zorder=1)
+    ax.scatter([x], [y], s=900, c=c, zorder=2, edgecolors='#EAEAEC', linewidths=1.2)
+    label = h['ip']
+    if h.get('mac'):
+        label += '\\n' + h['mac']
+    if h.get('open_ports'):
+        label += '\\nports: ' + ','.join(map(str, h['open_ports'][:6]))
+    ax.text(x, y - 0.55, label, ha='center', va='top',
+            color='#EAEAEC', fontsize=8, zorder=3)
+ax.scatter([0], [0], s=1200, c='#34C759', zorder=2, edgecolors='#EAEAEC')
+ax.text(0, -0.55, 'XTR (este dispositivo)', ha='center', va='top',
+        color='#EAEAEC', fontsize=9, zorder=3)
+ax.set_title(f'Mapa de red — {{len(hosts)}} dispositivos', color='#EAEAEC', fontsize=13)
+import os
+os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
+plt.tight_layout()
+plt.savefig(out, dpi=130, facecolor='#1C1C1E')
+print('OK', out)
+"""
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
+        fh.write(draw)
+        script = fh.name
+    res = tool_bash(f"python3 {script}", timeout=90)
+    if res.get("exit_code") == 42 or "ModuleNotFoundError" in (res.get("stderr") or ""):
+        # intenta instalar matplotlib y reintenta una vez
+        tool_bash("pip install -q matplotlib 2>/dev/null || pip install -q --break-system-packages matplotlib", timeout=300)
+        res = tool_bash(f"python3 {script}", timeout=90)
+    try:
+        import os as _os
+        _os.unlink(script)
+    except OSError:
+        pass
+
+    ok = res.get("exit_code") == 0 and os.path.exists(output)
+    return {
+        "exit_code": 0 if ok else -1,
+        "image_path": output if ok else None,
+        "hosts_found": scan["hosts_found"],
+        "hosts": hosts,
+        "subnet": scan["subnet"],
+        "error": None if ok else (res.get("stderr") or "no se pudo generar el PNG"),
+    }
+
+
 TOOLS = {
     "bash": (tool_bash, "Run any shell command. Args: command (str), timeout (int, default 30)"),
     "python": (tool_python, "Execute Python code. Args: code (str)"),
     "read_file": (tool_read_file, "Read a text file. Args: path (str), limit (int, default 5000)"),
     "write_file": (tool_write_file, "Write a file. Args: path (str), content (str)"),
     "list_dir": (tool_list_dir, "List directory contents. Args: path (str, default /root)"),
+    "netmap": (tool_netmap, "Scan the LAN AND generate the topology map PNG in one call. Args: subnet (str, optional), output (str, default /root/scan_red.png). Returns image_path + hosts JSON. Use this for any network map request."),
     "netscan": (tool_netscan, "Discover hosts on the LAN (proot-safe TCP connect + ARP table). Args: subnet (str, optional, auto-detected), ports (str, comma list), timeout (int, default 2). Returns JSON with hosts, macs and open ports."),
     "remember": (None, "Store a persistent note. Args: key (str), value (str)"),
     "recall": (None, "Retrieve a persistent note. Args: key (str)"),
@@ -454,8 +534,10 @@ def llm_chat(messages, base_url=None, model=None, api_key=None):
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": 0.3,
-        "max_tokens": 2048,
+        "temperature": 0.15,
+        "top_p": 0.9,
+        "top_k": 40,
+        "max_tokens": 1024,
     }
     url = f"{base_url}/chat/completions"
     try:
