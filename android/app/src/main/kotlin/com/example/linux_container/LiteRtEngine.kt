@@ -56,7 +56,7 @@ object LiteRtEngine {
      * engine.initialize() puede tardar 10s+ en modelos grandes; el llamante
      * debe ejecutarlo fuera del hilo de UI.
      *
-     * v14.1 — cadena de reintentos automática:
+     * v14.1.1 — cadena de reintentos + vision solo en Gemma automática:
      *  - Modelos Qwen3 (p.ej. Qwen3-4B-Instruct-2507) traen KV cache de 2048:
      *    forzar maxNumTokens=4096 hace fallar la creación del engine
      *    ("Failed to create engine: UNKNOWN ... compiled_model_executor").
@@ -82,13 +82,26 @@ object LiteRtEngine {
             for (maxTok in tokenPrefs) {
                 try {
                     val backend = if (gpu) Backend.GPU() else Backend.CPU()
-                    val config = EngineConfig(
-                        modelPath = modelPath,
-                        backend = backend,
-                        visionBackend = backend,
-                        cacheDir = context.cacheDir.path,
-                        maxNumTokens = maxTok,
-                    )
+                    // v14.1.1 — Qwen3 es texto puro: NO configurar visionBackend,
+                    // si no LiteRT-LM exige TF_LITE_VISION_ENCODER en el modelo
+                    // y falla al crear la conversacion (NOT_FOUND). Solo Gemma
+                    // (multimodal) lleva backend de vision.
+                    val config = if (isQwen) {
+                        EngineConfig(
+                            modelPath = modelPath,
+                            backend = backend,
+                            cacheDir = context.cacheDir.path,
+                            maxNumTokens = maxTok,
+                        )
+                    } else {
+                        EngineConfig(
+                            modelPath = modelPath,
+                            backend = backend,
+                            visionBackend = backend,
+                            cacheDir = context.cacheDir.path,
+                            maxNumTokens = maxTok,
+                        )
+                    }
                     val e = Engine(config)
                     e.initialize()
                     engine = e
