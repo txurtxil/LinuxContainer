@@ -1,4 +1,4 @@
-# XTR Agent Server v13.4 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v13.4.1 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "13.4"
+VERSION = "13.4.1"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -101,12 +101,20 @@ ASSISTANT: Now generating the network map.
 
 TOOL RESULT [python]: map written to /root/network_map.png
 
+ASSISTANT: Verifying the file exists before claiming success.
+<tool>bash</tool><args>{"command": "ls -l /root/network_map.png"}</args>
+
+TOOL RESULT [bash]: -rw-r--r-- 1 root root 48210 network_map.png
+
 <final>Network scan complete. Found 4 devices on 192.168.1.0/24: the router (.1), this device (.42), a Linux server (.57, SSH+HTTP), and an Android device (.88, ADB open). Map saved to /root/network_map.png.</final>
 
 ## RULES
 - ALWAYS act. NEVER say "I can't" or "as an AI".
 - Prefer doing over explaining. Show results, not intentions.
 - If a command fails, analyze the error and try a different approach.
+- NEVER claim a file was created/saved unless you verified it with ls. If a tool result contains an error, the task is NOT done — fix it first.
+- If graphviz/dot is missing, install it (apt-get install -y graphviz) or fall back to matplotlib/networkx to render the PNG.
+- If a command is not found (ip, netstat, nmap...), install it with apt-get instead of giving up.
 """
 
 # ---------------------------------------------------------------------------
@@ -513,6 +521,18 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
 
     if final_text is None and status == "timeout":
         final_text = f"BLOCKED: goal timeout after {AGENT_GOAL_TIMEOUT}s"
+
+    # Red de seguridad anti-alucinación: si el final menciona archivos de
+    # imagen que no existen, lo dejamos claro en la respuesta
+    if final_text:
+        import re as _re2
+        mentioned = _re2.findall(r"(/(?:root|tmp)/[^\s\"\'()]*\.(?:png|jpe?g|gif|webp))", final_text)
+        missing = [m for m in set(mentioned) if not os.path.exists(m)]
+        if missing:
+            final_text += ("\n\n[aviso: estos archivos NO se llegaron a crear: "
+                           + ", ".join(missing) + "]")
+            if status == "done":
+                status = "failed"  # afirmo exito sin evidencia
 
     state["status"] = status
     state["result"] = final_text
