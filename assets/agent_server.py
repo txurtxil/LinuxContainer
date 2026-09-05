@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "13.1"
+VERSION = "13.2"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -341,9 +341,12 @@ def _http_post_json(url, payload, timeout=180.0):
 
 
 def check_backend_alive():
+    """Vivo si el servidor LLM responde HTTP (cualquier codigo) en /models."""
     try:
         status, _ = _http_get(f"{LLM_BASE_URL}/models", timeout=5.0)
         return status == 200
+    except urllib.error.HTTPError:
+        return True  # respondio algo: el puerto esta vivo
     except Exception:
         return False
 
@@ -355,7 +358,19 @@ def llm_chat(messages):
         "temperature": 0.3,
         "max_tokens": 2048,
     }
-    status, raw = _http_post_json(f"{LLM_BASE_URL}/chat/completions", payload, timeout=180.0)
+    url = f"{LLM_BASE_URL}/chat/completions"
+    try:
+        status, raw = _http_post_json(url, payload, timeout=180.0)
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")[:300]
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"LLM HTTP {exc.code} en {url} (model={LLM_MODEL}). "
+            f"Respuesta: {body or exc.reason}. "
+            f"Revisa LLM_BASE_URL/LLM_MODEL y que MediaPipe este sirviendo el modelo.")
     data = json.loads(raw)
     return data["choices"][0]["message"]["content"]
 
@@ -524,14 +539,43 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
+        self.close_connection = True
 
-    def _read_json_body(self):
+    def _read_body_bytes(self):
+        """Lee el body tanto con Content-Length como con Transfer-Encoding: chunked."""
+        te = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in te:
+            chunks = []
+            while True:
+                size_line = self.rfile.readline().strip()
+                if b";" in size_line:
+                    size_line = size_line.split(b";", 1)[0]
+                try:
+                    size = int(size_line, 16)
+                except ValueError:
+                    break
+                if size == 0:
+                    # trailer / fin de chunks
+                    while True:
+                        line = self.rfile.readline()
+                        if line in (b"\r\n", b"\n", b""):
+                            break
+                    break
+                chunks.append(self.rfile.read(size))
+                self.rfile.readline()  # CRLF tras cada chunk
+            return b"".join(chunks)
         length = int(self.headers.get("Content-Length", "0") or "0")
         if length <= 0:
+            return b""
+        return self.rfile.read(length)
+
+    def _read_json_body(self):
+        raw = self._read_body_bytes()
+        if not raw:
             return {}
-        raw = self.rfile.read(length)
         try:
             return json.loads(raw.decode("utf-8", errors="replace"))
         except json.JSONDecodeError:
