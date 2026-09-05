@@ -741,6 +741,12 @@ class _AgentDashboardState extends State<AgentDashboard>
             ),
           ),
           IconButton(
+            tooltip: 'Galeria de imagenes',
+            onPressed: _showImageGallery,
+            icon: const Icon(Icons.photo_library_outlined,
+                size: 20, color: _C.textLo),
+          ),
+          IconButton(
             tooltip: _showAutonomous ? 'Volver al chat' : 'Modo autonomo',
             onPressed: () =>
                 setState(() => _showAutonomous = !_showAutonomous),
@@ -910,6 +916,126 @@ class _AgentDashboardState extends State<AgentDashboard>
   //  BLOQUES DE CHAT
   // ═══════════════════════════════════════════════════════════════════
 
+  // ── Visor de imagenes generadas por el agente ──────────────────────────
+
+  List<String> _extractImagePaths(String text) {
+    final re = RegExp(r'(/(?:root|tmp)/[^\s"()]*\.(?:png|jpe?g|gif|webp))');
+    return re.allMatches(text).map((m) => m.group(1)!).toSet().toList();
+  }
+
+  String _fileUrl(String path) =>
+      'http://127.0.0.1:8765/file?path=${Uri.encodeComponent(path)}';
+
+  List<Widget> _imagesFor(String text) {
+    return _extractImagePaths(text)
+        .map((p) => Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: _imageThumb(p),
+            ))
+        .toList();
+  }
+
+  Widget _imageThumb(String path) {
+    return GestureDetector(
+      onTap: () => _showImageFullscreen(path),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          constraints: const BoxConstraints(maxHeight: 260),
+          decoration: BoxDecoration(border: Border.all(color: _C.border)),
+          child: Image.network(
+            _fileUrl(path),
+            fit: BoxFit.contain,
+            loadingBuilder: (c, w, prog) => prog == null
+                ? w
+                : const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: _C.accent)),
+            errorBuilder: (c, e, st) => Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text('No se pudo cargar $path',
+                  style: const TextStyle(color: _C.err, fontSize: 11)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showImageFullscreen(String path) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.9),
+      builder: (_) => GestureDetector(
+        onTap: () => Navigator.of(context).pop(),
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(8),
+          child: InteractiveViewer(
+            maxScale: 6,
+            child: Image.network(_fileUrl(path), fit: BoxFit.contain),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showImageGallery() async {
+    try {
+      final resp = await http
+          .get(Uri.parse('http://127.0.0.1:8765/files/images'))
+          .timeout(const Duration(seconds: 8));
+      final images =
+          (json.decode(resp.body)['images'] as List?) ?? const [];
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: _C.card,
+          title: const Text('Imagenes del agente',
+              style: TextStyle(color: _C.textHi, fontSize: 15)),
+          content: SizedBox(
+            width: 400,
+            height: 400,
+            child: images.isEmpty
+                ? const Center(
+                    child: Text('Aun no hay imagenes generadas',
+                        style: TextStyle(color: _C.textLo)))
+                : GridView.builder(
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            crossAxisSpacing: 8,
+                            mainAxisSpacing: 8),
+                    itemCount: images.length,
+                    itemBuilder: (c, i) {
+                      final p = images[i]['path'].toString();
+                      return GestureDetector(
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          _showImageFullscreen(p);
+                        },
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(_fileUrl(p),
+                              fit: BoxFit.cover,
+                              errorBuilder: (c2, e, st) => Container(
+                                  color: _C.cardAlt,
+                                  child: const Icon(Icons.broken_image,
+                                      color: _C.off))),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ),
+      );
+    } catch (e) {
+      _snack('Agente no disponible');
+    }
+  }
+
   Widget _blockWidget(ChatBlock b) {
     switch (b.kind) {
       case 'user':
@@ -1008,8 +1134,13 @@ class _AgentDashboardState extends State<AgentDashboard>
             border: Border.all(color: _C.border),
           ),
           child: SingleChildScrollView(
-            child:
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Text(b.text, style: _mono.copyWith(color: _C.textLo)),
+                ..._imagesFor(b.text),
+              ],
+            ),
           ),
         );
 
@@ -1034,6 +1165,7 @@ class _AgentDashboardState extends State<AgentDashboard>
                       color: _C.textHi,
                       fontSize: 14.5,
                       height: 1.5)),
+              ..._imagesFor(b.text),
               const SizedBox(height: 6),
               InkWell(
                 onTap: () async {

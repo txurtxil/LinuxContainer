@@ -1,4 +1,4 @@
-# XTR Agent Server v13.3 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v13.4 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "13.3"
+VERSION = "13.4"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -664,6 +664,14 @@ class AgentHandler(BaseHTTPRequestHandler):
                 "started_at": g.get("started_at"),
                 "finished_at": g.get("finished_at"),
             } for g in GOALS.values()]})
+        elif path == "/file":
+            fp = qs.get("path", "")
+            if not fp:
+                self._send_json({"error": "missing path"}, status=400)
+                return
+            self._serve_file(fp)
+        elif path == "/files/images":
+            self._send_json({"images": self._list_images()})
         elif path == "/memory":
             try:
                 limit = max(1, min(100, int(qs.get("limit", "10"))))
@@ -672,6 +680,57 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._send_json({"episodes": db_last_episodes(limit)})
         else:
             self._send_json({"error": f"not found: {path}"}, status=404)
+
+    # -- Imagenes -------------------------------------------------------------
+
+    _IMG_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"}
+
+    def _serve_file(self, path):
+        """Sirve un archivo de imagen (restringido a /root y /tmp)."""
+        import os.path
+        path = os.path.realpath(path)
+        if not (path.startswith("/root/") or path.startswith("/tmp/")):
+            self._send_json({"error": "solo se sirven archivos de /root y /tmp"}, status=403)
+            return
+        ext = os.path.splitext(path)[1].lower()
+        mime = self._IMG_EXT.get(ext)
+        if not mime:
+            self._send_json({"error": "tipo no soportado"}, status=415)
+            return
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError as exc:
+            self._send_json({"error": str(exc)}, status=404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(data)
+        self.close_connection = True
+
+    def _list_images(self):
+        """Lista las imagenes generadas en /root (mas recientes primero)."""
+        import glob
+        files = []
+        for ext in ("png", "jpg", "jpeg", "gif", "webp"):
+            files.extend(glob.glob(f"/root/**/*.{ext}", recursive=True))
+            files.extend(glob.glob(f"/tmp/agent*.{ext}"))
+        out = []
+        for f in files:
+            try:
+                st = os.stat(f)
+                out.append({"path": f, "bytes": st.st_size,
+                            "mtime": int(st.st_mtime),
+                            "name": os.path.basename(f)})
+            except OSError:
+                pass
+        out.sort(key=lambda x: x["mtime"], reverse=True)
+        return out[:50]
 
     # -- DELETE ---------------------------------------------------------------
 
