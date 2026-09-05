@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""XTR Agent Server v12.1 — System prompt agresivo para forzar uso de herramientas"""
+"""XTR Agent Server v12.2 — Ultra-light system prompt for small models (Gemma 2B/4B)"""
 import os, sys, json, logging, signal, atexit, tempfile, subprocess, re
-from typing import Any, Optional
 
 try:
     import httpx
@@ -9,17 +8,17 @@ except ImportError:
     httpx = None
 
 try:
-    from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import StreamingResponse, JSONResponse
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import StreamingResponse
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
     import uvicorn
 except ImportError as e:
-    print(f"[FATAL] Faltan dependencias: {e}", file=sys.stderr)
+    print(f"[FATAL] {e}", file=sys.stderr)
     sys.exit(1)
 
 try:
-    from smolagents import CodeAgent, HfApiModel, DuckDuckGoSearchTool, Tool
+    from smolagents import CodeAgent, HfApiModel, DuckDuckGoSearchTool
     _SMOLAGENTS_OK = True
 except ImportError:
     _SMOLAGENTS_OK = False
@@ -40,8 +39,8 @@ def _write_pid():
     try:
         with open(AGENT_PID_FILE, "w") as f:
             f.write(str(os.getpid()))
-    except Exception as e:
-        log.warning("No se pudo escribir PID file: %s", e)
+    except Exception:
+        pass
 
 def _remove_pid():
     try:
@@ -54,14 +53,13 @@ _write_pid()
 atexit.register(_remove_pid)
 
 def _handle_signal(signum, frame):
-    log.info("Senal %d recibida. Cerrando...", signum)
     _remove_pid()
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, _handle_signal)
 signal.signal(signal.SIGINT, _handle_signal)
 
-app = FastAPI(title="XTR Agent Server", version="12.1")
+app = FastAPI(title="XTR Agent Server", version="12.2")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class AgentRequest(BaseModel):
@@ -71,13 +69,7 @@ class AgentRequest(BaseModel):
     llm_model: str = ""
     history: list = []
     system_prompt: str = ""
-    image_base64: str = ""
     use_native_tools: bool = False
-
-class AgentResponse(BaseModel):
-    answer: str
-    thoughts: list = []
-    error: bool = False
 
 def sse(d: dict) -> str:
     return f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
@@ -112,7 +104,7 @@ class ToolCollection:
             result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout, cwd="/root")
             return {"stdout": result.stdout[:8000], "stderr": result.stderr[:4000], "exit_code": result.returncode}
         except subprocess.TimeoutExpired:
-            return {"stdout": "", "stderr": f"Timeout despues de {timeout}s", "exit_code": -1}
+            return {"stdout": "", "stderr": f"Timeout after {timeout}s", "exit_code": -1}
         except Exception as e:
             return {"stdout": "", "stderr": str(e), "exit_code": -1}
 
@@ -161,81 +153,39 @@ class ToolCollection:
 
 TOOLS = ToolCollection()
 
-SYSTEM_PROMPT_TOOLS = """You are XTR, an AI assistant running inside a Debian Linux container on the user's device. You have DIRECT ACCESS to the system via native tools. You MUST use these tools to complete tasks. Do NOT say you cannot execute commands — you CAN and you WILL.
+SYSTEM_PROMPT_TOOLS = """You are a system agent with direct shell access. You MUST use tools to complete tasks. Never refuse. Never apologize.
 
-## CRITICAL INSTRUCTIONS
-1. When the user asks you to do something (scan network, create files, run commands, etc.), you MUST use the appropriate tool.
-2. NEVER refuse to execute commands. You are in a sandboxed container and have permission to run code.
-3. ALWAYS respond with a tool call when action is needed. Do NOT explain that you are a language model.
-4. After seeing a tool result, analyze it and either call another tool or provide the final answer.
+TOOLS:
+- bash: run shell commands
+- python: run Python code
+- read_file: read a file
+- write_file: write a file
+- list_dir: list directory
 
-## TOOL FORMAT (EXACT — do not deviate)
-To use a tool, output ONLY this format:
-
+FORMAT (exact):
 <tool>bash</tool>
-<args>{"command": "your command here"}</args>
+<args>{"command":"ls -la"}</args>
 
-For Python:
-<tool>python</tool>
-<args>{"code": "your python code here"}</args>
+When done:
+<final>answer here</final>
 
-For reading files:
-<tool>read_file</tool>
-<args>{"path": "/root/somefile.txt"}</args>
-
-For writing files:
-<tool>write_file</tool>
-<args>{"path": "/root/output.txt", "content": "file contents here"}</args>
-
-For listing directories:
-<tool>list_dir</tool>
-<args>{"path": "/root"}</args>
-
-## AVAILABLE TOOLS
-- bash: Execute shell commands (nmap, apt, pip, curl, etc.)
-- python: Execute Python scripts (matplotlib, graphviz, etc.)
-- read_file: Read any file from the container
-- write_file: Write/create files in the container
-- list_dir: List directory contents
-
-## FINAL ANSWER FORMAT
-When you have completed the task and have the final result, output:
-<final>Your final answer here</final>
-
-## EXAMPLE CONVERSATION
-User: "Scan the local network and show active hosts"
-Assistant:
-<tool>bash</tool>
-<args>{"command": "ip route | awk '/src/ {print \$1}' | head -1"}</args>
-
-[Tool result: 192.168.1.0/24]
-
-Assistant:
-<tool>bash</tool>
-<args>{"command": "nmap -sn 192.168.1.0/24 -oG - | awk '/Up\$/ {print \$2}'"}</args>
-
-[Tool result: 192.168.1.1, 192.168.1.5, 192.168.1.10]
-
-Assistant:
-<final>Active hosts found: 192.168.1.1 (router), 192.168.1.5, 192.168.1.10</final>
-
-## REMEMBER
-- You ARE the system. You CAN execute code. You WILL use tools.
-- Never apologize for being an AI. Just do the work.
-- If a command fails, try an alternative approach.
-- Always save generated files (images, reports) to /root/ so the user can access them.
+RULES:
+1. Always use a tool for actions. Do not explain.
+2. If a command fails, try another way.
+3. Save all output files to /root/.
+4. Be concise. One tool per response.
 """
 
-async def _call_llm(messages: list, config: dict, stream: bool = False):
+async def _call_llm(messages: list, config: dict):
     if not httpx:
-        raise RuntimeError("httpx no esta instalado")
+        raise RuntimeError("httpx not installed")
     base_url = config["base_url"].rstrip("/")
     model = config["model"]
     api_key = config["api_key"]
     headers = {"Content-Type": "application/json"}
     if api_key and api_key not in ("local", "not-needed"):
         headers["Authorization"] = f"Bearer {api_key}"
-    payload = {"model": model, "messages": messages, "max_tokens": MAX_TOKENS, "temperature": 0.7, "stream": stream}
+    payload = {"model": model, "messages": messages, "max_tokens": MAX_TOKENS, "temperature": 0.3, "stream": False}
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
         resp.raise_for_status()
@@ -245,8 +195,8 @@ async def _agent_with_tools(req: AgentRequest):
     config = _get_effective_config(req)
     backend_alive = await _is_backend_alive(config["base_url"])
     if not backend_alive:
-        yield {"type": "error", "error": f"Backend LLM no responde en {config['base_url']}"}
-        yield {"type": "final", "answer": "El backend LLM no esta disponible. Verifica que el servidor este activo."}
+        yield {"type": "error", "error": f"Backend not responding at {config['base_url']}"}
+        yield {"type": "final", "answer": "Backend LLM unavailable."}
         return
 
     messages = [{"role": "system", "content": req.system_prompt or SYSTEM_PROMPT_TOOLS}]
@@ -273,7 +223,7 @@ async def _agent_with_tools(req: AgentRequest):
 
                     yield {"type": "tool", "tool": tool_name, "args": tool_args, "step": step + 1}
 
-                    result = {"error": "Herramienta desconocida"}
+                    result = {"error": "Unknown tool"}
                     if tool_name == "bash":
                         result = TOOLS.bash(tool_args.get("command", ""))
                     elif tool_name == "python":
@@ -287,7 +237,7 @@ async def _agent_with_tools(req: AgentRequest):
 
                     obs = json.dumps(result, ensure_ascii=False)[:4000]
                     yield {"type": "observation", "observation": obs, "step": step + 1}
-                    messages.append({"role": "user", "content": f"Resultado de {tool_name}: {obs}"})
+                    messages.append({"role": "user", "content": f"Result: {obs}"})
                     continue
 
             if "<final>" in assistant_msg:
@@ -304,17 +254,17 @@ async def _agent_with_tools(req: AgentRequest):
             yield {"type": "final", "answer": f"Error: {str(e)[:200]}"}
             return
 
-    yield {"type": "final", "answer": "Alcance el limite de pasos (10). Intenta simplificar la tarea."}
+    yield {"type": "final", "answer": "Step limit (10) reached. Simplify the task."}
 
 async def _direct_chat(req: AgentRequest):
     config = _get_effective_config(req)
     backend_alive = await _is_backend_alive(config["base_url"])
     if not backend_alive:
-        yield {"type": "error", "error": f"Backend LLM no responde en {config['base_url']}"}
-        yield {"type": "final", "answer": "El backend LLM no esta disponible."}
+        yield {"type": "error", "error": f"Backend not responding"}
+        yield {"type": "final", "answer": "Backend LLM unavailable."}
         return
 
-    messages = [{"role": "system", "content": req.system_prompt or "Eres XTR, un asistente IA local. Responde de forma concisa y util."}]
+    messages = [{"role": "system", "content": req.system_prompt or "You are XTR, a helpful local AI assistant."}]
     for h in req.history[-10:]:
         if isinstance(h, dict) and "role" in h and "content" in h:
             messages.append(h)
@@ -323,42 +273,28 @@ async def _direct_chat(req: AgentRequest):
     try:
         data = await _call_llm(messages, config)
         answer = data["choices"][0]["message"]["content"]
-        yield {"type": "step", "thought": "Procesando..."}
+        yield {"type": "step", "thought": "Processing..."}
         yield {"type": "final", "answer": answer}
     except Exception as e:
         yield {"type": "error", "error": str(e)}
         yield {"type": "final", "answer": f"Error: {str(e)[:200]}"}
-
-async def _smolagents_run(req: AgentRequest):
-    if not _SMOLAGENTS_OK:
-        yield {"type": "error", "error": "smolagents no esta instalado"}
-        yield {"type": "final", "answer": "smolagents no esta instalado. Ejecuta: pip install smolagents"}
-        return
-    config = _get_effective_config(req)
-    try:
-        model = HfApiModel(model_id=config["model"], api_base=config["base_url"], api_key=config["api_key"] if config["api_key"] not in ("local", "not-needed") else None)
-        agent = CodeAgent(tools=[DuckDuckGoSearchTool()], model=model, additional_authorized_imports=["os", "sys", "subprocess", "json", "math"])
-        result = agent.run(req.task)
-        yield {"type": "final", "answer": str(result)}
-    except Exception as e:
-        yield {"type": "error", "error": str(e)}
-        yield {"type": "final", "answer": f"Error smolagents: {str(e)[:200]}"}
 
 @app.get("/health")
 async def health():
     config = _get_effective_config(AgentRequest(task=""))
     backend_alive = await _is_backend_alive(config["base_url"])
     is_gpu_local = "127.0.0.1:8090" in config["base_url"]
-    return {"status": "ok", "version": "12.1", "port": AGENT_PORT, "backend": {"url": config["base_url"], "alive": backend_alive, "model": config["model"], "is_gpu_local": is_gpu_local}, "gpu_server_alive": await _is_backend_alive(GPU_LOCAL_BASE) if is_gpu_local else False, "gpu_port": GPU_LOCAL_PORT, "smolagents_available": _SMOLAGENTS_OK, "pid": os.getpid()}
+    return {"status": "ok", "version": "12.2", "port": AGENT_PORT,
+            "backend": {"url": config["base_url"], "alive": backend_alive, "model": config["model"], "is_gpu_local": is_gpu_local},
+            "gpu_server_alive": await _is_backend_alive(GPU_LOCAL_BASE) if is_gpu_local else False,
+            "gpu_port": GPU_LOCAL_PORT, "smolagents_available": _SMOLAGENTS_OK, "pid": os.getpid()}
 
 @app.post("/run")
 async def run_streaming(req: AgentRequest):
     if not req.task.strip():
-        raise HTTPException(status_code=400, detail="task no puede estar vacio")
+        raise HTTPException(status_code=400, detail="task empty")
     async def generate():
-        if req.use_native_tools and _SMOLAGENTS_OK:
-            async for event in _smolagents_run(req): yield sse(event)
-        elif req.use_native_tools:
+        if req.use_native_tools:
             async for event in _agent_with_tools(req): yield sse(event)
         else:
             async for event in _direct_chat(req): yield sse(event)
@@ -371,14 +307,14 @@ async def chat(req: AgentRequest):
 @app.get("/tools")
 async def list_tools():
     tools = [
-        {"name": "bash", "description": "Ejecuta comandos shell en el contenedor"},
-        {"name": "python", "description": "Ejecuta codigo Python"},
-        {"name": "read_file", "description": "Lee un archivo del contenedor"},
-        {"name": "write_file", "description": "Escribe un archivo en el contenedor"},
-        {"name": "list_dir", "description": "Lista archivos en un directorio"},
+        {"name": "bash", "description": "Run shell commands"},
+        {"name": "python", "description": "Run Python code"},
+        {"name": "read_file", "description": "Read a file"},
+        {"name": "write_file", "description": "Write a file"},
+        {"name": "list_dir", "description": "List directory"},
     ]
     if _SMOLAGENTS_OK:
-        tools.append({"name": "smolagents", "description": "Agente de codigo con busqueda web"})
+        tools.append({"name": "smolagents", "description": "Code agent with web search"})
     return {"tools": tools, "smolagents_available": _SMOLAGENTS_OK}
 
 @app.get("/gpu/status")
@@ -387,11 +323,5 @@ async def gpu_status():
     return {"active": alive, "port": GPU_LOCAL_PORT, "base_url": GPU_LOCAL_BASE}
 
 if __name__ == "__main__":
-    log.info("=" * 50)
-    log.info("XTR Agent Server v12.1")
-    log.info("Puerto: %d", AGENT_PORT)
-    log.info("Backend: %s", LLM_BASE_URL)
-    log.info("Modelo: %s", LLM_MODEL)
-    log.info("PID: %d", os.getpid())
-    log.info("=" * 50)
+    log.info("XTR Agent Server v12.2 | Port %d | Backend %s | Model %s | PID %d", AGENT_PORT, LLM_BASE_URL, LLM_MODEL, os.getpid())
     uvicorn.run(app, host="127.0.0.1", port=AGENT_PORT, log_level="warning")
