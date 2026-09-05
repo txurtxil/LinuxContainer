@@ -139,15 +139,16 @@ TOOL RESULT [bash]: -rw-r--r-- 1 root root 48210 network_map.png
 # rescate cuando el motor rechaza por "too long".
 SYSTEM_PROMPT_COMPACT = """You are an autonomous agent with root access inside a Debian proot container on Android. Execute REAL actions with tools.
 
-TOOL FORMAT (exactly):
-<tool>name</tool><args>{"k":"v"}</args>
+TOOL FORMAT (exactly, with REAL arg names):
+<tool>bash</tool><args>{"command": "ls -la /root"}</args>
+<tool>netscan</tool><args>{"subnet": "192.168.1.0/24"}</args>
 Tools: bash(command,timeout=30), netscan(subnet,ports,timeout), netmap(subnet,output), audit(output), python(code), read_file(path,limit), write_file(path,content), list_dir(path), remember(key,value), recall(key)
 Finish with: <final>answer</final>
 
 RULES:
 1. NEVER emit <think> or reasoning text. Output ONLY tool calls or <final>. /no_think
-2. For security audits ALWAYS use tool `audit`. For LAN discovery use `netscan`; for topology maps use `netmap`. Never hand-write long shell one-liners.
-3. Keep bash commands SHORT and SIMPLE.
+2. For LAN scans/maps: FIRST call `netscan` (one call), then `netmap` for the PNG. Do NOT hand-write nmap pipelines — raw sockets fail in proot and long one-liners break.
+3. For security audits ALWAYS use tool `audit`.
 4. NEVER invent TOOL RESULT text. Verify created files with list_dir before claiming success.
 """
 
@@ -624,7 +625,24 @@ TOOLS = {
 }
 
 
+def _normalize_args(name, args):
+    """Qwen3 a veces copia el ejemplo literal {"k":"v"} del prompt y manda
+    {"k": "...", "v": "el valor real"}. Rescata el payload real."""
+    if not isinstance(args, dict):
+        return args
+    primary = {"bash": "command", "python": "code", "read_file": "path",
+               "write_file": "path", "list_dir": "path", "netscan": "subnet",
+               "netmap": "subnet", "audit": "output"}.get(name)
+    if primary and primary not in args:
+        if "v" in args:
+            args = dict(args); args[primary] = args.pop("v"); args.pop("k", None)
+        elif "command" not in args and len(args) == 1:
+            args = {primary: next(iter(args.values()))}
+    return args
+
+
 def execute_tool(name, args):
+    args = _normalize_args(name, args)
     if name == "remember":
         return {"exit_code": 0, "output": db_remember(str(args.get("key", "")), str(args.get("value", "")))}
     if name == "recall":
