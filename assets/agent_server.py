@@ -1,4 +1,4 @@
-# XTR Agent Server v13.6 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v13.7 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "13.5"
+VERSION = "13.7"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -85,16 +85,24 @@ TOOL RESULT [bash]: default via 192.168.1.1 dev wlan0
 ASSISTANT: The network is 192.168.1.0/24. Now scanning for live hosts.
 <tool>bash</tool><args>{"command": "nmap -sn 192.168.1.0/24", "timeout": 120}</args>
 
-TOOL RESULT [bash]: Nmap scan report for 192.168.1.1 (router)
-Nmap scan report for 192.168.1.42 (this device)
-Nmap scan report for 192.168.1.57
-Nmap scan report for 192.168.1.88
+TOOL RESULT [bash]: Nmap done: 0 IP addresses (0 hosts up) scanned in 0.14 seconds
 
-ASSISTANT: Found 4 hosts. Fingerprinting the two unknown ones.
-<tool>bash</tool><args>{"command": "nmap -sS -O -sV 192.168.1.57 192.168.1.88", "timeout": 180}</args>
+ASSISTANT: nmap ARP scan found 0 hosts — raw sockets are restricted inside proot. Falling back to TCP/ping discovery, which works here.
+<tool>bash</tool><args>{"command": "for i in $(seq 1 254); do (ping -c1 -W1 192.168.1.$i >/dev/null 2>&1 && echo 192.168.1.$i) & done; wait; echo '--- ARP table:'; ip neigh show | grep -v FAILED", "timeout": 120}</args>
 
-TOOL RESULT [bash]: 192.168.1.57: Linux, ports 22/tcp ssh OpenSSH 8.9, 80/tcp http nginx
-192.168.1.88: Android, ports 5555/tcp adb
+TOOL RESULT [bash]: 192.168.1.1
+192.168.1.42
+192.168.1.57
+192.168.1.88
+--- ARP table:
+192.168.1.1 dev wlan0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
+192.168.1.57 dev wlan0 lladdr 11:22:33:44:55:66 REACHABLE
+
+ASSISTANT: Found 4 hosts via ping sweep. Now fingerprinting with unprivileged TCP connect scan (no -sS/-O, they need raw sockets).
+<tool>bash</tool><args>{"command": "nmap -sT -sV --unprivileged 192.168.1.57 192.168.1.88", "timeout": 180}</args>
+
+TOOL RESULT [bash]: 192.168.1.57: ports 22/tcp ssh OpenSSH 8.9, 80/tcp http nginx
+192.168.1.88: ports 5555/tcp adb
 
 ASSISTANT: Now generating the network map.
 <tool>python</tool><args>{"code": "import graphviz\\ng = graphviz.Digraph()\\ng.node('router', '192.168.1.1 router')\\ng.node('phone', '192.168.1.42 this device')\\ng.node('srv', '192.168.1.57 Linux SSH/HTTP')\\ng.node('droid', '192.168.1.88 Android ADB')\\ng.edges([('router','phone'),('router','srv'),('router','droid')])\\ng.render('/root/network_map', format='png', cleanup=True)\\nprint('map written to /root/network_map.png')"}</args>
@@ -115,6 +123,7 @@ TOOL RESULT [bash]: -rw-r--r-- 1 root root 48210 network_map.png
 - NEVER claim a file was created/saved unless you verified it with ls. If a tool result contains an error, the task is NOT done — fix it first.
 - If graphviz/dot is missing, install it (apt-get install -y graphviz) or fall back to matplotlib/networkx to render the PNG.
 - If a command is not found (ip, netstat, nmap...), install it with apt-get instead of giving up.
+- PROOT ENVIRONMENT: raw-socket operations FAIL inside this container. `nmap -sn` (ARP ping) returns 0 hosts, and `-sS`/`-O` need root raw sockets. For host discovery use a ping sweep loop + `ip neigh show`, or `nmap -sn -PS22,80,443 --unprivileged`. For port scans use `nmap -sT -sV --unprivileged`. NEVER report "0 hosts up" as a network problem without trying these fallbacks first.
 """
 
 # ---------------------------------------------------------------------------
