@@ -716,6 +716,51 @@ def detect_small_ctx_model(base_url=None, api_key=None):
     return False
 
 
+# Palabras que indican TAREA real (necesita el bucle agéntico con tools).
+_TASK_HINTS = (
+    "escanea", "scan", "audita", "audit", "crea", "create", "genera",
+    "generate", "ejecuta", "run", "instala", "install", "borra", "delete",
+    "lee ", "read ", "escribe", "write ", "archivo", "file", "fichero",
+    "carpeta", "directorio", "red", "network", "puerto", "port", "host",
+    "servicio", "service", "proceso", "process", "usuario", "user ",
+    "password", "ssh", "suid", "firewall", "actualiza", "update", "upgrade",
+    "descarga", "download", "imagen", "image", "mapa", "topology",
+    "script", "codigo", "code", "python", "bash", "comando", "command",
+    "lista ", "list ", "muestra ", "show ", "busca", "find ", "grep",
+    "analiza", "analyze", "verifica", "check ", "revisa", "monitor",
+    "/", ".py", ".sh", ".png", ".md", ".txt",
+)
+
+
+def is_trivial_chat(message):
+    """True si el mensaje es conversacion (saludo, preunta general) y NO
+    necesita herramientas. Evita que un 'hola' dispare 3 pasos de agente
+    con list_dir + bash en un modelo de 4B (lento y calienta el SoC)."""
+    m = message.strip().lower()
+    if len(m) > 220:
+        return False
+    return not any(h in m for h in _TASK_HINTS)
+
+
+def quick_chat(message, llm_overrides=None):
+    """Respuesta directa sin bucle agéntico ni system prompt pesado."""
+    ov = llm_overrides or {}
+    messages = [
+        {"role": "system", "content": (
+            "Eres el asistente de XTR Terminal (Debian proot en Android). "
+            "Responde en espanol, breve y directo (1-3 frases). Si el "
+            "usuario pide una accion del sistema, di que la describa con "
+            "detalle. /no_think")},
+        {"role": "user", "content": message},
+    ]
+    reply = llm_chat(messages, base_url=ov.get("base_url"),
+                     model=ov.get("model"), api_key=ov.get("api_key"))
+    import re as _re
+    reply = _re.sub(r"<think>.*?</think>", " ", reply, flags=_re.DOTALL)
+    reply = _re.sub(r"<think>.*$", " ", reply, flags=_re.DOTALL).strip()
+    return reply or "..."
+
+
 def llm_chat(messages, base_url=None, model=None, api_key=None):
     base_url = (base_url or LLM_BASE_URL).rstrip("/")
     model = model or LLM_MODEL
@@ -1329,6 +1374,17 @@ class AgentHandler(BaseHTTPRequestHandler):
 
         def run_agent():
             try:
+                # Via rapida: charla trivial NO entra al bucle agéntico
+                # (un "hola" no necesita tools, system prompt ni 15 pasos).
+                if is_trivial_chat(message):
+                    send({"type": "step", "step": 1,
+                          "thought": "Respuesta directa (sin herramientas)"})
+                    answer = quick_chat(message, llm_overrides=overrides)
+                    send({"type": "final", "answer": answer})
+                    with _goals_lock:
+                        GOALS[goal_id]["status"] = "done"
+                        GOALS[goal_id]["result"] = answer
+                    return
                 agent_loop(message, goal_id, max_steps, event_cb=event_cb,
                            llm_overrides=overrides)
             except Exception as exc:
