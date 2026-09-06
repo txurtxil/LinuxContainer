@@ -199,9 +199,16 @@ class TermuxSelectionOverlayState extends State<TermuxSelectionOverlay> {
 
   void _updateDrag(DragUpdateDetails d) {
     _lastFingerGlobal = d.globalPosition;
-    _extendSelectionTo(d.globalPosition);
+    _extendSelectionTo(_aimOf(d.globalPosition));
     _updateAutoScroll(d.globalPosition);
   }
+
+  /// Punto de mira: durante el arrastre el asa se dibuja _dragLift px por
+  /// ENCIMA del dedo para no tapar el texto; la selección debe terminar
+  /// donde apunta la PUNTA del asa, no donde está el dedo. Antes se usaba
+  /// la posición del dedo y asa e highlight iban ~3 líneas desincronizados.
+  Offset _aimOf(Offset fingerGlobal) =>
+      fingerGlobal - const Offset(0, _dragLift);
 
   void _endDrag(DragEndDetails d) => _finishDrag();
   void _cancelDrag() => _finishDrag();
@@ -218,19 +225,28 @@ class TermuxSelectionOverlayState extends State<TermuxSelectionOverlay> {
     final fixed = _dragFixed;
     if (rt == null || fixed == null) return;
     final local = (rt as RenderBox).globalToLocal(global);
+    // (rt as dynamic): el `as RenderBox` de la línea anterior promueve el
+    // tipo estático de rt a partir de este punto y rompería el acceso
+    // dinámico a getCellOffset (error de compilación visto en z1).
     final cell = (rt as dynamic).getCellOffset(local) as CellOffset;
     final buffer = widget.terminal.buffer;
+    // La selección de xterm es end-exclusive: por eso selectCharacters del
+    // paquete hace +1 en x al arrastrar hacia adelante. Al arrastrar el asa
+    // de FIN hay que hacer lo mismo o la celda bajo la punta queda fuera
+    // del highlight (otra fuente de desincronización asa<->texto).
+    final moving =
+        fixed.isBeforeOrSame(cell) ? CellOffset(cell.x + 1, cell.y) : cell;
     widget.controller.setSelection(
       buffer.createAnchorFromOffset(fixed),
-      buffer.createAnchorFromOffset(cell),
+      buffer.createAnchorFromOffset(moving),
     );
     // BufferRangeLine normaliza al pintar/copiar; aquí guardamos ordenado.
     setState(() {
-      if (fixed.isBeforeOrSame(cell)) {
+      if (fixed.isBeforeOrSame(moving)) {
         _selStart = fixed;
-        _selEnd = cell;
+        _selEnd = moving;
       } else {
-        _selStart = cell;
+        _selStart = moving;
         _selEnd = fixed;
       }
     });
@@ -273,7 +289,7 @@ class TermuxSelectionOverlayState extends State<TermuxSelectionOverlay> {
     if (target != sc.offset) {
       sc.jumpTo(target);
       final finger = _lastFingerGlobal;
-      if (finger != null) _extendSelectionTo(finger);
+      if (finger != null) _extendSelectionTo(_aimOf(finger));
     }
   }
 
