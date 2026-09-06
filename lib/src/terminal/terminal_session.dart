@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_pty/flutter_pty.dart';
 import 'package:xterm/xterm.dart';
 import '../container/container_manager.dart';
@@ -13,6 +14,13 @@ class TerminalSession {
   final String name;
   final Terminal terminal = Terminal(maxLines: 10000);
   final TerminalController controller = TerminalController();
+  /// Scroll del TerminalView de esta sesión. Vive en el objeto sesión (no
+  /// en un mapa por índice) por la misma razón que sourceHost: si se
+  /// cierra una pestaña intermedia los índices se desplazan y el dato debe
+  /// viajar con su sesión. El overlay de selección lo usa para el
+  /// auto-scroll al arrastrar las asas, y TerminalView lo recibe como
+  /// scrollController para que ambos compartan el mismo Scrollable.
+  final ScrollController scrollController = ScrollController();
   final ContainerManager _manager = ContainerManager();
   final TerminalRecorder recorder;
   /// Si no es null, se ejecuta ESTE comando en vez del shell por defecto
@@ -84,6 +92,7 @@ class TerminalSession {
     _pty?.kill();
     _pty = null;
     unawaited(recorder.dispose());
+    scrollController.dispose();
     controller.dispose();
   }
 }

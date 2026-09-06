@@ -11,7 +11,7 @@ import '../agent/agent_dashboard.dart';
 import '../agent/agent_services.dart';
 import 'clipboard_vault.dart';
 import 'clipboard_vault_sheet.dart';
-import 'selection_handles.dart';
+import 'selection_overlay_termux.dart';
 import '../ssh/ssh_host.dart';
 import '../ssh/ssh_hosts_service.dart';
 import '../ssh/hosts_screen.dart';
@@ -41,9 +41,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   String? _error;
   final Map<int, FocusNode> _focusNodes = {};
   final Map<int, GlobalKey<TerminalViewState>> _viewKeys = {};
-  // Una calibracion por sesion: cada TerminalView tiene su propio
-  // tamano y su propio scroll, asi que no se pueden compartir.
-  final Map<int, TerminalCalibration> _calibrations = {};
 
   double _fontSize = 12.0;
   static const double _minFont = 8.0;
@@ -540,54 +537,41 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
           ),
         ),
         Expanded(
-          child: Stack(
-            children: [
-              IndexedStack(
-                index: _activeIndex,
-                children: _sessions.asMap().entries.map((entry) {
-                  final i = entry.key;
-                  final s = entry.value;
-                  final focusNode = _focusNodes.putIfAbsent(i, () => FocusNode());
-                  final viewKey = _viewKeys.putIfAbsent(i, () => GlobalKey<TerminalViewState>());
-                  return TerminalView(
-                    s.terminal,
-                    key: viewKey,
-                    onTapUp: (details, cellOffset) {
-                      // Cada toque aporta un par (pixel, celda) medido de
-                      // verdad. Con dos toques en celdas distintas se
-                      // despeja el tamano de celda y el origen reales.
-                      final rb = viewKey.currentContext?.findRenderObject();
-                      if (rb is RenderBox) {
-                        final local = rb.globalToLocal(details.globalPosition);
-                        _calibrations
-                            .putIfAbsent(i, () => TerminalCalibration())
-                            .observe(local, cellOffset);
-                        setState(() {});
-                      }
-                    },
-                    controller: s.controller,
-                    focusNode: focusNode,
-                    autofocus: true,
-                    backgroundOpacity: 1.0,
-                    deleteDetection: true,
-                    keyboardType: TextInputType.visiblePassword,
-                    textStyle: TerminalStyle(fontSize: _fontSize, fontFamily: 'monospace'),
-                  );
-                }).toList(),
-              ),
-              if (_viewKeys[_activeIndex] != null)
-                SelectionHandlesOverlay(
-                  key: ValueKey(_activeIndex),
-                  terminal: _active.terminal,
-                  controller: _active.controller,
-                  viewKey: _viewKeys[_activeIndex]!,
-                  calibration: _calibrations
-                      .putIfAbsent(_activeIndex, () => TerminalCalibration()),
-                  onCopy: _copySelection,
-                  onPaste: _paste,
-                  onSelectAll: _selectAll,
+          child: IndexedStack(
+            index: _activeIndex,
+            children: _sessions.asMap().entries.map((entry) {
+              final i = entry.key;
+              final s = entry.value;
+              final focusNode = _focusNodes.putIfAbsent(i, () => FocusNode());
+              final viewKey = _viewKeys.putIfAbsent(i, () => GlobalKey<TerminalViewState>());
+              // Seleccion estilo Termux: el long-press nativo de xterm
+              // selecciona la palabra y el overlay dibuja asas arrastrables
+              // + barra Copiar/Pegar/Todo. La geometria celda<->pixel la da
+              // el propio paquete (renderTerminal.getOffset/getCellOffset);
+              // no hace falta calibracion (onTapUp esta muerto en xterm
+              // 4.0.0: por eso el sistema anterior nunca dibujo las asas).
+              return TermuxSelectionOverlay(
+                terminal: s.terminal,
+                controller: s.controller,
+                terminalViewKey: viewKey,
+                scrollController: s.scrollController,
+                onCopy: _copySelection,
+                onPaste: _paste,
+                onSelectAll: _selectAll,
+                child: TerminalView(
+                  s.terminal,
+                  key: viewKey,
+                  controller: s.controller,
+                  focusNode: focusNode,
+                  autofocus: true,
+                  backgroundOpacity: 1.0,
+                  deleteDetection: true,
+                  keyboardType: TextInputType.visiblePassword,
+                  scrollController: s.scrollController,
+                  textStyle: TerminalStyle(fontSize: _fontSize, fontFamily: 'monospace'),
                 ),
-            ],
+              );
+            }).toList(),
           ),
         ),
         TerminalKeybar(
