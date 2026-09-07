@@ -349,6 +349,9 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2
     import concurrent.futures
 
     note = ""
+    # El modelo manda a veces subnet="auto" (palabra literal): equivale a "".
+    if subnet and str(subnet).strip().lower() in ("auto", "auto-detect", "detect"):
+        subnet = ""
     try:
         detected, local_ip = _detect_local_subnet()
     except Exception:
@@ -1013,11 +1016,10 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
                 messages.append({"role": "system", "content": err[:400]})
             continue
 
-        emit("chunk", {"step": step_num, "text": reply})
-
         # Qwen3 "piensa en voz alta" con <think>…</think> y se gasta todo el
         # presupuesto de respuesta sin llegar a la herramienta. Se recorta
-        # TODO el razonamiento antes de parsear y de guardar en el historial.
+        # TODO el razonamiento ANTES de emitir nada a la UI: el usuario no
+        # quiere ver pensamientos en el chat.
         import re as _re_think
         clean = _re_think.sub(r"<think>.*?</think>", " ", reply,
                               flags=_re_think.DOTALL)
@@ -1031,6 +1033,8 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
             emit("nudge", {"step": step_num, "reason": "think_stripped"})
             continue
         reply = clean
+
+        emit("chunk", {"step": step_num, "text": reply})
         messages.append({"role": "assistant", "content": reply})
 
         final_text = parse_final(reply)

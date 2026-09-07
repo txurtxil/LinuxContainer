@@ -167,7 +167,11 @@ object MediaPipeServer {
             if (pendingSystem.isNotEmpty()) {
                 sb.insert(0, "<|im_start|>system\n$pendingSystem<|im_end|>\n")
             }
-            sb.append("<|im_start|>assistant\n")
+            // PREFILL ANTI-THINK: terminar con un bloque <think> VACIO hace
+            // que Qwen3 se salte la fase de razonamiento y empiece directo
+            // con la respuesta. Sin esto genera 1500+ tokens de <think> por
+            // llamada (~80s en la Adreno) antes de llegar a la herramienta.
+            sb.append("<|im_start|>assistant\n<think>\n\n</think>\n")
             return sb.toString()
         }
 
