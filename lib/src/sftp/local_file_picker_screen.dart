@@ -20,7 +20,11 @@ class _C {
 }
 
 class LocalFilePickerScreen extends StatefulWidget {
-  const LocalFilePickerScreen({super.key});
+  /// false: se eligen FICHEROS (subida normal). true: se eligen CARPETAS
+  /// (subida recursiva) — se marcan con checkbox y se puede seguir entrando
+  /// en ellas tocando el nombre.
+  final bool folderMode;
+  const LocalFilePickerScreen({super.key, this.folderMode = false});
 
   @override
   State<LocalFilePickerScreen> createState() => _LocalFilePickerScreenState();
@@ -90,10 +94,11 @@ class _LocalFilePickerScreenState extends State<LocalFilePickerScreen> {
     });
   }
 
-  void _selectAllFilesHere() {
+  void _selectAllHere() {
     setState(() {
       for (final e in _entries) {
-        if (e is File) _selected.add(e.path);
+        final ok = widget.folderMode ? e is Directory : e is File;
+        if (ok) _selected.add(e.path);
       }
     });
   }
@@ -107,14 +112,20 @@ class _LocalFilePickerScreenState extends State<LocalFilePickerScreen> {
         elevation: 0,
         iconTheme: const IconThemeData(color: _C.textHi),
         title: Text(
-          _selected.isEmpty ? 'Elegir fichero(s)' : '${_selected.length} seleccionado(s)',
+          _selected.isEmpty
+              ? (widget.folderMode ? 'Elegir carpeta(s)' : 'Elegir fichero(s)')
+              : '${_selected.length} seleccionado(s)',
           style: const TextStyle(color: _C.textHi, fontSize: 16),
         ),
         actions: [
           IconButton(
-            tooltip: 'Seleccionar todos los ficheros de esta carpeta',
+            tooltip: widget.folderMode
+                ? 'Seleccionar todas las carpetas de aquí'
+                : 'Seleccionar todos los ficheros de esta carpeta',
             icon: const Icon(Icons.select_all, color: _C.textLo),
-            onPressed: _entries.any((e) => e is File) ? _selectAllFilesHere : null,
+            onPressed: _entries.any((e) => widget.folderMode ? e is Directory : e is File)
+                ? _selectAllHere
+                : null,
           ),
         ],
       ),
@@ -181,19 +192,25 @@ class _LocalFilePickerScreenState extends State<LocalFilePickerScreen> {
         final e = _entries[i];
         final isDir = e is Directory;
         final selected = _selected.contains(e.path);
+        final selectable = widget.folderMode ? isDir : !isDir;
         return ListTile(
-          leading: isDir
-              ? const Icon(Icons.folder, color: _C.accent)
-              : Checkbox(
+          leading: selectable
+              ? Checkbox(
                   value: selected,
                   onChanged: (_) => _toggle(e.path),
                   activeColor: _C.accent,
+                )
+              : Icon(
+                  isDir ? Icons.folder : Icons.insert_drive_file_outlined,
+                  color: isDir ? _C.accent : _C.textLo,
                 ),
           title: Text(_name(e), style: const TextStyle(color: _C.textHi, fontSize: 14)),
+          // Tocar una carpeta siempre entra en ella; marcarla es cosa del
+          // checkbox (así se puede elegir sin perder la navegación).
           onTap: () {
             if (isDir) {
               _load(e.path);
-            } else {
+            } else if (!widget.folderMode) {
               _toggle(e.path);
             }
           },

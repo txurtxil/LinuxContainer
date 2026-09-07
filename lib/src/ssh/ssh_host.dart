@@ -50,7 +50,7 @@ class SshHost {
   /// que sobrevive espacios; una comilla simple DENTRO del path es el unico
   /// caso raro que esto no cubre.
   String toSshCommand() {
-    final b = StringBuffer('ssh -o StrictHostKeyChecking=accept-new ');
+    final b = StringBuffer('ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=3 ');
     if (port != 22) b.write('-p $port ');
     if (keyPath != null && keyPath!.trim().isNotEmpty) {
       b.write('-i ${keyPath!.trim()} ');
@@ -64,6 +64,28 @@ class SshHost {
       b.write('$username@$hostname');
     }
     return b.toString();
+  }
+
+  /// Variante de [toSshCommand] que autentica con la contraseña guardada:
+  /// la lee sshpass de [passFile] (ruta DENTRO del rootfs, permisos 600).
+  ///
+  /// Por que un fichero y no `-p` ni SSHPASS por entorno: la contraseña no
+  /// debe aparecer ni en la linea de comando (visible en `ps` dentro del
+  /// contenedor) ni en el historial del shell del pty. sshpass -f lee solo
+  /// la primera linea del fichero y la olvida.
+  ///
+  /// Degradacion elegante: si sshpass no esta instalado intenta instalarlo
+  /// una vez (apt) y, si ni asi (sin red, repo roto...), ejecuta el ssh
+  /// pelado y el pty pide la contraseña interactivamente, como siempre.
+  String toSshCommandWithPassfile(String passFile) {
+    final ssh = toSshCommand();
+    return 'if ! command -v sshpass >/dev/null 2>&1; then '
+        'apt-get update -qq >/dev/null 2>&1; '
+        'apt-get install -y -qq sshpass >/dev/null 2>&1; '
+        'fi; '
+        'if command -v sshpass >/dev/null 2>&1; then '
+        'exec sshpass -f "$passFile" $ssh; '
+        'else exec $ssh; fi';
   }
 
   Map<String, dynamic> toJson() => {

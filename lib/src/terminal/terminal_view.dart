@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
@@ -13,6 +15,7 @@ import 'clipboard_vault.dart';
 import 'selection_overlay_termux.dart';
 import '../ssh/ssh_host.dart';
 import '../ssh/ssh_hosts_service.dart';
+import '../ssh/ssh_credentials_store.dart';
 import '../ssh/hosts_screen.dart';
 import '../sftp/sftp_browser_screen.dart';
 import '../sftp/sftp_favorites_service.dart';
@@ -32,7 +35,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   /// Versión visible en la barra de título. La actualiza el instalador de
   /// cada release (sed sobre este literal) — no editar a mano.
-  static const String _appVersion = 'v14.5';
+  static const String _appVersion = 'v14.6';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
 
@@ -140,12 +143,35 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     s.start(columns: s.terminal.viewWidth, rows: s.terminal.viewHeight);
   }
 
-  void _connectToHost(SshHost host) {
+  Future<void> _connectToHost(SshHost host) async {
     if (_sessions.length >= _maxSessions) {
       _toast('Máximo $_maxSessions sesiones');
       return;
     }
-    final session = TerminalSession(host.name, customCommand: host.toSshCommand(), sourceHost: host);
+    var command = host.toSshCommand();
+    // Contraseña guardada en el Keystore (la misma que ya usa SFTP): se
+    // vuelca a un fichero 600 dentro del rootfs y sshpass la lee de ahí.
+    // Con clave (-i) no hace falta: la autenticación ya va por otro camino.
+    // El passfile se conserva para que "Reiniciar sesión" también entre
+    // sin teclear; vive solo dentro del contenedor, en este dispositivo.
+    final hasKey = host.keyPath != null && host.keyPath!.trim().isNotEmpty;
+    if (!hasKey) {
+      final pwd = await SshCredentialsStore.readPassword(host.id);
+      if (!mounted) return;
+      if (pwd != null && pwd.isNotEmpty) {
+        try {
+          final rel = '/root/.xtr/sshpass_${host.id}';
+          final f = File('${_manager.rootfsPath!}$rel');
+          await f.parent.create(recursive: true);
+          await f.writeAsString('$pwd\n'); // sshpass -f lee la 1ª línea
+          await Process.run('chmod', ['600', f.path]);
+          command = host.toSshCommandWithPassfile(rel);
+        } catch (_) {
+          // Sin passfile no pasa nada grave: el pty pedirá la contraseña.
+        }
+      }
+    }
+    final session = TerminalSession(host.name, customCommand: command, sourceHost: host);
     _sessions.add(session);
     setState(() {
       _activeIndex = _sessions.length - 1;

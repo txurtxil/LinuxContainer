@@ -6,14 +6,13 @@
 // exportado o compartido algun dia. Una contrasena real no tiene sitio
 // ahi al lado del nombre del host.
 //
-// Alcance real, para no prometer de mas: esto rellena la contrasena
-// automaticamente en las conexiones SFTP (dartssh2, que corre dentro del
-// propio proceso de la app y acepta la contrasena por codigo via
-// onPasswordRequest). NO llega todavia a las sesiones SSH de terminal,
-// que tiran del binario ssh real dentro de proot -- ahi la contrasena
-// se sigue tecleando en el propio pty, como una sesion ssh normal.
-// Automatizar eso necesitaria sshpass (u otro mecanismo) dentro del
-// rootfs, que es un paso aparte.
+// Alcance real: rellena la contrasena automaticamente en las conexiones
+// SFTP (dartssh2, que corre dentro del propio proceso de la app y la
+// acepta por codigo via onPasswordRequest) y, desde v14.6, TAMBIEN en las
+// sesiones SSH de terminal: _connectToHost la vuelca a un fichero 600 en
+// /root/.xtr/sshpass_<id> dentro del rootfs y el comando ssh va envuelto
+// en sshpass -f (con autoinstalacion de sshpass la primera vez y vuelta
+// al prompt interactivo si ni asi esta disponible).
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 

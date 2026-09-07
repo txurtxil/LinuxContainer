@@ -276,6 +276,48 @@ class SftpService {
     return files;
   }
 
+  /// Sube una CARPETA local entera replicando su estructura: el contenido
+  /// de [localDirPath] queda en <remoteDir>/<nombreCarpeta>. [onProgress]
+  /// recibe el número de ficheros ya subidos. Simétrica de downloadFolder.
+  Future<int> uploadFolder(String localDirPath, String remoteDir, {void Function(int files)? onProgress}) async {
+    final sftp = _sftp;
+    if (sftp == null) throw StateError('No conectado');
+
+    var files = 0;
+    Future<void> walk(Directory dir, String remote) async {
+      // La carpeta remota puede existir ya: mkdir falla y no pasa nada.
+      try {
+        await sftp.mkdir(remote);
+      } catch (_) {}
+      await for (final e in dir.list()) {
+        final name = e.path.split('/').last;
+        if (e is Directory) {
+          await walk(e, '$remote/$name');
+        } else if (e is File) {
+          await upload(e.path, '$remote/$name');
+          files++;
+          onProgress?.call(files);
+        }
+      }
+    }
+
+    final name = localDirPath.split('/').last;
+    final base = remoteDir == '.' ? name : '$remoteDir/$name';
+    await walk(Directory(localDirPath), base);
+    return files;
+  }
+
+  /// Espacio del filesystem remoto que contiene [path]: (total, libre para
+  /// un usuario normal) en bytes. Usa la extensión statvfs@openssh.com; si
+  /// el servidor no la soporta lanza SftpExtensionError y la UI lo muestra.
+  Future<(int total, int free)> statVfs(String path) async {
+    final sftp = _sftp;
+    if (sftp == null) throw StateError('No conectado');
+    final st = await sftp.statvfs(path);
+    final bs = st.fundamentalBlockSize;
+    return (bs * st.totalBlocks, bs * st.freeBlocksForNonRoot);
+  }
+
   Future<void> mkdir(String remotePath) async {
     final sftp = _sftp;
     if (sftp == null) throw StateError('No conectado');

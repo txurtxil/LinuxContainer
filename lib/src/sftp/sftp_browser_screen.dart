@@ -604,6 +604,76 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     }
   }
 
+  Future<void> _uploadFolders() async {
+    final localPaths = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(builder: (_) => const LocalFilePickerScreen(folderMode: true)),
+    );
+    if (localPaths == null || localPaths.isEmpty || !mounted) return;
+
+    setState(() { _busy = true; _busyLabel = 'Subiendo carpetas...'; });
+    var done = 0;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      for (final localPath in localPaths) {
+        final name = localPath.split('/').last;
+        await _svc.uploadFolder(localPath, _path, onProgress: (f) {
+          if (mounted) {
+            setState(() => _busyLabel =
+                'Subiendo ${done + 1}/${localPaths.length}: $name · $f ficheros...');
+          }
+        });
+        done++;
+      }
+      messenger.showSnackBar(SnackBar(content: Text('Subida(s) $done carpeta(s)')));
+      await _load(_path);
+    } catch (err) {
+      messenger.showSnackBar(SnackBar(
+        content: Text('Fallo tras subir $done de ${localPaths.length}: $err'),
+        backgroundColor: _C.err,
+      ));
+      await _load(_path);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _showStorage() async {
+    try {
+      final (total, free) = await _svc.statVfs(_path);
+      if (!mounted) return;
+      final used = total - free;
+      final pct = total > 0 ? (100 * used / total).round() : 0;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: _C.card,
+          title: const Text('Espacio del servidor', style: TextStyle(color: _C.textHi)),
+          content: Text(
+            'Libre:  ${_fmtSize(free)}\n'
+            'Usado: ${_fmtSize(used)} ($pct%)\n'
+            'Total:  ${_fmtSize(total)}',
+            style: const TextStyle(color: _C.textLo, fontFamily: 'monospace', fontSize: 13),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cerrar', style: TextStyle(color: _C.accent)),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      // statvfs es una extensión (statvfs@openssh.com): no todos los
+      // servidores la tienen; se informa sin drama.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Este servidor no soporta la consulta de espacio (statvfs)'),
+          backgroundColor: _C.err,
+        ));
+      }
+    }
+  }
+
   void _showFabMenu() {
     showModalBottomSheet(
       context: context,
@@ -616,6 +686,12 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
               leading: const Icon(Icons.upload_file, color: _C.accent),
               title: const Text('Subir archivo(s)', style: TextStyle(color: _C.textHi)),
               onTap: () { Navigator.pop(ctx); _uploadFiles(); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.drive_folder_upload_outlined, color: _C.accent),
+              title: const Text('Subir carpeta(s)', style: TextStyle(color: _C.textHi)),
+              subtitle: const Text('Recursivo: replica toda la estructura', style: TextStyle(color: _C.textLo, fontSize: 11)),
+              onTap: () { Navigator.pop(ctx); _uploadFolders(); },
             ),
             ListTile(
               leading: const Icon(Icons.create_new_folder_outlined, color: _C.accent),
@@ -831,6 +907,9 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                     case 'refresh':
                       _load(_path);
                       break;
+                    case 'storage':
+                      _showStorage();
+                      break;
                     case 'hidden':
                       setState(() => _showHidden = !_showHidden);
                       break;
@@ -849,6 +928,7 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                 itemBuilder: (_) => [
                   const PopupMenuItem(value: 'goto', child: Text('Ir a la ruta…')),
                   const PopupMenuItem(value: 'refresh', child: Text('Actualizar')),
+                  const PopupMenuItem(value: 'storage', child: Text('Espacio del servidor')),
                   PopupMenuItem(
                     value: 'hidden',
                     child: Text(_showHidden ? 'Ocultar ficheros ocultos' : 'Mostrar ficheros ocultos'),
