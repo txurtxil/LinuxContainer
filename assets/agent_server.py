@@ -148,7 +148,7 @@ Finish with: <final>answer</final>
 RULES:
 1. NEVER emit <think> or reasoning text. Output ONLY tool calls or <final>. /no_think
 2. "netmap" is OUR topology-map tool, NOT a package. If the user asks to INSTALL something (nmap, htop, git...), use bash with apt: <tool>bash</tool><args>{"command": "apt-get install -y nmap"}</args> — never confuse the tool with the package.
-2. For LAN scans/maps: FIRST call `netscan` (one call), then `netmap` for the PNG. Do NOT hand-write nmap pipelines — raw sockets fail in proot and long one-liners break.
+2. For LAN scans/maps: call `netscan` (or `netmap` for the PNG) with NO subnet — the tool AUTO-DETECTS the real LAN (e.g. 192.168.10.0/24). NEVER invent 192.168.1.0/24. Do NOT hand-write nmap pipelines — raw sockets fail in proot.
 3. For security audits ALWAYS use tool `audit`.
 4. NEVER invent TOOL RESULT text. Verify created files with list_dir before claiming success.
 """
@@ -330,22 +330,42 @@ def tool_list_dir(path="/root"):
         return {"exit_code": -1, "error": str(exc)}
 
 
+def _detect_local_subnet():
+    """Subred /24 real del dispositivo (la IP local con ultimo octeto a 0)."""
+    import socket
+    s_ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s_.connect(("8.8.8.8", 80))
+        local_ip = s_.getsockname()[0]
+    finally:
+        s_.close()
+    return ".".join(local_ip.split(".")[:3]) + ".0/24", local_ip
+
+
 def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2):
     """Descubrimiento de red 100% userspace (TCP connect + tabla ARP).
     Funciona dentro de proot, a diferencia de nmap -sn (raw sockets)."""
     import socket
     import concurrent.futures
 
+    note = ""
+    try:
+        detected, local_ip = _detect_local_subnet()
+    except Exception:
+        detected, local_ip = "", ""
     if not subnet:
-        # detecta la subred leyendo /proc/net/route + ip local
-        try:
-            s_ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s_.connect(("8.8.8.8", 80))
-            local_ip = s_.getsockname()[0]
-            s_.close()
-            subnet = ".".join(local_ip.split(".")[:3]) + ".0/24"
-        except Exception as exc:
-            return {"exit_code": -1, "error": f"no pude detectar la subred: {exc}"}
+        if not detected:
+            return {"exit_code": -1, "error": "no pude detectar la subred"}
+        subnet = detected
+    elif (detected and subnet != detected
+          and subnet.startswith(("192.168.1.", "192.168.0."))):
+        # El modelo INVENTA la subred estandar 192.168.1.0/24 (o .0.0/24)
+        # aunque la LAN real sea otra (p.ej. 192.168.10.0/24). Solo se
+        # corrige ese caso tipico; si el usuario pide otra red explicita,
+        # se respeta.
+        note = (f"subnet corregida: pediste {subnet} pero la IP local es "
+                f"{local_ip} -> escaneo {detected}")
+        subnet = detected
 
     base = subnet.split("/")[0]
     parts = base.split(".")[:3]
@@ -397,13 +417,16 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2
             "open_ports": found.get(ip, []),
         })
 
-    return {
+    result = {
         "exit_code": 0,
         "subnet": f"{prefix}.0/24",
         "hosts_found": len(hosts),
         "hosts": hosts,
         "method": "tcp-connect + arp-table (proot safe)",
     }
+    if note:
+        result["note"] = note
+    return result
 
 
 def tool_netmap(subnet="", output="/root/scan_red.png"):
@@ -1013,12 +1036,13 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
         final_text = parse_final(reply)
         if final_text is not None:
             # El modelo a veces remata con un final vacio o trivial
-            # ("answer", "done") sin haber hecho nada: no vale como cierre
-            # si en esta tarea no se ha ejecutado aun ninguna herramienta.
-            if (len(final_text.strip()) < 8 and not state["steps"]):
+            # ("answer", "done"): NUNCA vale como cierre, ni siquiera tras
+            # haber ejecutado herramientas (el usuario se queda sin resumen).
+            if len(final_text.strip()) < 8:
                 messages.append({"role": "system", "content": (
-                    "That final was empty/useless. Do the task: call a tool "
-                    "NOW (<tool>…</tool><args>{…}</args>).")})
+                    "That final was empty/useless. Give a REAL summary of the "
+                    "tool results in <final>…</final> (2-4 sentences with the "
+                    "actual data found).")})
                 emit("nudge", {"step": step_num, "reason": "trivial_final"})
                 continue
             status = "done" if not final_text.startswith("BLOCKED:") else "failed"
