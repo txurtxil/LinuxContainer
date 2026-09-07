@@ -35,7 +35,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   /// Versión visible en la barra de título. La actualiza el instalador de
   /// cada release (sed sobre este literal) — no editar a mano.
-  static const String _appVersion = 'v14.7';
+  static const String _appVersion = 'v14.8';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
 
