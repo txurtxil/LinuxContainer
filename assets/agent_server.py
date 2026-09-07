@@ -342,9 +342,188 @@ def _detect_local_subnet():
     return ".".join(local_ip.split(".")[:3]) + ".0/24", local_ip
 
 
-def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2):
+# --- Identificacion de hosts (nombres + fabricante + banners), proot-safe ---
+
+# Prefijos OUI frecuentes en casa (primeros 3 bytes de la MAC).
+_OUI = {
+    "b8:27:eb": "Raspberry Pi", "dc:a6:32": "Raspberry Pi",
+    "e4:5f:01": "Raspberry Pi",
+    "00:1a:2b": "Cisco", "f4:03:2a": "Amazon", "44:65:0d": "Amazon",
+    "a4:77:33": "Google", "f4:f5:d8": "Google", "54:60:09": "Google",
+    "3c:5a:b4": "Google/Nest",
+    "ac:63:be": "Amazon",
+    "24:62:ab": "Espressif", "30:ae:a4": "Espressif", "24:6f:28": "Espressif",
+    "84:f7:03": "Espressif", "a0:dd:6c": "Espressif", "10:52:1c": "Espressif",
+    "8c:aa:b5": "Espressif", "ec:94:cb": "Espressif",
+    "78:21:84": "Espressif", "48:3f:da": "Espressif",
+    "00:0c:43": "Ralink/MediaTek",
+    "50:c7:bf": "TP-Link", "30:b5:c2": "TP-Link", "f0:9f:c2": "TP-Link",
+    "3c:46:d8": "TP-Link",
+    "bc:71:58": "Netgear", "9c:3d:cf": "Netgear", "d0:54:2d": "Asus",
+    "04:d4:c4": "Asus", "e0:3f:49": "Asus", "60:6c:66": "Intel",
+    "b8:27:56": "Nintendo",
+    "40:cb:c0": "Xiaomi", "64:09:80": "Xiaomi", "0c:1d:af": "Xiaomi",
+    "34:ce:00": "Xiaomi", "50:8f:4c": "Xiaomi", "f8:a4:5f": "Xiaomi",
+    "d4:d4:da": "Samsung", "cc:7a:ee": "Samsung", "e8:50:8b": "Samsung",
+    "a0:82:1f": "Samsung", "88:32:9b": "Samsung", "c4:7a:8d": "Apple",
+    "a4:83:e7": "Apple", "f0:18:98": "Apple", "dc:a9:04": "Apple",
+    "88:63:df": "Apple", "64:5a:ed": "Apple", "f0:d1:a9": "Apple",
+    "3c:a6:2f": "Apple", "bc:92:6b": "Apple", "d0:03:4b": "Apple",
+    "78:67:0e": "Apple", "4c:32:75": "Apple", "2c:f0:ee": "Apple",
+    "b8:64:91": "LG", "c4:42:02": "LG", "8c:3a:e3": "LG",
+    "10:1f:74": "Sony", "30:52:cb": "Huawei", "ac:e2:15": "Huawei",
+    "24:69:a5": "Huawei", "d0:9a:e0": "OnePlus", "c0:ee:fb": "OnePlus",
+    "94:65:2d": "Motorola", "f8:2d:d7": "Motorola",
+    "14:9f:3c": "Hon Hai/Foxconn", "74:d4:35": "Hon Hai/Foxconn",
+    "00:15:5d": "Microsoft", "28:18:78": "Microsoft",
+}
+
+
+def _oui_vendor(mac):
+    """Fabricante por prefijo OUI. 'random' si la MAC es local/randomizada."""
+    if not mac:
+        return ""
+    mac = mac.lower()
+    # MAC local/randomizada (bit 1 del primer octeto): tipica de iOS/Android
+    try:
+        first = int(mac.split(":")[0], 16)
+        if first & 0x02:
+            return "MAC aleatoria (privacidad)"
+    except (ValueError, IndexError):
+        pass
+    return _OUI.get(":".join(mac.split(":")[:3]), "")
+
+
+def _rdns(ip, timeout=1.5):
+    """DNS inverso (el router suele tener nombres locales)."""
+    import socket
+    socket.setdefaulttimeout(timeout)
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except Exception:
+        return ""
+
+
+def _netbios_name(ip, timeout=1.5):
+    """NBSTAT por UDP 137: nombres Windows/SMB. Solo stdlib."""
+    import socket
+    import struct
+    tid = 0xBEEF
+    qname = b"".join(bytes([len(b" " * 15)]) + b" " * 15 + b"\x00" + b"\x00")
+    # Query: node status, '*'
+    pkt = struct.pack(">HHHHHH", tid, 0, 1, 0, 0, 0) + b"\x20" + \
+        b"CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" + b"\x00\x00!\x00\x01"
+    del qname
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.sendto(pkt, (ip, 137))
+        data, _ = s.recvfrom(4096)
+        if len(data) > 57:
+            names = []
+            n = data[56]
+            off = 57
+            for _ in range(min(n, 10)):
+                if off + 18 > len(data):
+                    break
+                nm = data[off:off + 15].decode("ascii", "replace").strip()
+                typ = data[off + 15]
+                if nm and typ == 0x00:
+                    names.append(nm)
+                off += 18
+            return names[0] if names else ""
+    except Exception:
+        return ""
+    finally:
+        s.close()
+
+
+def _mdns_name(ip, timeout=2.0):
+    """mDNS (UDP 5353 multicast): nombres .local de iPhone/Android/IoT.
+    Enviamos la query PTR de la IP y escuchamos respuestas unicast."""
+    import socket
+    import struct
+    parts = ip.split(".")
+    ptr = (".".join(reversed(parts)) + ".in-addr.arpa")
+    q = b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    for part in ptr.split("."):
+        q += bytes([len(part)]) + part.encode()
+    q += b"\x00\x00\x0c\x00\x01"  # PTR, IN
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.settimeout(timeout)
+    try:
+        s.bind(("", 0))
+        s.sendto(q, ("224.0.0.251", 5353))
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                data, _ = s.recvfrom(4096)
+            except socket.timeout:
+                break
+            # parsea respuestas buscando nombres .local
+            txt = data
+            i = 12
+            while i < len(txt):
+                if txt[i] == 0:
+                    break
+                if txt[i] & 0xC0:
+                    i += 2
+                    break
+                i += txt[i] + 1
+            # extraccion cruda pero robusta: cualquier cadena 'xxx.local'
+            import re as _re_m
+            m = _re_m.search(rb"([ -~]{2,63})\x05local\x00", data)
+            if m:
+                return m.group(1).decode("ascii", "replace")
+    except Exception:
+        return ""
+    finally:
+        s.close()
+
+
+def _banner(ip, port, timeout=1.5):
+    """Banner grabbing: lo que el servicio saluda. SSH/HTTP se identifican."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+            sk.settimeout(timeout)
+            if sk.connect_ex((ip, port)) != 0:
+                return ""
+            if port in (80, 8080, 8000, 8888):
+                sk.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
+            data = sk.recv(120).decode("ascii", "replace").strip()
+            first = data.split("\n")[0][:80]
+            return first
+    except Exception:
+        return ""
+
+
+def identify_host(ip, mac="", ports=(), deep=True):
+    """Resuelve nombre (mDNS > NetBIOS > DNS inverso) + fabricante OUI +
+    banners de servicios. Todo con timeouts cortos, en paralelo por host."""
+    name = ""
+    if deep:
+        name = _mdns_name(ip)
+        if not name:
+            name = _netbios_name(ip)
+        if not name:
+            name = _rdns(ip)
+    banners = {}
+    if deep:
+        for p in list(ports)[:4]:  # max 4 puertos por host para no eternizar
+            b = _banner(ip, p)
+            if b:
+                banners[str(p)] = b
+    return {"hostname": name, "vendor": _oui_vendor(mac), "banners": banners}
+
+
+
+def tool_netscan(subnet="", ports="22,80,443,139,445,554,1883,8080,8008,8009,8443,5555,62078,9100", timeout=2, deep=True):
     """Descubrimiento de red 100% userspace (TCP connect + tabla ARP).
-    Funciona dentro de proot, a diferencia de nmap -sn (raw sockets)."""
+    Funciona dentro de proot, a diferencia de nmap -sn (raw sockets).
+    deep=True: identifica nombre (mDNS/NetBIOS/rDNS), fabricante (OUI)
+    y banners de servicios."""
     import socket
     import concurrent.futures
 
@@ -445,6 +624,24 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2
             "open_ports": found.get(ip, []),
         })
 
+    # 4) identificacion profunda EN PARALELO: nombre (mDNS/NetBIOS/rDNS) +
+    #    fabricante OUI + banners de servicios abiertos.
+    if deep:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+            futures = {
+                ex.submit(identify_host, h["ip"], h["mac"],
+                          h["open_ports"], True): h
+                for h in hosts}
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    futures[fut].update(fut.result())
+                except Exception:
+                    pass
+    for h in hosts:
+        h.setdefault("hostname", "")
+        h.setdefault("vendor", _oui_vendor(h.get("mac", "")))
+        h.setdefault("banners", {})
+
     result = {
         "exit_code": 0,
         "subnet": f"{prefix}.0/24",
@@ -487,16 +684,29 @@ fig.patch.set_facecolor('#1C1C1E')
 ax.set_facecolor('#1C1C1E')
 ax.axis('off')
 R = 3.0
-colors = {{'router': '#FF9F0A', 'device': '#5E9BD6'}}
+colors = {{'router': '#FF9F0A', 'device': '#5E9BD6',
+           'iot': '#BF5AF2', 'phone': '#34C759'}}
 for i, h in enumerate(hosts):
     ang = 2 * math.pi * i / n
     x, y = R * math.cos(ang), R * math.sin(ang)
-    is_router = h['ip'].endswith('.1')
-    c = colors['router'] if is_router else colors['device']
+    vend = (h.get('vendor') or '').lower()
+    is_router = h['ip'].endswith('.1') or 'tp-link' in vend or 'netgear' in vend or 'asus' in vend or 'cisco' in vend
+    if is_router:
+        c = colors['router']
+    elif 'espressif' in vend or 'xiaomi' in vend or 'nest' in vend:
+        c = colors['iot']
+    elif 'apple' in vend or 'samsung' in vend or 'oneplus' in vend or 'motorola' in vend or 'huawei' in vend or 'aleatoria' in vend:
+        c = colors['phone']
+    else:
+        c = colors['device']
     ax.plot([0, x], [0, y], color='#3A3A3C', lw=1.2, zorder=1)
     ax.scatter([x], [y], s=900, c=c, zorder=2, edgecolors='#EAEAEC', linewidths=1.2)
     label = h['ip']
-    if h.get('mac'):
+    if h.get('hostname'):
+        label = h['hostname'] + '\\n' + label
+    if h.get('vendor'):
+        label += '\\n' + h['vendor']
+    elif h.get('mac'):
         label += '\\n' + h['mac']
     if h.get('open_ports'):
         label += '\\nports: ' + ','.join(map(str, h['open_ports'][:6]))
@@ -505,7 +715,7 @@ for i, h in enumerate(hosts):
 ax.scatter([0], [0], s=1200, c='#34C759', zorder=2, edgecolors='#EAEAEC')
 ax.text(0, -0.55, 'XTR (este dispositivo)', ha='center', va='top',
         color='#EAEAEC', fontsize=9, zorder=3)
-ax.set_title(f'Mapa de red — {{len(hosts)}} dispositivos', color='#EAEAEC', fontsize=13)
+ax.set_title(f'Mapa de red — {{len(hosts)}} dispositivos (naranja=router, morado=IoT, verde=movil)', color='#EAEAEC', fontsize=11)
 import os
 os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
 plt.tight_layout()
@@ -1149,8 +1359,12 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
         lines = [f"\n\nEscaneo real ({scan_subnet}): {len(scan_hosts)} hosts"]
         for h in scan_hosts[:20]:
             ports = ",".join(str(p) for p in h.get("open_ports", [])) or "-"
-            mac = h.get("mac") or ""
-            lines.append(f"  {h['ip']:16} puertos: {ports:24} {mac}")
+            name = h.get("hostname") or ""
+            vend = h.get("vendor") or ""
+            tag = " ".join(x for x in (name, vend) if x)
+            lines.append(f"  {h['ip']:16} {ports:22} {tag}".rstrip())
+            for p, b in list((h.get("banners") or {}).items())[:3]:
+                lines.append(f"      :{p} -> {b}")
         if not scan_hosts:
             lines.append("  (ningun host con puertos abiertos de la lista "
                          "ni vecinos en la tabla ARP)")
