@@ -95,6 +95,13 @@ class TermuxSelectionOverlayState extends State<TermuxSelectionOverlay> {
   Timer? _autoScrollTimer;
   int _autoScrollDir = 0; // -1 arriba, 0 parado, 1 abajo
 
+  // Doble-toque rápido -> TAB (autocompletado de la shell). Se detecta a
+  // mano con un Listener, que NO compite en la arena de gestos: así el tap
+  // simple de xterm no se retrasa los ~300 ms que costaría un
+  // onDoubleTap de GestureDetector.
+  DateTime _lastTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Offset _lastTapPos = Offset.zero;
+
   bool get _hasSelection => _selStart != null && _selEnd != null;
 
   @override
@@ -112,6 +119,28 @@ class TermuxSelectionOverlayState extends State<TermuxSelectionOverlay> {
     widget.scrollController.removeListener(_onViewportChange);
     widget.terminal.removeListener(_onViewportChange);
     super.dispose();
+  }
+
+  // --- Doble-toque -> TAB ----------------------------------------------------
+
+  void _onPointerDownDoubleTap(PointerDownEvent e) {
+    // Con selección activa el tap sirve para limpiarla; y arrastrando un asa
+    // no hay taps que contar. En ambos casos se reinicia la ventana.
+    if (_hasSelection || _dragging) {
+      _lastTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+      return;
+    }
+    final now = DateTime.now();
+    final dt = now.difference(_lastTapAt).inMilliseconds;
+    final near = (e.position - _lastTapPos).distance < 40;
+    _lastTapAt = now;
+    _lastTapPos = e.position;
+    if (dt > 40 && dt < 350 && near) {
+      // Mismo camino que la tecla Tab del keybar (probado).
+      widget.terminal.keyInput(TerminalKey.tab);
+      // Se consume la pareja: un triple toque NO manda dos TAB.
+      _lastTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+    }
   }
 
   // --- Sincronización con la selección del terminal ------------------------
@@ -342,12 +371,16 @@ class TermuxSelectionOverlayState extends State<TermuxSelectionOverlay> {
   Widget build(BuildContext context) {
     final color = widget.handleColor ?? Colors.greenAccent.shade400;
 
-    return Stack(
-      children: [
-        widget.child,
-        if (_hasSelection) ..._buildHandles(color),
-        if (_hasSelection) _buildActionBar(context),
-      ],
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _onPointerDownDoubleTap,
+      child: Stack(
+        children: [
+          widget.child,
+          if (_hasSelection) ..._buildHandles(color),
+          if (_hasSelection) _buildActionBar(context),
+        ],
+      ),
     );
   }
 

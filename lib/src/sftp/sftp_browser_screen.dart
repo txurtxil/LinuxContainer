@@ -12,6 +12,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../ssh/ssh_host.dart';
 import 'sftp_service.dart';
@@ -38,11 +39,17 @@ class SftpBrowserScreen extends StatefulWidget {
   /// a la terminal y abre una pestana ssh a este mismo host, SIN cerrar
   /// esta conexion sftp (vive en SftpConnectionPool, no en esta pantalla).
   final void Function(SshHost host)? onOpenTerminal;
+
+  /// true cuando vive integrado en la pantalla de la terminal (panel
+  /// alternante shell<->SFTP): sin flecha atrás y barra más baja.
+  final bool embedded;
+
   const SftpBrowserScreen({
     super.key,
     required this.host,
     required this.rootfsPath,
     this.onOpenTerminal,
+    this.embedded = false,
   });
 
   @override
@@ -58,11 +65,16 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
   String _error = '';
   // Arranca en initialPath si el host lo tiene configurado; si no, en el
   // home del usuario remoto como siempre ('.' es lo que ya usaba sftp).
-  late String _path = (widget.host.initialPath?.trim().isNotEmpty ?? false)
-      ? widget.host.initialPath!.trim()
-      : '.';
+  // La última carpeta visitada en este host manda sobre la ruta inicial:
+  // al alternar shell<->SFTP (o reabrir desde Hosts) vuelves donde estabas.
+  late String _path = SftpConnectionPool.instance.lastPathFor(widget.host.id) ??
+      ((widget.host.initialPath?.trim().isNotEmpty ?? false)
+          ? widget.host.initialPath!.trim()
+          : '.');
   List<SftpEntry> _entries = [];
   _SortBy _sortBy = _SortBy.name;
+  bool _sortAsc = true;
+  bool _showHidden = true;
   bool _busy = false;
   String _busyLabel = '';
 
@@ -173,6 +185,7 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
 
   Future<void> _load(String path) async {
     final entries = await _svc.list(path);
+    SftpConnectionPool.instance.rememberPath(widget.host.id, path);
     if (mounted) setState(() { _path = path; _entries = entries; _selected.clear(); });
   }
 
@@ -207,9 +220,10 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
   // explorador de archivos); el criterio elegido solo ordena DENTRO de
   // cada grupo.
   List<SftpEntry> get _sortedEntries {
-    final list = List<SftpEntry>.from(_entries);
-    list.sort((a, b) {
-      if (a.isDirectory != b.isDirectory) return a.isDirectory ? -1 : 1;
+    final list = _showHidden
+        ? List<SftpEntry>.from(_entries)
+        : _entries.where((e) => !e.name.startsWith('.')).toList();
+    int cmp(SftpEntry a, SftpEntry b) {
       switch (_sortBy) {
         case _SortBy.date:
           final ad = a.modified;
@@ -217,12 +231,19 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
           if (ad == null && bd == null) return a.name.toLowerCase().compareTo(b.name.toLowerCase());
           if (ad == null) return 1;
           if (bd == null) return -1;
-          return bd.compareTo(ad); // mas reciente primero
+          return ad.compareTo(bd);
         case _SortBy.size:
-          return b.size.compareTo(a.size); // mayor primero
+          return a.size.compareTo(b.size);
         case _SortBy.name:
           return a.name.toLowerCase().compareTo(b.name.toLowerCase());
       }
+    }
+    // Las carpetas siempre van primero (convención estándar de cualquier
+    // explorador); el criterio y la dirección ordenan DENTRO de cada grupo.
+    list.sort((a, b) {
+      if (a.isDirectory != b.isDirectory) return a.isDirectory ? -1 : 1;
+      final c = cmp(a, b);
+      return _sortAsc ? c : -c;
     });
     return list;
   }
@@ -231,43 +252,61 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: _C.card,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
-              child: Text('Ordenar por', style: TextStyle(color: _C.textHi, fontWeight: FontWeight.bold)),
-            ),
-            RadioListTile<_SortBy>(
-              value: _SortBy.name,
-              groupValue: _sortBy,
-              activeColor: _C.accent,
-              title: const Text('Nombre', style: TextStyle(color: _C.textHi)),
-              onChanged: (v) { setState(() => _sortBy = v!); Navigator.pop(ctx); },
-            ),
-            RadioListTile<_SortBy>(
-              value: _SortBy.date,
-              groupValue: _sortBy,
-              activeColor: _C.accent,
-              title: const Text('Fecha (mas reciente primero)', style: TextStyle(color: _C.textHi)),
-              onChanged: (v) { setState(() => _sortBy = v!); Navigator.pop(ctx); },
-            ),
-            RadioListTile<_SortBy>(
-              value: _SortBy.size,
-              groupValue: _sortBy,
-              activeColor: _C.accent,
-              title: const Text('Tamano (mayor primero)', style: TextStyle(color: _C.textHi)),
-              onChanged: (v) { setState(() => _sortBy = v!); Navigator.pop(ctx); },
-            ),
-            const SizedBox(height: 8),
-          ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+                child: Text('Ordenar', style: TextStyle(color: _C.textHi, fontWeight: FontWeight.bold)),
+              ),
+              RadioListTile<_SortBy>(
+                value: _SortBy.name,
+                groupValue: _sortBy,
+                activeColor: _C.accent,
+                title: const Text('Nombre', style: TextStyle(color: _C.textHi)),
+                onChanged: (v) { setState(() { _sortBy = v!; _sortAsc = true; }); setSheet(() {}); },
+              ),
+              RadioListTile<_SortBy>(
+                value: _SortBy.date,
+                groupValue: _sortBy,
+                activeColor: _C.accent,
+                title: const Text('Fecha', style: TextStyle(color: _C.textHi)),
+                onChanged: (v) { setState(() { _sortBy = v!; _sortAsc = false; }); setSheet(() {}); },
+              ),
+              RadioListTile<_SortBy>(
+                value: _SortBy.size,
+                groupValue: _sortBy,
+                activeColor: _C.accent,
+                title: const Text('Tamaño', style: TextStyle(color: _C.textHi)),
+                onChanged: (v) { setState(() { _sortBy = v!; _sortAsc = false; }); setSheet(() {}); },
+              ),
+              const Divider(color: _C.border, height: 1),
+              SwitchListTile(
+                value: _sortAsc,
+                activeColor: _C.accent,
+                title: Text(_sortAsc ? 'Ascendente' : 'Descendente',
+                    style: const TextStyle(color: _C.textHi)),
+                subtitle: Text(
+                  _sortBy == _SortBy.name
+                      ? (_sortAsc ? 'A a Z' : 'Z a A')
+                      : _sortBy == _SortBy.date
+                          ? (_sortAsc ? 'Antiguos primero' : 'Recientes primero')
+                          : (_sortAsc ? 'Pequeños primero' : 'Grandes primero'),
+                  style: const TextStyle(color: _C.textLo, fontSize: 12),
+                ),
+                onChanged: (v) { setState(() => _sortAsc = v); setSheet(() {}); },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  // ── Seleccion multiple ──────────────────────────────────────────────────
+  // ── Selección múltiple ─────────────────────────────────────────────────
 
   void _toggleSelect(SftpEntry e) {
     final path = _fullPath(e);
@@ -338,32 +377,32 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
 
   Future<void> _downloadSelected() async {
     final items = Map<String, SftpEntry>.from(_selected);
-    final files = items.entries.where((e) => !e.value.isDirectory).toList();
-    final skippedFolders = items.length - files.length;
-
-    if (files.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Las carpetas todavía no se pueden descargar de golpe -- elige ficheros sueltos'),
-        backgroundColor: _C.err,
-      ));
-      return;
-    }
-
     setState(() { _busy = true; _busyLabel = 'Descargando...'; });
     var done = 0;
     final messenger = ScaffoldMessenger.of(context);
     try {
-      for (final entry in files) {
-        setState(() => _busyLabel = 'Descargando ${done + 1}/${files.length}: ${entry.value.name}');
-        await _svc.download(entry.key);
+      for (final entry in items.entries) {
+        final e = entry.value;
+        if (e.isDirectory) {
+          // Carpeta entera, recursivo; onProgress cuenta ficheros.
+          await _svc.downloadFolder(entry.key, onProgress: (f) {
+            if (mounted) setState(() => _busyLabel = 'Descargando ${e.name} · $f ficheros...');
+          });
+        } else {
+          await _svc.download(entry.key, onProgress: (b) {
+            if (mounted && e.size > 0) {
+              setState(() => _busyLabel =
+                  'Descargando ${done + 1}/${items.length}: ${e.name} · ${(100 * b / e.size).round()}%');
+            }
+          });
+        }
         done++;
       }
-      final skipMsg = skippedFolders > 0 ? ' ($skippedFolders carpeta(s) omitida(s))' : '';
-      messenger.showSnackBar(SnackBar(content: Text('Descargados $done fichero(s) a Descargas/xtr_sftp/$skipMsg')));
+      messenger.showSnackBar(SnackBar(content: Text('Descargados $done elemento(s) a Descargas/xtr_sftp/')));
       _clearSelection();
     } catch (err) {
       messenger.showSnackBar(SnackBar(
-        content: Text('Fallo tras descargar $done de ${files.length}: $err'),
+        content: Text('Fallo tras descargar $done de ${items.length}: $err'),
         backgroundColor: _C.err,
       ));
     } finally {
@@ -371,13 +410,15 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     }
   }
 
-  // ── Acciones sobre un unico elemento (mismo comportamiento de siempre) ──
-
   Future<void> _download(SftpEntry e) async {
-    setState(() => _busy = true);
+    setState(() { _busy = true; _busyLabel = 'Descargando ${e.name}...'; });
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final local = await _svc.download(_fullPath(e));
+      final local = await _svc.download(_fullPath(e), onProgress: (b) {
+        if (mounted && e.size > 0) {
+          setState(() => _busyLabel = 'Descargando ${e.name} · ${(100 * b / e.size).round()}%');
+        }
+      });
       messenger.showSnackBar(SnackBar(content: Text('Guardado en Descargas/xtr_sftp: $local')));
     } catch (err) {
       messenger.showSnackBar(SnackBar(content: Text('Fallo al descargar: $err'), backgroundColor: _C.err));
@@ -449,6 +490,120 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     }
   }
 
+  Future<void> _gotoPath() async {
+    final ctrl = TextEditingController(text: _path == '.' ? '~' : _path);
+    final dest = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _C.card,
+        title: const Text('Ir a la ruta', style: TextStyle(color: _C.textHi)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: _C.textHi, fontFamily: 'monospace', fontSize: 13),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+          decoration: const InputDecoration(
+            hintText: '/etc/nginx  o  ~/proyectos',
+            hintStyle: TextStyle(color: _C.textLo),
+            filled: true,
+            fillColor: _C.cardAlt,
+            border: OutlineInputBorder(borderSide: BorderSide.none),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, null),
+              child: const Text('Cancelar', style: TextStyle(color: _C.textLo))),
+          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Ir', style: TextStyle(color: _C.accent))),
+        ],
+      ),
+    );
+    if (dest == null || dest.trim().isEmpty || !mounted) return;
+    var target = dest.trim();
+    if (target == '~' || target == '~/') target = '.';
+    try {
+      await _load(target);
+    } catch (err) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No se pudo abrir: $err'), backgroundColor: _C.err));
+      }
+    }
+  }
+
+  void _copyCurrentPath() {
+    final shown = _path == '.' ? '~' : _path;
+    Clipboard.setData(ClipboardData(text: shown));
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ruta copiada: $shown')));
+  }
+
+  Future<void> _rename(SftpEntry e) async {
+    final ctrl = TextEditingController(text: e.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _C.card,
+        title: Text('Renombrar ${e.isDirectory ? 'carpeta' : 'fichero'}', style: const TextStyle(color: _C.textHi)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: _C.textHi),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+          decoration: const InputDecoration(
+            filled: true,
+            fillColor: _C.cardAlt,
+            border: OutlineInputBorder(borderSide: BorderSide.none),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, null),
+              child: const Text('Cancelar', style: TextStyle(color: _C.textLo))),
+          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Renombrar', style: TextStyle(color: _C.accent))),
+        ],
+      ),
+    );
+    if (newName == null || newName.isEmpty || newName == e.name || !mounted) return;
+    if (newName.contains('/')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('El nombre no puede contener /'),
+        backgroundColor: _C.err,
+      ));
+      return;
+    }
+    final newPath = _path == '.' ? newName : '$_path/$newName';
+    setState(() { _busy = true; _busyLabel = 'Renombrando...'; });
+    try {
+      await _svc.rename(_fullPath(e), newPath);
+      await _load(_path);
+    } catch (err) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No se pudo renombrar: $err'), backgroundColor: _C.err));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _downloadFolder(SftpEntry e) async {
+    setState(() { _busy = true; _busyLabel = 'Descargando carpeta ${e.name}...'; });
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final n = await _svc.downloadFolder(_fullPath(e), onProgress: (f) {
+        if (mounted) setState(() => _busyLabel = 'Descargando ${e.name} · $f ficheros...');
+      });
+      messenger.showSnackBar(SnackBar(
+          content: Text('Carpeta descargada ($n ficheros) en Descargas/xtr_sftp/')));
+    } catch (err) {
+      messenger.showSnackBar(SnackBar(
+          content: Text('Fallo al descargar la carpeta: $err'), backgroundColor: _C.err));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   void _showFabMenu() {
     showModalBottomSheet(
       context: context,
@@ -485,9 +640,15 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     try {
       for (final localPath in localPaths) {
         final fileName = localPath.split('/').last;
+        final total = await File(localPath).length();
         setState(() => _busyLabel = 'Subiendo ${done + 1}/${localPaths.length}: $fileName');
         final remote = _path == '.' ? fileName : '$_path/$fileName';
-        await _svc.upload(localPath, remote);
+        await _svc.upload(localPath, remote, onProgress: (sent) {
+          if (mounted && total > 0) {
+            setState(() => _busyLabel =
+                'Subiendo ${done + 1}/${localPaths.length}: $fileName · ${(100 * sent / total).round()}%');
+          }
+        });
         done++;
       }
       messenger.showSnackBar(SnackBar(content: Text('Subido(s) $done fichero(s)')));
@@ -561,6 +722,27 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                 title: const Text('Descargar', style: TextStyle(color: _C.textHi)),
                 onTap: () { Navigator.pop(ctx); _download(e); },
               ),
+            if (e.isDirectory)
+              ListTile(
+                leading: const Icon(Icons.download_for_offline_outlined, color: _C.accent),
+                title: const Text('Descargar carpeta (recursivo)', style: TextStyle(color: _C.textHi)),
+                onTap: () { Navigator.pop(ctx); _downloadFolder(e); },
+              ),
+            ListTile(
+              leading: const Icon(Icons.drive_file_rename_outline, color: _C.accent),
+              title: const Text('Renombrar', style: TextStyle(color: _C.textHi)),
+              onTap: () { Navigator.pop(ctx); _rename(e); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.link, color: _C.textLo),
+              title: const Text('Copiar ruta', style: TextStyle(color: _C.textHi)),
+              onTap: () {
+                Navigator.pop(ctx);
+                Clipboard.setData(ClipboardData(text: _fullPath(e)));
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Ruta copiada: ${_fullPath(e)}')));
+              },
+            ),
             ListTile(
               leading: const Icon(Icons.check_box_outlined, color: _C.textLo),
               title: const Text('Seleccionar', style: TextStyle(color: _C.textHi)),
@@ -597,13 +779,17 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
     return AppBar(
       backgroundColor: _C.bg,
       elevation: 0,
+      automaticallyImplyLeading: !widget.embedded,
+      toolbarHeight: widget.embedded ? 42 : null,
       iconTheme: const IconThemeData(color: _C.textHi),
       title: Text(widget.host.name, style: const TextStyle(color: _C.textHi, fontSize: 16)),
       actions: _state == _LoadState.ready
           ? [
               if (widget.onOpenTerminal != null)
                 IconButton(
-                  tooltip: 'Abrir terminal SSH (sin cortar esto)',
+                  tooltip: widget.embedded
+                      ? 'Volver a la terminal'
+                      : 'Abrir terminal SSH (sin cortar esto)',
                   icon: const Icon(Icons.terminal, color: _C.textLo),
                   onPressed: () => widget.onOpenTerminal!(widget.host),
                 ),
@@ -639,6 +825,15 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                 color: _C.card,
                 onSelected: (v) {
                   switch (v) {
+                    case 'goto':
+                      _gotoPath();
+                      break;
+                    case 'refresh':
+                      _load(_path);
+                      break;
+                    case 'hidden':
+                      setState(() => _showHidden = !_showHidden);
+                      break;
                     case 'disconnect':
                       SftpConnectionPool.instance.disconnect(widget.host.id).then((_) {
                         if (!mounted) return;
@@ -652,6 +847,12 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                   }
                 },
                 itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'goto', child: Text('Ir a la ruta…')),
+                  const PopupMenuItem(value: 'refresh', child: Text('Actualizar')),
+                  PopupMenuItem(
+                    value: 'hidden',
+                    child: Text(_showHidden ? 'Ocultar ficheros ocultos' : 'Mostrar ficheros ocultos'),
+                  ),
                   const PopupMenuItem(value: 'disconnect', child: Text('Desconectar y reconectar')),
                 ],
               ),
@@ -717,6 +918,11 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                   style: const TextStyle(color: _C.textLo, fontSize: 12, fontFamily: 'monospace'),
                   overflow: TextOverflow.ellipsis,
                 ),
+              ),
+              IconButton(
+                tooltip: 'Copiar ruta',
+                icon: const Icon(Icons.copy, color: _C.textLo, size: 16),
+                onPressed: _copyCurrentPath,
               ),
               if (_busy)
                 const SizedBox(width: 16, height: 16,

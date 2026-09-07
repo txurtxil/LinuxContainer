@@ -32,7 +32,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   /// Versión visible en la barra de título. La actualiza el instalador de
   /// cada release (sed sobre este literal) — no editar a mano.
-  static const String _appVersion = 'v14.4';
+  static const String _appVersion = 'v14.5';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
 
@@ -44,6 +44,12 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   String? _error;
   final Map<int, FocusNode> _focusNodes = {};
   final Map<int, GlobalKey<TerminalViewState>> _viewKeys = {};
+
+  /// Sesiones SSH con el panel SFTP montado / visible. Se guarda el OBJETO
+  /// sesión (no el índice) por la misma razón que sourceHost: cerrar una
+  /// pestaña desplaza índices y un mapa por índice apuntaría mal.
+  final Set<TerminalSession> _sftpOpened = {};
+  final Set<TerminalSession> _sftpOpen = {};
 
   double _fontSize = 12.0;
   static const double _minFont = 8.0;
@@ -152,27 +158,18 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     });
   }
 
-  void _openSftpForHost(SshHost host) {
-    // Se recuerda de que pestana salimos, para poder VOLVER a ella (en vez
-    // de abrir una nueva) si "Abrir terminal SSH" se pulsa desde dentro
-    // del explorador SFTP -- cierra el circuito ssh -> sftp -> ssh.
-    final originIndex = _activeIndex;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => SftpBrowserScreen(
-        host: host,
-        rootfsPath: _manager.rootfsPath!,
-        onOpenTerminal: (h) {
-          Navigator.of(context).pop();
-          final stillThere = originIndex < _sessions.length &&
-              _sessions[originIndex].sourceHost?.id == h.id;
-          if (stillThere) {
-            _switchTo(originIndex);
-          } else {
-            _connectToHost(h);
-          }
-        },
-      ),
-    ));
+  /// Alterna shell <-> explorador SFTP del mismo host DENTRO de la sesión
+  /// SSH. El panel se crea perezoso la primera vez (entonces conecta) y se
+  /// queda montado en el árbol: conserva carpeta, scroll y selección entre
+  /// cambios. La shell sigue viva debajo (Offstage) y el circuito se cierra
+  /// con onOpenTerminal, que simplemente vuelve a mostrar la terminal.
+  void _toggleSftp(TerminalSession s) {
+    if (s.sourceHost == null) return;
+    setState(() {
+      if (_sftpOpen.remove(s)) return; // estaba abierto -> volver a la shell
+      _sftpOpened.add(s);              // primera vez: montar el panel
+      _sftpOpen.add(s);
+    });
   }
 
   void _openHosts() {
@@ -210,6 +207,8 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       return;
     }
     final s = _sessions[index];
+    _sftpOpen.remove(s);
+    _sftpOpened.remove(s);
     s.dispose();
     setState(() {
       _sessions.removeAt(index);
@@ -536,9 +535,15 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
               ),
               if (_active.sourceHost != null)
                 IconButton(
-                  tooltip: 'Abrir SFTP de este host',
-                  onPressed: () => _openSftpForHost(_active.sourceHost!),
-                  icon: const Icon(Icons.folder_open, color: Colors.amberAccent, size: 22),
+                  tooltip: _sftpOpen.contains(_active)
+                      ? 'Volver a la shell'
+                      : 'SFTP de este host',
+                  onPressed: () => _toggleSftp(_active),
+                  icon: Icon(
+                    _sftpOpen.contains(_active) ? Icons.terminal : Icons.folder_open,
+                    color: Colors.amberAccent,
+                    size: 22,
+                  ),
                 ),
               if (_sessions.length < _maxSessions)
                 IconButton(
@@ -563,7 +568,7 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
               // el propio paquete (renderTerminal.getOffset/getCellOffset);
               // no hace falta calibracion (onTapUp esta muerto en xterm
               // 4.0.0: por eso el sistema anterior nunca dibujo las asas).
-              return TermuxSelectionOverlay(
+              final terminalPane = TermuxSelectionOverlay(
                 terminal: s.terminal,
                 controller: s.controller,
                 terminalViewKey: viewKey,
@@ -584,16 +589,38 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                   textStyle: TerminalStyle(fontSize: _fontSize, fontFamily: 'monospace'),
                 ),
               );
+
+              if (s.sourceHost == null) return terminalPane;
+              final sftpOpen = _sftpOpen.contains(s);
+              return Stack(
+                children: [
+                  // La terminal no se desmonta nunca: solo se oculta, y su
+                  // PTY y su scrollback siguen vivos mientras miras SFTP.
+                  Offstage(offstage: sftpOpen, child: terminalPane),
+                  if (_sftpOpened.contains(s))
+                    Offstage(
+                      offstage: !sftpOpen,
+                      child: SftpBrowserScreen(
+                        host: s.sourceHost!,
+                        rootfsPath: _manager.rootfsPath!,
+                        embedded: true,
+                        onOpenTerminal: (_) =>
+                            setState(() => _sftpOpen.remove(s)),
+                      ),
+                    ),
+                ],
+              );
             }).toList(),
           ),
         ),
-        TerminalKeybar(
-          terminal: _active.terminal,
-          config: _keybarConfig,
-          onFontIncrease: () => _changeFont(1),
-          onFontDecrease: () => _changeFont(-1),
-          onMenu: _showSettings,
-        ),
+        if (!_sftpOpen.contains(_active))
+          TerminalKeybar(
+            terminal: _active.terminal,
+            config: _keybarConfig,
+            onFontIncrease: () => _changeFont(1),
+            onFontDecrease: () => _changeFont(-1),
+            onMenu: _showSettings,
+          ),
       ],
     );
   }

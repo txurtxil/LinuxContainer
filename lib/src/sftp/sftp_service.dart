@@ -236,6 +236,46 @@ class SftpService {
     await walk(remotePath, isDirectory);
   }
 
+  /// Renombra (o mueve dentro del mismo árbol) un fichero o carpeta.
+  Future<void> rename(String oldPath, String newPath) async {
+    final sftp = _sftp;
+    if (sftp == null) throw StateError('No conectado');
+    await sftp.rename(oldPath, newPath);
+  }
+
+  /// Descarga una CARPETA entera replicando su estructura en
+  /// Descargas/xtr_sftp/<host>/<ruta>. [onProgress] recibe el número de
+  /// ficheros ya descargados (las carpetas vacías no cuentan).
+  Future<int> downloadFolder(String remotePath, {void Function(int files)? onProgress}) async {
+    final sftp = _sftp;
+    if (sftp == null) throw StateError('No conectado');
+
+    final safeHost = host.name.replaceAll(RegExp(r'[^\w\-]'), '_');
+    final baseLocal = '$_downloadDirAbs/$safeHost';
+    var files = 0;
+
+    Future<void> walk(String remote, String local) async {
+      final items = await sftp.listdir(remote);
+      await Directory(local).create(recursive: true);
+      for (final item in items) {
+        if (item.filename == '.' || item.filename == '..') continue;
+        final r = '$remote/${item.filename}';
+        final l = '$local/${item.filename}';
+        if (item.attr.isDirectory) {
+          await walk(r, l);
+        } else {
+          final sink = File(l).openWrite();
+          await sftp.download(r, sink, closeDestination: true);
+          files++;
+          onProgress?.call(files);
+        }
+      }
+    }
+
+    await walk(remotePath, '$baseLocal$remotePath');
+    return files;
+  }
+
   Future<void> mkdir(String remotePath) async {
     final sftp = _sftp;
     if (sftp == null) throw StateError('No conectado');

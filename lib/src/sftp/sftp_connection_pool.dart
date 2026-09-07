@@ -20,6 +20,10 @@ class SftpConnectionPool {
 
   final Map<String, SftpService> _services = {};
 
+  /// Última carpeta visitada por host: al volver a abrir SFTP (integrado en
+  /// la terminal o desde Hosts) se entra donde te quedaste, no al origen.
+  final Map<String, String> _lastPaths = {};
+
   /// El servicio para este host: el mismo de siempre si ya existia (vivo o
   /// no), o uno nuevo la primera vez. No conecta por si mismo -- eso lo
   /// hace quien lo use, llamando a .connect().
@@ -28,6 +32,10 @@ class SftpConnectionPool {
   }
 
   bool isConnected(String hostId) => _services[hostId]?.isConnected ?? false;
+
+  String? lastPathFor(String hostId) => _lastPaths[hostId];
+
+  void rememberPath(String hostId, String path) => _lastPaths[hostId] = path;
 
   Future<void> disconnect(String hostId) async {
     final svc = _services.remove(hostId);
