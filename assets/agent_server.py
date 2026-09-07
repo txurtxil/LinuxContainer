@@ -394,11 +394,14 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2
         if open_ports:
             found[host] = open_ports
 
-    # 1) TCP connect sweep en paralelo (marca hosts con puertos abiertos)
+    # 1) TCP connect sweep en paralelo (marca hosts con puertos abiertos).
+    # Cada intento de conexion (falle o no) puebla la tabla ARP del kernel.
     with concurrent.futures.ThreadPoolExecutor(max_workers=64) as ex:
         list(ex.map(probe, [f"{prefix}.{i}" for i in range(1, 255)]))
 
-    # 2) complementa con la tabla ARP (hosts vivos aunque no tengan puertos de la lista)
+    # 2) vecinos del kernel: /proc/net/arp Y `ip neigh` (iproute2 si esta).
+    #    El barrido TCP de arriba hace que aparezcan TODOS los vivos, no
+    #    solo los que tenian algun puerto de la lista abierto.
     arp_hosts = {}
     try:
         with open("/proc/net/arp", "r") as fh:
@@ -408,6 +411,28 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,8080,5555,62078", timeout=2
                     ip, mac = cols[0], cols[4]
                     if ip.startswith(prefix + "."):
                         arp_hosts[ip] = mac
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(["ip", "neigh", "show"], capture_output=True,
+                             text=True, timeout=10).stdout
+        import re as _re_neigh
+        for mip in _re_neigh.findall(
+                r"^(" + _re_neigh.escape(prefix) + r"\.\d+)\s+.*lladdr\s+"
+                r"([0-9a-f:]{17})", out, _re_neigh.M):
+            arp_hosts.setdefault(mip[0], mip[1])
+    except Exception:
+        pass
+    # 3) el gateway SIEMPRE aparece (esta vivo por definicion)
+    try:
+        with open("/proc/net/route", "r") as fh:
+            for line in fh.readlines()[1:]:
+                cols = line.split("\t")
+                if len(cols) > 2 and cols[1] == "00000000":
+                    gw = socket.inet_ntoa(
+                        bytes.fromhex(cols[2])[::-1])
+                    if gw.startswith(prefix + "."):
+                        arp_hosts.setdefault(gw, "")
     except Exception:
         pass
 
@@ -1095,6 +1120,41 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
                            + ", ".join(missing) + "]")
             if status == "done":
                 status = "failed"  # afirmo exito sin evidencia
+
+    # Verificacion cruzada de ESCANEOS: si en la meta se ejecuto netscan/
+    # netmap, el resultado REAL de la herramienta es la unica verdad. El
+    # modelo tiende a inventar hosts ("8 devices en 192.168.10.x") cuando
+    # el scan encontro 0. Se adjunta la tabla real y se marcan las IPs
+    # alucinadas.
+    scan_hosts = None
+    scan_subnet = ""
+    for st in state["steps"]:
+        if st["tool"] in ("netscan", "netmap") and st["result"].get("exit_code") == 0:
+            scan_hosts = st["result"].get("hosts", [])
+            scan_subnet = st["result"].get("subnet", "")
+    if final_text and scan_hosts is not None:
+        import re as _re3
+        real_ips = {h["ip"] for h in scan_hosts}
+        claimed = set(_re3.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", final_text))
+        hallucinated = sorted(ip for ip in claimed - real_ips
+                              if ip.split(".")[0] != "127")
+        if hallucinated:
+            final_text += ("\n\n[VERIFICACION: el modelo menciono IPs que el "
+                           "escaneo NO encontro: " + ", ".join(hallucinated)
+                           + ". Esos datos son inventados.]")
+            if status == "done":
+                status = "failed"
+        # Tabla REAL, determinista, adjunta siempre: el usuario ve los
+        # datos del escaneo aunque el modelo haya resumido mal.
+        lines = [f"\n\nEscaneo real ({scan_subnet}): {len(scan_hosts)} hosts"]
+        for h in scan_hosts[:20]:
+            ports = ",".join(str(p) for p in h.get("open_ports", [])) or "-"
+            mac = h.get("mac") or ""
+            lines.append(f"  {h['ip']:16} puertos: {ports:24} {mac}")
+        if not scan_hosts:
+            lines.append("  (ningun host con puertos abiertos de la lista "
+                         "ni vecinos en la tabla ARP)")
+        final_text += "\n".join(lines)
 
     # Telemetria final: tiempo total + llamadas + tokens en la respuesta.
     if final_text:
