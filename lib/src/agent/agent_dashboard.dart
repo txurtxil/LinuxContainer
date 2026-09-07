@@ -756,6 +756,9 @@ class _AgentDashboardState extends State<AgentDashboard>
                 case 'logs':
                   _showLogs('agent-server', _svc.agentLog);
                   break;
+                case 'goallog':
+                  _showGoalLog();
+                  break;
                 case 'gallery':
                   _showImageGallery();
                   break;
@@ -785,6 +788,10 @@ class _AgentDashboardState extends State<AgentDashboard>
               const PopupMenuItem(
                 value: 'logs',
                 child: _MenuRow(icon: Icons.article_outlined, label: 'Logs del agente'),
+              ),
+              const PopupMenuItem(
+                value: 'goallog',
+                child: _MenuRow(icon: Icons.bug_report_outlined, label: 'Que hace el agente (log)'),
               ),
               const PopupMenuItem(
                 value: 'settings',
@@ -1057,6 +1064,71 @@ class _AgentDashboardState extends State<AgentDashboard>
             child: Image.network(_fileUrl(path), fit: BoxFit.contain),
           ),
         ),
+      ),
+    );
+  }
+
+  /// Log JSONL crudo de la ultima meta del agente: que herramientas llamo,
+  /// con que args, que devolvieron, cuanto tardo el LLM. Para diagnosticar
+  /// "en que se queda atascado" sin exportar la conversacion.
+  Future<void> _showGoalLog() async {
+    String body;
+    try {
+      final resp = await http
+          .get(Uri.parse('http://127.0.0.1:8765/goal/log'))
+          .timeout(const Duration(seconds: 8));
+      final data = json.decode(resp.body);
+      final events = (data['events'] as List?) ?? const [];
+      if (events.isEmpty) {
+        body = 'Sin eventos todavia.';
+      } else {
+        final sb = StringBuffer();
+        for (final e in events) {
+          final ts = (e['ts'] ?? '').toString().substring(11, 19);
+          final ev = e['event'];
+          final d = e['data'];
+          sb.write('[$ts] $ev');
+          if (d != null) {
+            var s = json.encode(d);
+            if (s.length > 400) s = '${s.substring(0, 400)}…';
+            sb.write('  $s');
+          }
+          sb.writeln();
+        }
+        body = sb.toString();
+      }
+    } catch (e) {
+      body = 'Agente no disponible: $e';
+    }
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: _C.card,
+        title: const Text('Log de la ultima meta',
+            style: TextStyle(color: _C.textHi, fontSize: 15)),
+        content: SizedBox(
+          width: 500,
+          height: 450,
+          child: SingleChildScrollView(
+            child: SelectableText(body,
+                style: const TextStyle(
+                    color: _C.textLo, fontSize: 11, fontFamily: 'monospace')),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: body));
+              _snack('Log copiado');
+            },
+            child: const Text('Copiar', style: TextStyle(color: _C.accent)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cerrar', style: TextStyle(color: _C.textLo)),
+          ),
+        ],
       ),
     );
   }

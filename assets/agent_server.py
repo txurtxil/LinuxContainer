@@ -147,6 +147,7 @@ Finish with: <final>answer</final>
 
 RULES:
 1. NEVER emit <think> or reasoning text. Output ONLY tool calls or <final>. /no_think
+2. "netmap" is OUR topology-map tool, NOT a package. If the user asks to INSTALL something (nmap, htop, git...), use bash with apt: <tool>bash</tool><args>{"command": "apt-get install -y nmap"}</args> — never confuse the tool with the package.
 2. For LAN scans/maps: FIRST call `netscan` (one call), then `netmap` for the PNG. Do NOT hand-write nmap pipelines — raw sockets fail in proot and long one-liners break.
 3. For security audits ALWAYS use tool `audit`.
 4. NEVER invent TOOL RESULT text. Verify created files with list_dir before claiming success.
@@ -772,7 +773,10 @@ def llm_chat(messages, base_url=None, model=None, api_key=None, stats=None):
         "temperature": 0.15,
         "top_p": 0.9,
         "top_k": 40,
-        "max_tokens": 640,
+        # 448 y no mas: a ~19 tok/s cada 100 tokens extra son 5s de espera.
+        # El <think> se genera aunque luego se recorte — cuanto menor el
+        # techo, menos tiempo muerto.
+        "max_tokens": 448,
     }
     url = f"{base_url}/chat/completions"
     t0 = time.time()
@@ -1209,6 +1213,29 @@ class AgentHandler(BaseHTTPRequestHandler):
                 "steps": state["steps"],
                 "result": state["result"],
             })
+        elif path == "/goal/log":
+            # Log JSONL crudo de una meta (o de la mas reciente).
+            goal_id = qs.get("goal_id", "")
+            if not goal_id:
+                try:
+                    files = sorted(
+                        (f for f in os.listdir(LOGS_DIR) if f.endswith(".jsonl")),
+                        key=lambda f: os.path.getmtime(os.path.join(LOGS_DIR, f)),
+                        reverse=True)
+                    goal_id = files[0][:-6] if files else ""
+                except OSError:
+                    goal_id = ""
+            fp = os.path.join(LOGS_DIR, f"{goal_id}.jsonl")
+            if not goal_id or not os.path.exists(fp):
+                self._send_json({"error": "sin logs", "goal_id": goal_id},
+                                status=404)
+                return
+            try:
+                with open(fp, encoding="utf-8") as fh:
+                    lines = [json.loads(l) for l in fh if l.strip()]
+                self._send_json({"goal_id": goal_id, "events": lines[-200:]})
+            except (OSError, json.JSONDecodeError) as exc:
+                self._send_json({"error": str(exc)}, status=500)
         elif path == "/goal/list":
             self._send_json({"goals": [{
                 "goal_id": g["goal_id"],
