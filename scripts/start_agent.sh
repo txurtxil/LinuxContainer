@@ -1,5 +1,5 @@
 #!/bin/bash
-# XTR Agent — start_agent.sh v13.1
+# XTR Agent — start_agent.sh v14.1
 # Arranca el agent-server autonomo (STDLIB PURO: no necesita pip ni red)
 set -e
 
@@ -10,7 +10,7 @@ export LLM_MODEL="${LLM_MODEL:-gemma3-local}"
 export LLM_API_KEY="${LLM_API_KEY:-local}"
 export AGENT_PID_FILE="${AGENT_PID_FILE:-/tmp/agent.pid}"
 export AGENT_MAX_STEPS="${AGENT_MAX_STEPS:-15}"
-export AGENT_GOAL_TIMEOUT="${AGENT_GOAL_TIMEOUT:-600}"
+export AGENT_GOAL_TIMEOUT="${AGENT_GOAL_TIMEOUT:-300}"
 
 PY=/usr/bin/python3
 [ -x /usr/local/bin/python3 ] && PY=/usr/local/bin/python3
@@ -18,7 +18,7 @@ echo "[XTR] Usando python: $PY"
 echo "[XTR] LLM_BASE_URL=$LLM_BASE_URL"
 echo "[XTR] Modelo=$LLM_MODEL"
 echo "[XTR] Puerto=$AGENT_PORT"
-echo "[XTR] v13.1: stdlib puro, sin dependencias pip"
+echo "[XTR] v14.1: stdlib puro + telemetria tokens-tiempo"
 
 # Directorio de memoria persistente
 mkdir -p /root/agent_memory/logs

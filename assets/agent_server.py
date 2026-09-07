@@ -39,7 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "8765"))
 AGENT_PID_FILE = os.environ.get("AGENT_PID_FILE", "/tmp/agent.pid")
 AGENT_MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "15"))
-AGENT_GOAL_TIMEOUT = int(os.environ.get("AGENT_GOAL_TIMEOUT", "600"))
+AGENT_GOAL_TIMEOUT = int(os.environ.get("AGENT_GOAL_TIMEOUT", "300"))
 
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8090/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "gemma3-local")
@@ -742,7 +742,7 @@ def is_trivial_chat(message):
     return not any(h in m for h in _TASK_HINTS)
 
 
-def quick_chat(message, llm_overrides=None):
+def quick_chat(message, llm_overrides=None, stats=None):
     """Respuesta directa sin bucle agéntico ni system prompt pesado."""
     ov = llm_overrides or {}
     messages = [
@@ -754,14 +754,15 @@ def quick_chat(message, llm_overrides=None):
         {"role": "user", "content": message},
     ]
     reply = llm_chat(messages, base_url=ov.get("base_url"),
-                     model=ov.get("model"), api_key=ov.get("api_key"))
+                     model=ov.get("model"), api_key=ov.get("api_key"),
+                     stats=stats)
     import re as _re
     reply = _re.sub(r"<think>.*?</think>", " ", reply, flags=_re.DOTALL)
     reply = _re.sub(r"<think>.*$", " ", reply, flags=_re.DOTALL).strip()
     return reply or "..."
 
 
-def llm_chat(messages, base_url=None, model=None, api_key=None):
+def llm_chat(messages, base_url=None, model=None, api_key=None, stats=None):
     base_url = (base_url or LLM_BASE_URL).rstrip("/")
     model = model or LLM_MODEL
     api_key = api_key or LLM_API_KEY
@@ -774,6 +775,7 @@ def llm_chat(messages, base_url=None, model=None, api_key=None):
         "max_tokens": 640,
     }
     url = f"{base_url}/chat/completions"
+    t0 = time.time()
     try:
         status, raw = _http_post_json(url, payload, timeout=180.0, api_key=api_key)
     except urllib.error.HTTPError as exc:
@@ -786,8 +788,34 @@ def llm_chat(messages, base_url=None, model=None, api_key=None):
             f"LLM HTTP {exc.code} en {url} (model={model}). "
             f"Respuesta: {body or exc.reason}. "
             f"Revisa LLM_BASE_URL/LLM_MODEL y que MediaPipe este sirviendo el modelo.")
+    elapsed = time.time() - t0
     data = json.loads(raw)
-    return data["choices"][0]["message"]["content"]
+    text = data["choices"][0]["message"]["content"]
+    # Telemetria: tokens (usage OpenAI si el server lo da; si no, estimacion
+    # ~4 chars/token) y segundos de la llamada. stats es un dict acumulador.
+    if stats is not None:
+        usage = data.get("usage") or {}
+        ptok = usage.get("prompt_tokens") or sum(
+            len(m.get("content") or "") for m in messages) // 4
+        ctok = usage.get("completion_tokens") or max(1, len(text) // 4)
+        stats["calls"] = stats.get("calls", 0) + 1
+        stats["prompt_tokens"] = stats.get("prompt_tokens", 0) + int(ptok)
+        stats["completion_tokens"] = stats.get("completion_tokens", 0) + int(ctok)
+        stats["llm_seconds"] = stats.get("llm_seconds", 0.0) + elapsed
+        stats["last_call_seconds"] = elapsed
+    return text
+
+
+def fmt_stats(stats, total_seconds):
+    """Línea de telemetria para adjuntar a la respuesta final."""
+    if not stats or not stats.get("calls"):
+        return ""
+    mins = int(total_seconds // 60)
+    secs = int(total_seconds % 60)
+    tstr = f"{mins} min {secs} s" if mins else f"{secs} s"
+    return (f"\n\n---\n⏱ {tstr} · {stats['calls']} llamadas LLM "
+            f"({stats['llm_seconds']:.0f} s) · "
+            f"tokens ↑{stats['prompt_tokens']} ↓{stats['completion_tokens']}")
 
 
 # ---------------------------------------------------------------------------
@@ -915,6 +943,8 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
 
     final_text = None
     status = "failed"
+    stats = {}
+    t_start = time.time()
 
     for step_num in range(1, max_steps + 1):
         if time.time() > deadline:
@@ -928,7 +958,14 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
         _compress_context(messages)
         try:
             reply = llm_chat(messages, base_url=ov.get("base_url"),
-                             model=ov.get("model"), api_key=ov.get("api_key"))
+                             model=ov.get("model"), api_key=ov.get("api_key"),
+                             stats=stats)
+            # Latido por paso: la UI ve que el agente esta VIVO y cuanto
+            # tardo el LLM en responder (nada de silencio hasta el BLOCKED).
+            emit("llm_done", {"step": step_num,
+                              "seconds": round(stats.get("last_call_seconds", 0), 1),
+                              "prompt_tokens": stats.get("prompt_tokens", 0),
+                              "completion_tokens": stats.get("completion_tokens", 0)})
         except Exception as exc:
             err = f"LLM error: {exc}"
             emit("error", {"step": step_num, "error": err})
@@ -1027,12 +1064,17 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
             if status == "done":
                 status = "failed"  # afirmo exito sin evidencia
 
+    # Telemetria final: tiempo total + llamadas + tokens en la respuesta.
+    if final_text:
+        final_text += fmt_stats(stats, time.time() - t_start)
+
     state["status"] = status
     state["result"] = final_text
     state["finished_at"] = datetime.now(timezone.utc).isoformat()
+    state["stats"] = stats
 
     db_save_episode(goal, state["steps"], final_text or "", status)
-    emit("final", {"status": status, "result": final_text})
+    emit("final", {"status": status, "result": final_text, "stats": stats})
     return state
 
 
@@ -1367,6 +1409,13 @@ class AgentHandler(BaseHTTPRequestHandler):
             elif event == "tool_result":
                 send({"type": "step", "step": data.get("step"),
                       "observation": _summ(data.get("result") or {})})
+            elif event == "llm_done":
+                # Latido: el LLM respondio en N segundos. La UI lo muestra
+                # como "pensamiento" para que no haya silencios largos.
+                send({"type": "step", "step": data.get("step"),
+                      "thought": f"⚡ LLM respondió en {data.get('seconds')}s "
+                                 f"(tokens ↑{data.get('prompt_tokens')} "
+                                 f"↓{data.get('completion_tokens')})"})
             elif event == "error":
                 send({"type": "error", "error": data.get("error", "error")})
             elif event == "final":
@@ -1379,7 +1428,11 @@ class AgentHandler(BaseHTTPRequestHandler):
                 if is_trivial_chat(message):
                     send({"type": "step", "step": 1,
                           "thought": "Respuesta directa (sin herramientas)"})
-                    answer = quick_chat(message, llm_overrides=overrides)
+                    stats = {}
+                    t0 = time.time()
+                    answer = quick_chat(message, llm_overrides=overrides,
+                                        stats=stats)
+                    answer += fmt_stats(stats, time.time() - t0)
                     send({"type": "final", "answer": answer})
                     with _goals_lock:
                         GOALS[goal_id]["status"] = "done"
