@@ -1,5 +1,5 @@
 #!/bin/bash
-# XTR Agent — start_agent.sh v14.1
+# XTR Agent — start_agent.sh v14.9
 # Arranca el agent-server autonomo (STDLIB PURO: no necesita pip ni red)
 set -e
 
@@ -10,7 +10,7 @@ export LLM_MODEL="${LLM_MODEL:-gemma3-local}"
 export LLM_API_KEY="${LLM_API_KEY:-local}"
 export AGENT_PID_FILE="${AGENT_PID_FILE:-/tmp/agent.pid}"
 export AGENT_MAX_STEPS="${AGENT_MAX_STEPS:-15}"
-export AGENT_GOAL_TIMEOUT="${AGENT_GOAL_TIMEOUT:-300}"
+export AGENT_GOAL_TIMEOUT="${AGENT_GOAL_TIMEOUT:-420}"
 
 PY=/usr/bin/python3
 [ -x /usr/local/bin/python3 ] && PY=/usr/local/bin/python3
@@ -18,7 +18,7 @@ echo "[XTR] Usando python: $PY"
 echo "[XTR] LLM_BASE_URL=$LLM_BASE_URL"
 echo "[XTR] Modelo=$LLM_MODEL"
 echo "[XTR] Puerto=$AGENT_PORT"
-echo "[XTR] v14.1: stdlib puro + telemetria tokens-tiempo"
+echo "[XTR] v14.9: escaneo en fases (ping+TCP), SSDP, MAC por NetBIOS, args robustos"
 
 # Directorio de memoria persistente
 mkdir -p /root/agent_memory/logs
@@ -33,7 +33,7 @@ if [ -f "$AGENT_PID_FILE" ]; then
   fi
 fi
 
-echo "[XTR] Arrancando agent-server v13.1 en puerto $AGENT_PORT..."
+echo "[XTR] Arrancando agent-server v14.9 en puerto $AGENT_PORT..."
 nohup $PY /root/agent_server.py > /tmp/agent_server.log 2>&1 &
 echo $! > "$AGENT_PID_FILE"
 

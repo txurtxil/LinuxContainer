@@ -1,4 +1,4 @@
-# XTR Agent Server v14.0 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
+# XTR Agent Server v14.9 — Autonomous (stdlib puro: CERO pip, CERO fastapi/httpx)
 #
 # Servidor de agente IA autónomo para ejecutar DENTRO de un contenedor
 # Debian (proot) en Android. Solo usa la librería estándar de Python 3:
@@ -39,7 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "8765"))
 AGENT_PID_FILE = os.environ.get("AGENT_PID_FILE", "/tmp/agent.pid")
 AGENT_MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "15"))
-AGENT_GOAL_TIMEOUT = int(os.environ.get("AGENT_GOAL_TIMEOUT", "300"))
+AGENT_GOAL_TIMEOUT = int(os.environ.get("AGENT_GOAL_TIMEOUT", "420"))
 
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8090/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "gemma3-local")
@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "14.0"
+VERSION = "14.9"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -405,20 +405,22 @@ def _rdns(ip, timeout=1.5):
 
 
 def _netbios_name(ip, timeout=1.5):
-    """NBSTAT por UDP 137: nombres Windows/SMB. Solo stdlib."""
+    """NBSTAT por UDP 137: nombres Windows/SMB. Solo stdlib.
+    Devuelve (nombre, mac): la respuesta de estado lleva el 'unit ID'
+    (la MAC del adaptador) en los 6 bytes tras la tabla de nombres — muy
+    util en Android 10+, donde /proc/net/arp esta capado por SELinux."""
     import socket
     import struct
     tid = 0xBEEF
-    qname = b"".join(bytes([len(b" " * 15)]) + b" " * 15 + b"\x00" + b"\x00")
-    # Query: node status, '*'
+    # Query NBSTAT '*': nombre codificado CKAAA... (32 chars) + tipo 0x0021
     pkt = struct.pack(">HHHHHH", tid, 0, 1, 0, 0, 0) + b"\x20" + \
         b"CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" + b"\x00\x00!\x00\x01"
-    del qname
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(timeout)
     try:
         s.sendto(pkt, (ip, 137))
         data, _ = s.recvfrom(4096)
+        name, mac = "", ""
         if len(data) > 57:
             names = []
             n = data[56]
@@ -431,9 +433,16 @@ def _netbios_name(ip, timeout=1.5):
                 if nm and typ == 0x00:
                     names.append(nm)
                 off += 18
-            return names[0] if names else ""
+            name = names[0] if names else ""
+            # estadisticas: primeros 6 bytes tras la tabla = unit ID (MAC)
+            mac_off = 57 + 18 * n
+            if mac_off + 6 <= len(data):
+                raw = data[mac_off:mac_off + 6]
+                if raw != b"\x00" * 6:
+                    mac = ":".join("%02x" % b for b in raw)
+        return name, mac
     except Exception:
-        return ""
+        return "", ""
     finally:
         s.close()
 
@@ -482,6 +491,113 @@ def _mdns_name(ip, timeout=2.0):
         s.close()
 
 
+def _ping_supported():
+    """True si el kernel permite ping-sockets a este proceso (Android si;
+    algunos kernels endurecidos, no). Se prueba una vez por escaneo."""
+    import socket
+    try:
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM,
+                      socket.IPPROTO_ICMP).close()
+        return True
+    except Exception:
+        return False
+
+
+def _ping_host(ip, timeout=0.7):
+    """Ping ICMP por 'ping socket' (SOCK_DGRAM + IPPROTO_ICMP): Linux lo
+    permite sin root ni raw sockets (net.ipv4.ping_group_range), asi que
+    funciona en proot/Termux. Descubre hosts vivos AUNQUE no tengan
+    ningun puerto TCP abierto (p.ej. el router HaLow 192.168.10.14)."""
+    import socket
+    import struct
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM,
+                           socket.IPPROTO_ICMP) as sk:
+            sk.settimeout(timeout)
+            payload = b"XTRPING\x00\x01\x02\x03"
+            def _cs(data):
+                if len(data) % 2:
+                    data += b"\x00"
+                acc = 0
+                for i in range(0, len(data), 2):
+                    acc += (data[i] << 8) + data[i + 1]
+                acc = (acc >> 16) + (acc & 0xFFFF)
+                acc += acc >> 16
+                return ~acc & 0xFFFF
+            pid = os.getpid() & 0xFFFF
+            hdr = struct.pack("!BBHHH", 8, 0, 0, pid, 1)
+            pkt = struct.pack("!BBHHH", 8, 0, _cs(hdr + payload),
+                              pid, 1) + payload
+            t0 = time.time()
+            sk.sendto(pkt, (ip, 0))
+            while time.time() - t0 < timeout:
+                try:
+                    data, _addr = sk.recvfrom(64)
+                except socket.timeout:
+                    break
+                if data and data[0] == 0:  # ICMP echo reply
+                    return True
+    except Exception:
+        return False
+    return False
+
+
+def _ssdp_discover(timeout=2.0):
+    """UPnP/SSDP M-SEARCH al multicast 239.255.255.250:1900: routers, TVs,
+    consolas e IoT contestan con cabeceras SERVER y LOCATION (XML con
+    friendlyName/manufacturer). Una sola escucha global de ~2 s."""
+    import socket
+    req = ("M-SEARCH * HTTP/1.1\r\n"
+           "HOST: 239.255.255.250:1900\r\n"
+           'MAN: "ssdp:discover"\r\n'
+           "MX: 1\r\n"
+           "ST: ssdp:all\r\n\r\n").encode()
+    out = {}
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+            sk.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sk.settimeout(timeout)
+            sk.sendto(req, ("239.255.255.250", 1900))
+            end = time.time() + timeout
+            while time.time() < end:
+                try:
+                    data, (ip, _p) = sk.recvfrom(4096)
+                except socket.timeout:
+                    break
+                txt = data.decode("latin-1", "replace")
+                info = {}
+                for line in txt.split("\r\n"):
+                    if ":" not in line:
+                        continue
+                    k, v = line.split(":", 1)
+                    k = k.strip().upper()
+                    if k in ("SERVER", "LOCATION", "ST", "USN"):
+                        info[k.lower()] = v.strip()[:120]
+                if info and ip not in out:
+                    out[ip] = info
+    except Exception:
+        pass
+    return out
+
+
+def _ssdp_fetch_info(location, timeout=1.2):
+    """Descarga el XML de descripcion UPnP y extrae friendlyName +
+    manufacturer (regex simple: el XML de estos aparatos es basico)."""
+    import re as _re_s
+    try:
+        req = urllib.request.Request(
+            location, headers={"User-Agent": "XTR/14.9"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            xml = r.read(20000).decode("utf-8", "replace")
+        def _tag(name):
+            m = _re_s.search(r"<%s>(.*?)</%s>" % (name, name), xml, _re_s.S)
+            return m.group(1).strip()[:80] if m else ""
+        return {"friendly": _tag("friendlyName"),
+                "manufacturer": _tag("manufacturer")}
+    except Exception:
+        return {}
+
+
 def _banner(ip, port, timeout=1.5):
     """Banner grabbing: lo que el servicio saluda. SSH/HTTP se identifican."""
     import socket
@@ -493,7 +609,7 @@ def _banner(ip, port, timeout=1.5):
             if port in (80, 8080, 8000, 8888):
                 sk.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
             data = sk.recv(120).decode("ascii", "replace").strip()
-            first = data.split("\n")[0][:80]
+            first = data.split("\n")[0].strip().replace("\r", "")[:80]
             return first
     except Exception:
         return ""
@@ -501,29 +617,44 @@ def _banner(ip, port, timeout=1.5):
 
 def identify_host(ip, mac="", ports=(), deep=True):
     """Resuelve nombre (mDNS > NetBIOS > DNS inverso) + fabricante OUI +
-    banners de servicios. Todo con timeouts cortos, en paralelo por host."""
+    banners de servicios. NetBIOS se consulta SIEMPRE en modo deep porque
+    su respuesta tambien trae la MAC (unit ID), oro cuando Android capa
+    la tabla ARP. Todo con timeouts cortos, en paralelo por host."""
     name = ""
+    nb_mac = ""
     if deep:
         name = _mdns_name(ip)
+        nb_name, nb_mac = _netbios_name(ip)
         if not name:
-            name = _netbios_name(ip)
+            name = nb_name
         if not name:
             name = _rdns(ip)
+    mac = mac or nb_mac
     banners = {}
     if deep:
         for p in list(ports)[:4]:  # max 4 puertos por host para no eternizar
             b = _banner(ip, p)
             if b:
                 banners[str(p)] = b
-    return {"hostname": name, "vendor": _oui_vendor(mac), "banners": banners}
+    return {"hostname": name, "mac": mac,
+            "vendor": _oui_vendor(mac), "banners": banners}
 
+
+
+# Cache de escaneos: netmap y netscan repetidos (el modelo suele llamarlos
+# seguidos) reutilizan el resultado fresco en vez de re-barrer la LAN.
+_SCAN_CACHE = {}
+_SCAN_CACHE_TTL = 240.0  # segundos
 
 
 def tool_netscan(subnet="", ports="22,80,443,139,445,554,1883,8080,8008,8009,8443,5555,62078,9100", timeout=2, deep=True):
-    """Descubrimiento de red 100% userspace (TCP connect + tabla ARP).
-    Funciona dentro de proot, a diferencia de nmap -sn (raw sockets).
-    deep=True: identifica nombre (mDNS/NetBIOS/rDNS), fabricante (OUI)
-    y banners de servicios."""
+    """Descubrimiento de red 100% userspace, en 3 fases:
+    A) vida: ping ICMP (ping-socket, sin root) + sondas TCP rapidas — asi
+       aparecen tambien hosts SIN puertos abiertos (router HaLow, etc).
+    B) puertos: la lista completa SOLO contra los vivos (no 254 IPs).
+    C) identificacion en paralelo: mDNS/NetBIOS(+MAC)/rDNS, OUI, banners
+       y SSDP/UPnP (friendlyName + manufacturer).
+    Funciona dentro de proot, a diferencia de nmap -sn (raw sockets)."""
     import socket
     import concurrent.futures
 
@@ -550,46 +681,61 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,554,1883,8080,8008,8009,844
         subnet = detected
 
     base = subnet.split("/")[0]
-    parts = base.split(".")[:3]
-    prefix = ".".join(parts)
+    prefix = ".".join(base.split(".")[:3])
     port_list = []
     for tok in str(ports).split(","):
         tok = tok.strip()
         if tok.isdigit():
             port_list.append(int(tok))
+    port_list = sorted(set(port_list))
 
-    found = {}
+    # Cache: mismo escaneo hecho hace < TTL -> respuesta inmediata.
+    ckey = (prefix, tuple(port_list), bool(deep))
+    ent = _SCAN_CACHE.get(ckey)
+    if ent and time.time() - ent["time"] < _SCAN_CACHE_TTL:
+        cached = json.loads(json.dumps(ent["result"]))  # copia
+        cached["note"] = (cached.get("note", "") + " [cache]").strip()
+        return cached
 
-    def probe(host):
-        open_ports = []
-        for port in port_list:
+    # ---- FASE A: descubrimiento de vivos (~15-20 s en el peor caso) ----
+    # ping ICMP (sin root) + sondas TCP cortas. Cada intento TCP ademas
+    # puebla la cache ARP del kernel.
+    probe_ports = [80, 443, 22, 445, 139, 8080, 21, 554, 62078]
+    alive = {}
+    icmp_ok = _ping_supported()
+
+    def discover(host):
+        up = _ping_host(host, 0.7) if icmp_ok else False
+        open_probe = []
+        for p in probe_ports:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
-                    sk.settimeout(timeout)
-                    if sk.connect_ex((host, port)) == 0:
-                        open_ports.append(port)
+                    sk.settimeout(0.5)
+                    if sk.connect_ex((host, p)) == 0:
+                        up = True
+                        open_probe.append(p)
             except Exception:
                 pass
-        if open_ports:
-            found[host] = open_ports
+        if up:
+            alive[host] = open_probe
 
-    # 1) TCP connect sweep en paralelo (marca hosts con puertos abiertos).
-    # Cada intento de conexion (falle o no) puebla la tabla ARP del kernel.
     with concurrent.futures.ThreadPoolExecutor(max_workers=64) as ex:
-        list(ex.map(probe, [f"{prefix}.{i}" for i in range(1, 255)]))
+        list(ex.map(discover, [f"{prefix}.{i}" for i in range(1, 255)]))
 
-    # 2) vecinos del kernel: /proc/net/arp Y `ip neigh` (iproute2 si esta).
-    #    El barrido TCP de arriba hace que aparezcan TODOS los vivos, no
-    #    solo los que tenian algun puerto de la lista abierto.
+    # Vecinos del kernel (si Android deja leerlos) + gateway + nosotros.
     arp_hosts = {}
     try:
         with open("/proc/net/arp", "r") as fh:
             for line in fh.readlines()[1:]:
                 cols = line.split()
-                if len(cols) >= 6 and cols[2] != "0x0" and cols[5] != "00:00:00:00:00:00":
-                    ip, mac = cols[0], cols[4]
-                    if ip.startswith(prefix + "."):
+                # Formato real: IP  HWtype  Flags  HWaddress  Mask  Device
+                # (la MAC es la COLUMNA 3, no la 4: la 4 es la Mask)
+                if len(cols) >= 6 and cols[2] != "0x0":
+                    ip, mac = cols[0], cols[3].lower()
+                    if (mac != "00:00:00:00:00:00"
+                            and ip.startswith(prefix + ".")):
                         arp_hosts[ip] = mac
+                        alive.setdefault(ip, [])
     except Exception:
         pass
     try:
@@ -600,34 +746,62 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,554,1883,8080,8008,8009,844
                 r"^(" + _re_neigh.escape(prefix) + r"\.\d+)\s+.*lladdr\s+"
                 r"([0-9a-f:]{17})", out, _re_neigh.M):
             arp_hosts.setdefault(mip[0], mip[1])
+            alive.setdefault(mip[0], [])
     except Exception:
         pass
-    # 3) el gateway SIEMPRE aparece (esta vivo por definicion)
+    gateway = ""
     try:
         with open("/proc/net/route", "r") as fh:
             for line in fh.readlines()[1:]:
                 cols = line.split("\t")
                 if len(cols) > 2 and cols[1] == "00000000":
-                    gw = socket.inet_ntoa(
-                        bytes.fromhex(cols[2])[::-1])
+                    gw = socket.inet_ntoa(bytes.fromhex(cols[2])[::-1])
                     if gw.startswith(prefix + "."):
-                        arp_hosts.setdefault(gw, "")
+                        gateway = gw
+                        alive.setdefault(gw, [])
     except Exception:
         pass
+    if local_ip:
+        alive.setdefault(local_ip, [])
+
+    # ---- FASE B: puertos completos SOLO contra los vivos (~2-5 s) ----
+    found = {}
+    full_list = sorted(set(port_list) | set(probe_ports))
+    port_timeout = min(float(timeout), 1.5)
+
+    def scan_ports(host):
+        open_ = set(alive.get(host, []))
+        for p in full_list:
+            if p in open_:
+                continue
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+                    sk.settimeout(port_timeout)
+                    if sk.connect_ex((host, p)) == 0:
+                        open_.add(p)
+            except Exception:
+                pass
+        found[host] = sorted(open_)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=48) as ex:
+        list(ex.map(scan_ports, list(alive)))
 
     hosts = []
-    for ip in sorted(set(found) | set(arp_hosts),
-                     key=lambda x: int(x.split(".")[-1])):
+    for ip in sorted(alive, key=lambda x: int(x.split(".")[-1])):
         hosts.append({
             "ip": ip,
             "mac": arp_hosts.get(ip, ""),
             "open_ports": found.get(ip, []),
         })
+    if local_ip:
+        for h in hosts:
+            if h["ip"] == local_ip:
+                h["self"] = True
 
-    # 4) identificacion profunda EN PARALELO: nombre (mDNS/NetBIOS/rDNS) +
-    #    fabricante OUI + banners de servicios abiertos.
-    if deep:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+    # ---- FASE C: identificacion profunda en paralelo + SSDP global ----
+    if deep and hosts:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=17) as ex:
+            fut_ssdp = ex.submit(_ssdp_discover, 2.0)
             futures = {
                 ex.submit(identify_host, h["ip"], h["mac"],
                           h["open_ports"], True): h
@@ -637,39 +811,99 @@ def tool_netscan(subnet="", ports="22,80,443,139,445,554,1883,8080,8008,8009,844
                     futures[fut].update(fut.result())
                 except Exception:
                     pass
+            try:
+                ssdp = fut_ssdp.result(timeout=4)
+            except Exception:
+                ssdp = {}
+        # Enriquecer con SSDP: banner 'upnp' y, si faltan nombre/fabricante,
+        # descargar el XML de descripcion (en paralelo, solo donde haga falta).
+        need = []
+        for h in hosts:
+            info = ssdp.get(h["ip"])
+            if not info:
+                continue
+            if info.get("server"):
+                h.setdefault("banners", {})["upnp"] = info["server"]
+            if info.get("location") and (not h.get("hostname")
+                                         or not h.get("vendor")):
+                need.append((h, info["location"]))
+        if need:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                futs = {ex.submit(_ssdp_fetch_info, loc): h
+                        for h, loc in need[:12]}
+                for fut in concurrent.futures.as_completed(futs):
+                    try:
+                        xml = fut.result()
+                    except Exception:
+                        xml = {}
+                    h = futs[fut]
+                    if xml.get("friendly") and not h.get("hostname"):
+                        h["hostname"] = xml["friendly"]
+                    if xml.get("manufacturer") and not h.get("vendor"):
+                        h["vendor"] = xml["manufacturer"]
+
     for h in hosts:
         h.setdefault("hostname", "")
+        h.setdefault("mac", "")
         h.setdefault("vendor", _oui_vendor(h.get("mac", "")))
         h.setdefault("banners", {})
+        if h.get("self") and not h["hostname"]:
+            h["hostname"] = "XTR (este dispositivo)"
 
     result = {
         "exit_code": 0,
         "subnet": f"{prefix}.0/24",
+        "gateway": gateway,
+        "icmp": icmp_ok,
         "hosts_found": len(hosts),
         "hosts": hosts,
-        "method": "tcp-connect + arp-table (proot safe)",
+        "method": ("icmp-ping + " if icmp_ok else "")
+                  + "tcp-connect + mdns/netbios/ssdp (proot safe)",
     }
     if note:
         result["note"] = note
+    _SCAN_CACHE[ckey] = {"time": time.time(), "result": result}
     return result
 
 
 def tool_netmap(subnet="", output="/root/scan_red.png"):
     """Escanea la LAN (netscan) y genera el mapa topologico PNG en una sola
-    llamada. Determinista: no depende de que el modelo escriba codigo."""
+    llamada. Determinista: no depende de que el modelo escriba codigo.
+    Reutiliza el cache de netscan: si el modelo llamo antes a netscan,
+    NO se re-barre la red (ahorra ~2 min)."""
+    import tempfile
     # Fuerza ruta absoluta: el modelo a veces manda "netmap.png" a secas y
     # luego la galeria no encuentra el archivo.
     if output and not output.startswith("/"):
         output = "/root/" + output
-    scan = tool_netscan(subnet=subnet)
+    # Reutiliza cualquier netscan fresco de la misma subred.
+    prefix_hint = ""
+    if subnet and str(subnet).strip().lower() not in ("auto", "auto-detect", "detect"):
+        prefix_hint = ".".join(str(subnet).split("/")[0].split(".")[:3])
+    scan = None
+    now = time.time()
+    for (pfx, _pl, _deep), ent in list(_SCAN_CACHE.items()):
+        if now - ent["time"] < _SCAN_CACHE_TTL and (not prefix_hint
+                                                    or pfx == prefix_hint):
+            scan = ent["result"]
+            break
+    if scan is None:
+        scan = tool_netscan(subnet=subnet)
     if scan.get("exit_code") != 0:
         return scan
     hosts = scan["hosts"]
 
+    # Los hosts viajan en un fichero JSON aparte. Antes se incrustaban en
+    # el codigo fuente con json.loads('...') y cualquier banner con \r o
+    # comilla simple rompia el script de dibujo entero.
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as jf:
+        json.dump(hosts, jf)
+        hosts_json = jf.name
+
     # script de dibujo con matplotlib (si falta, intenta instalarlo)
     draw = f"""
 import json, math, sys
-hosts = json.loads('{json.dumps(hosts)}')
+hosts = json.load(open({hosts_json!r}))
 out = {output!r}
 try:
     import matplotlib
@@ -734,6 +968,7 @@ print('OK', out)
     try:
         import os as _os
         _os.unlink(script)
+        _os.unlink(hosts_json)
     except OSError:
         pass
 
@@ -1088,6 +1323,33 @@ def fmt_stats(stats, total_seconds):
 # ---------------------------------------------------------------------------
 
 
+def _loads_tool_args(raw_args):
+    """JSON tolerante con las chapuzas del modelo local:
+    - quita fences ```json ... ```
+    - acepta basura tras el objeto ("};", texto suelto) tomando el primer
+      objeto JSON balanceado con raw_decode.
+    """
+    s = (raw_args or "").strip()
+    if s.startswith("```"):
+        s = s.strip("`").strip()
+        if s[:4].lower() == "json":
+            s = s[4:].strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    dec = json.JSONDecoder()
+    for i, ch in enumerate(s):
+        if ch == "{":
+            try:
+                obj, _end = dec.raw_decode(s[i:])
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                continue
+    return {"_raw": raw_args, "_error": "invalid JSON args"}
+
+
 def parse_tool_calls(text):
     calls = []
     pos = 0
@@ -1102,10 +1364,7 @@ def parse_tool_calls(text):
             break
         name = text[t_start + 6:t_end].strip()
         raw_args = text[a_start + 6:a_end].strip()
-        try:
-            args = json.loads(raw_args)
-        except json.JSONDecodeError:
-            args = {"_raw": raw_args, "_error": "invalid JSON args"}
+        args = _loads_tool_args(raw_args)
         calls.append({"tool": name, "args": args})
         pos = a_end + 7
     return calls
@@ -1360,13 +1619,13 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
         for h in scan_hosts[:20]:
             ports = ",".join(str(p) for p in h.get("open_ports", [])) or "-"
             name = h.get("hostname") or ""
-            vend = h.get("vendor") or ""
+            vend = h.get("vendor") or h.get("mac") or ""
             tag = " ".join(x for x in (name, vend) if x)
             lines.append(f"  {h['ip']:16} {ports:22} {tag}".rstrip())
             for p, b in list((h.get("banners") or {}).items())[:3]:
                 lines.append(f"      :{p} -> {b}")
         if not scan_hosts:
-            lines.append("  (ningun host con puertos abiertos de la lista "
+            lines.append("  (ningun host vivo: ni ping, ni puertos TCP, "
                          "ni vecinos en la tabla ARP)")
         final_text += "\n".join(lines)
 
