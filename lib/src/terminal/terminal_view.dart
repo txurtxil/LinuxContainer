@@ -10,7 +10,6 @@ import 'keybar_settings_screen.dart';
 import '../agent/agent_dashboard.dart';
 import '../agent/agent_services.dart';
 import 'clipboard_vault.dart';
-import 'clipboard_vault_sheet.dart';
 import 'selection_overlay_termux.dart';
 import '../ssh/ssh_host.dart';
 import '../ssh/ssh_hosts_service.dart';
@@ -30,6 +29,10 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
   static const int _maxSessions = 5;
+
+  /// Versión visible en la barra de título. La actualiza el instalador de
+  /// cada release (sed sobre este literal) — no editar a mano.
+  static const String _appVersion = 'v14.4';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
 
@@ -258,19 +261,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     _active.controller.setSelection(base, extent);
   }
 
-  /// Solo lo que se ve ahora mismo en el viewport, no el scrollback.
-  /// Deliberadamente limitado: para "todo lo que ha pasado" está "Sesión
-  /// completa" en el Portapapeles.
-  String _visibleText() {
-    final buffer = _active.terminal.buffer;
-    final sb = StringBuffer();
-    for (int i = 0; i < _active.terminal.viewHeight; i++) {
-      final line = buffer.lines[buffer.height - _active.terminal.viewHeight + i];
-      sb.writeln(line.toString().trimRight());
-    }
-    return sb.toString().trimRight();
-  }
-
   void _toast(String msg) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -292,111 +282,107 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     );
   }
 
-  void _showMenu() {
-    showModalBottomSheet(
+  void _showSessions() {
+    showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF1A1A1A),
-      isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Row(
-                  children: [
-                    const Icon(Icons.tab, color: Colors.lightBlueAccent, size: 18),
-                    const SizedBox(width: 8),
-                    Text('Sesiones (${_sessions.length}/$_maxSessions)', style:
-const TextStyle(color: Colors.lightBlueAccent, fontWeight: FontWeight.bold)),
-                  ],
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ..._sessions.asMap().entries.map((e) {
+              final i = e.key;
+              final s = e.value;
+              final active = i == _activeIndex;
+              return ListTile(
+                dense: true,
+                leading: Icon(
+                  s.sourceHost != null ? Icons.dns_rounded : Icons.computer,
+                  size: 20,
+                  color: s.sourceHost != null ? Colors.lightBlueAccent : Colors.tealAccent,
                 ),
-              ),
-              ..._sessions.asMap().entries.map((e) {
-                final i = e.key;
-                final s = e.value;
-                final active = i == _activeIndex;
-                return ListTile(
-                  dense: true,
-                  leading: Icon(active ? Icons.radio_button_checked : Icons.radio_button_unchecked, color: active ? Colors.greenAccent : Colors.white38, size: 20),
-                  title: Text(s.name, style: TextStyle(color: active ? Colors.white : Colors.white70)),
-                  trailing: _sessions.length > 1
-                      ? IconButton(icon: const Icon(Icons.close, color: Colors.redAccent, size: 18), onPressed: () { Navigator.pop(ctx); _closeSession(i); })
-                      : null,
-                  onTap: () { Navigator.pop(ctx); _switchTo(i); },
-                );
-              }),
-              if (_sessions.length < _maxSessions)
-                ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.add, color: Colors.greenAccent, size: 20),
-                  title: const Text('Nueva sesión', style: TextStyle(color: Colors.white)),
-                  onTap: () { Navigator.pop(ctx); _addSession(); },
+                title: Text(s.name, style: TextStyle(color: active ? Colors.white : Colors.white70)),
+                subtitle: Text(
+                  s.sourceHost != null ? s.sourceHost!.name : 'Sesión local (Debian)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Colors.white38),
                 ),
-              const Divider(color: Colors.white24),
-              ListTile(
-                leading: const Icon(Icons.dns_rounded, color: Colors.lightBlueAccent),
-                title: const Text('Hosts SSH', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Conectar a otro servidor', style: TextStyle(color: Colors.white54)),
-                onTap: () { Navigator.pop(ctx); _openHosts(); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.content_paste, color: Colors.greenAccent),
-                title: const Text('Pegar', style: TextStyle(color: Colors.white)),
-                onTap: () { Navigator.pop(ctx); _paste(); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.content_paste_rounded, color: Colors.greenAccent),
-                title: const Text('Portapapeles', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Sesión completa, última salida, errores…', style: TextStyle(color: Colors.white54)),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showClipboardVault(
-                    context,
-                    recorder: _active.recorder,
-                    sessionLabel: _sessions.length > 1 ? _active.name : null,
-                    getVisibleText: _visibleText,
-                  );
-                },
-              ),
-              const Divider(color: Colors.white24),
-              ListTile(
-                leading: const Icon(Icons.keyboard, color: Colors.greenAccent),
-                title: const Text('Configurar teclado', style: TextStyle(color:
-Colors.white)),
-                subtitle: const Text('Mostrar, ocultar y reordenar teclas', style: TextStyle(color: Colors.white54)),
-                onTap: () { Navigator.pop(ctx); _openKeybarSettings(); },
-              ),
-              ListTile(
-                leading: const Icon(Icons.format_size, color: Colors.greenAccent),
-                title: const Text('Tamaño de fuente', style: TextStyle(color: Colors.white)),
-                subtitle: Text('${_fontSize.toInt()} pt', style: const TextStyle(color: Colors.white54)),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    IconButton(icon: const Icon(Icons.remove, color: Colors.white), onPressed: () { _changeFont(-1); Navigator.pop(ctx); _showMenu(); }),
-                    IconButton(icon: const Icon(Icons.add, color: Colors.white), onPressed: () { _changeFont(1); Navigator.pop(ctx); _showMenu(); }),
+                    if (active) const Icon(Icons.check, color: Colors.greenAccent, size: 20),
+                    if (_sessions.length > 1)
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.redAccent, size: 18),
+                        tooltip: 'Cerrar sesión',
+                        onPressed: () { Navigator.pop(ctx); _closeSession(i); },
+                      ),
                   ],
                 ),
-              ),
+                onTap: () { Navigator.pop(ctx); _switchTo(i); },
+              );
+            }),
+            const Divider(color: Colors.white24),
+            if (_sessions.length < _maxSessions)
               ListTile(
-                leading: const Icon(Icons.cleaning_services, color: Colors.greenAccent),
-                title: const Text('Limpiar pantalla', style: TextStyle(color: Colors.white)),
-                onTap: () { _active.terminal.charInput('l'.codeUnitAt(0), ctrl:
-true); Navigator.pop(ctx); },
+                dense: true,
+                leading: const Icon(Icons.add, color: Colors.greenAccent, size: 20),
+                title: const Text('Nueva sesión', style: TextStyle(color: Colors.white)),
+                onTap: () { Navigator.pop(ctx); _addSession(); },
               ),
-              ListTile(
-                leading: const Icon(Icons.restart_alt, color: Colors.amberAccent),
-                title: const Text('Reiniciar sesión actual', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _active.restart(columns: _active.terminal.viewWidth, rows: _active.terminal.viewHeight);
-                },
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.restart_alt, color: Colors.amberAccent, size: 20),
+              title: const Text('Reiniciar sesión actual', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _active.restart(columns: _active.terminal.viewWidth, rows: _active.terminal.viewHeight);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSettings() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A1A),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.keyboard, color: Colors.greenAccent),
+              title: const Text('Configurar teclado', style: TextStyle(color: Colors.white)),
+              subtitle: const Text('Mostrar, ocultar y reordenar teclas', style: TextStyle(color: Colors.white54)),
+              onTap: () { Navigator.pop(ctx); _openKeybarSettings(); },
+            ),
+            ListTile(
+              leading: const Icon(Icons.format_size, color: Colors.greenAccent),
+              title: const Text('Tamaño de fuente', style: TextStyle(color: Colors.white)),
+              subtitle: Text('${_fontSize.toInt()} pt', style: const TextStyle(color: Colors.white54)),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.remove, color: Colors.white),
+                    tooltip: 'Reducir fuente',
+                    onPressed: () { _changeFont(-1); Navigator.pop(ctx); _showSettings(); },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.add, color: Colors.white),
+                    tooltip: 'Aumentar fuente',
+                    onPressed: () { _changeFont(1); Navigator.pop(ctx); _showSettings(); },
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-            ],
-          ),
+            ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -492,47 +478,74 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
   Widget _terminalView() {
     return Column(
       children: [
-        // Barra superior de la terminal con botón para volver al Agente.
+        // Barra superior: navegación + acciones principales. Hosts SSH/SFTP
+        // siempre visibles (lo más usado); el resto vive en hojas: tocar el
+        // título abre las sesiones y ⋮ del keybar abre ajustes.
         Container(
           color: const Color(0xFF1A1A1A),
           padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
           child: Row(
             children: [
               IconButton(
-                tooltip: 'Volver al Agente',
+                tooltip: 'Agente IA',
                 onPressed: () => setState(() => _showAgent = true),
-                icon: const Icon(Icons.smart_toy_outlined,
-                    color: Colors.lightBlueAccent, size: 22),
+                icon: const Icon(Icons.psychology, color: Colors.lightBlueAccent, size: 22),
               ),
               const SizedBox(width: 2),
               Expanded(
-                child: Text(
-                  _sessions.length > 1
-                      ? '${_active.name} (${_activeIndex + 1}/${_sessions.length})'
-                      : 'Terminal · Debian  v1.3',
-                  style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 13,
-                      fontFamily: 'monospace'),
-                  overflow: TextOverflow.ellipsis,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _showSessions,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text.rich(
+                          TextSpan(
+                            children: [
+                              const TextSpan(text: 'XTR Terminal '),
+                              const TextSpan(
+                                text: _appVersion,
+                                style: TextStyle(color: Colors.white38),
+                              ),
+                              if (_sessions.length > 1)
+                                TextSpan(
+                                  text: '  ·  ${_active.name} ${_activeIndex + 1}/${_sessions.length}',
+                                  style: const TextStyle(color: Colors.white38),
+                                ),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                      const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white38),
+                    ],
+                  ),
                 ),
+              ),
+              IconButton(
+                tooltip: 'Hosts SSH / SFTP',
+                onPressed: _openHosts,
+                icon: const Icon(Icons.dns_rounded, color: Colors.lightBlueAccent, size: 22),
               ),
               if (_active.sourceHost != null)
                 IconButton(
                   tooltip: 'Abrir SFTP de este host',
                   onPressed: () => _openSftpForHost(_active.sourceHost!),
-                  icon: const Icon(Icons.folder_open, color: Colors.lightBlueAccent, size: 22),
+                  icon: const Icon(Icons.folder_open, color: Colors.amberAccent, size: 22),
                 ),
-              IconButton(
-                tooltip: 'Nueva sesión',
-                onPressed: _sessions.length < _maxSessions ? () => _addSession() : null,
-                icon: const Icon(Icons.add, color: Colors.greenAccent, size: 22),
-              ),
-              IconButton(
-                tooltip: 'Menú',
-                onPressed: _showMenu,
-                icon: const Icon(Icons.more_vert, color: Colors.white70, size: 22),
-              ),
+              if (_sessions.length < _maxSessions)
+                IconButton(
+                  tooltip: 'Nueva sesión',
+                  onPressed: _addSession,
+                  icon: const Icon(Icons.add, color: Colors.greenAccent, size: 22),
+                ),
             ],
           ),
         ),
@@ -579,7 +592,7 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
           config: _keybarConfig,
           onFontIncrease: () => _changeFont(1),
           onFontDecrease: () => _changeFont(-1),
-          onMenu: _showMenu,
+          onMenu: _showSettings,
         ),
       ],
     );
