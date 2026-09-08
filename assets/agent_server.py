@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "14.9"
+VERSION = "14.12"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -1167,9 +1167,25 @@ def execute_tool(name, args):
 # Cliente LLM (urllib, API OpenAI-compatible)
 # ---------------------------------------------------------------------------
 
+# v14.12: proveedores remotos (Groq, OpenRouter...) van detras de Cloudflare,
+# que BLOQUEA el User-Agent por defecto de Python ("Python-urllib/3.x") con
+# HTTP 403 "error code: 1010" ANTES de llegar a la API. Navegador real => pasa.
+_UA_BROWSER = ("Mozilla/5.0 (Linux; Android 15; SM-F966B Build/AP3A.240905.015.A2) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 "
+               "Mobile Safari/537.36")
+
+
+def _is_local_url(url):
+    return url.startswith(("http://127.0.0.1", "http://localhost",
+                           "http://10.0.2.2", "http://[::1]"))
+
 
 def _http_get(url, timeout=5.0):
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {LLM_API_KEY}"})
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {LLM_API_KEY}",
+        "User-Agent": _UA_BROWSER,
+        "Accept": "application/json",
+    })
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.status, resp.read().decode("utf-8", errors="replace")
 
@@ -1181,6 +1197,8 @@ def _http_post_json(url, payload, timeout=180.0, api_key=None):
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key or LLM_API_KEY}",
+            "User-Agent": _UA_BROWSER,
+            "Accept": "application/json",
         })
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.status, resp.read().decode("utf-8", errors="replace")
@@ -1268,12 +1286,15 @@ def llm_chat(messages, base_url=None, model=None, api_key=None, stats=None):
         "messages": messages,
         "temperature": 0.15,
         "top_p": 0.9,
-        "top_k": 40,
         # 448 y no mas: a ~19 tok/s cada 100 tokens extra son 5s de espera.
         # El <think> se genera aunque luego se recorte — cuanto menor el
         # techo, menos tiempo muerto.
         "max_tokens": 448,
     }
+    # top_k NO es estandar OpenAI: lo acepta el servidor local (MediaPipe)
+    # pero proveedores remotos (Groq...) pueden rechazar el payload con 400.
+    if _is_local_url(base_url):
+        payload["top_k"] = 40
     url = f"{base_url}/chat/completions"
     t0 = time.time()
     try:
@@ -1284,10 +1305,24 @@ def llm_chat(messages, base_url=None, model=None, api_key=None, stats=None):
             body = exc.read().decode("utf-8", errors="replace")[:300]
         except Exception:
             pass
+        # Diagnostico segun endpoint: local (MediaPipe) vs remoto (Groq...).
+        if _is_local_url(base_url):
+            hint = ("Revisa LLM_BASE_URL/LLM_MODEL y que MediaPipe este "
+                    "sirviendo el modelo.")
+        elif exc.code in (401, 403) and "1010" not in body:
+            hint = ("Autenticacion rechazada: revisa la API key del "
+                    "proveedor en Ajustes > Fuente de inferencia.")
+        elif "1010" in body:
+            hint = ("Cloudflare bloqueo la peticion (error 1010): "
+                    "User-Agent no aceptado por el proveedor.")
+        elif exc.code == 404 or "model" in body.lower():
+            hint = (f"El modelo '{model}' no existe en ese proveedor: "
+                    "revisa el ID exacto en su consola.")
+        else:
+            hint = "Revisa LLM_BASE_URL/LLM_MODEL del proveedor."
         raise RuntimeError(
             f"LLM HTTP {exc.code} en {url} (model={model}). "
-            f"Respuesta: {body or exc.reason}. "
-            f"Revisa LLM_BASE_URL/LLM_MODEL y que MediaPipe este sirviendo el modelo.")
+            f"Respuesta: {body or exc.reason}. {hint}")
     elapsed = time.time() - t0
     data = json.loads(raw)
     text = data["choices"][0]["message"]["content"]
