@@ -20,6 +20,7 @@ dependencies:
   flutter_secure_storage: ^11.0.0
   shared_preferences: ^2.2.3
   file_selector: ^1.0.3
+  share_plus: ^13.3.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

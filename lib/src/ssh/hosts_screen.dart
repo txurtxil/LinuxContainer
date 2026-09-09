@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'ssh_host.dart';
 import 'ssh_hosts_service.dart';
@@ -74,16 +76,18 @@ class _HostsScreenState extends State<HostsScreen> {
     final jsonString = const JsonEncoder.withIndent('  ').convert(list);
     
     try {
-      final FileSaveLocation? result = await getSaveLocation(suggestedName: 'xtr_hosts_backup.json');
-      if (result != null) {
-        final file = XFile.fromData(utf8.encode(jsonString));
-        await file.saveTo(result.path);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Hosts exportados correctamente al archivo')));
-        }
-      }
+      final file = XFile.fromData(
+        utf8.encode(jsonString),
+        name: 'xtr_hosts_backup.json',
+        mimeType: 'application/json',
+      );
+      // Usar share_plus esquiva el error UnimplementedError de file_selector en Android
+      await Share.shareXFiles([file], text: 'Copia de seguridad de Hosts XTR');
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al exportar: $e')));
+      if (mounted) {
+        Clipboard.setData(ClipboardData(text: jsonString));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error al crear archivo. Copiado al portapapeles como alternativa.')));
+      }
     }
   }
 

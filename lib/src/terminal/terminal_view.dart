@@ -32,7 +32,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
   static const int _maxSessions = 5;
-  static const String _appVersion = 'v14.16';
+  static const String _appVersion = 'v14.17';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
   final List<String> _logLines = [];
@@ -322,17 +322,26 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   void _showQuickScripts(TerminalSession s) {
     showModalBottomSheet<void>(
       context: context, backgroundColor: const Color(0xFF1A1A1A),
+      isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(title: Text('Utilidades', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), dense: true),
-            const Divider(color: Colors.white24),
-            _scriptTile(ctx, s, 'Copiar toda la sesión', '', icon: Icons.copy_all, customAction: () => _copyEntireSession(s)),
-            _scriptTile(ctx, s, 'Limpiar terminal (clear)', 'clear\n', icon: Icons.cleaning_services),
-            _scriptTile(ctx, s, 'Autocompletar (Doble Tab)', '\t\t', icon: Icons.keyboard_tab),
-            const SizedBox(height: 8),
-          ],
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(title: Text('Utilidades', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), dense: true),
+              const Divider(color: Colors.white24),
+              _scriptTile(ctx, s, 'Autocompletar (Doble Tab)', '\t\t', icon: Icons.keyboard_tab),
+              _scriptTile(ctx, s, 'Tabular', '\t', icon: Icons.space_bar),
+              _scriptTile(ctx, s, 'Copiar toda la sesión', '', icon: Icons.copy_all, customAction: () => _copyEntireSession(s)),
+              _scriptTile(ctx, s, 'Limpiar terminal (clear)', 'clear\n', icon: Icons.cleaning_services),
+              _scriptTile(ctx, s, 'Espacio en disco (df -h)', 'df -h\n', icon: Icons.storage),
+              _scriptTile(ctx, s, 'Mapeos de unidades (mount)', 'mount | column -t\n', icon: Icons.usb),
+              _scriptTile(ctx, s, 'Info de red (ip a)', 'ip a\n', icon: Icons.network_cell),
+              _scriptTile(ctx, s, 'Tabla ARP/Vecinos (ip neigh)', 'ip neigh\n', icon: Icons.router),
+              _scriptTile(ctx, s, 'Procesos activos (htop/top)', 'htop\n', icon: Icons.memory),
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
       ),
     );
