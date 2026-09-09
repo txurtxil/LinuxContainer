@@ -1,12 +1,7 @@
 // lib/src/ssh/hosts_screen.dart
-//
-// Lista de hosts, al estilo Termius de la captura: icono, nombre, y
-// "usuario@host:puerto" debajo. Deliberadamente NO sabe nada de terminales
-// ni de proot — solo gestiona la lista y avisa via onConnect(host) cuando
-// tocas uno. Quien la use decide que hacer con eso (abrir una pestana con
-// `ssh ...` es la idea, pero esta pantalla no lo impone).
-
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'ssh_host.dart';
 import 'ssh_hosts_service.dart';
 import 'ssh_credentials_store.dart';
@@ -40,15 +35,9 @@ const Map<String, IconData> _osIcons = {
 
 class HostsScreen extends StatefulWidget {
   final void Function(SshHost host) onConnect;
-  /// Si se pasa, cada host muestra un icono extra para abrir el explorador
-  /// SFTP directamente (sin pasar por una pestaña de terminal).
   final String? rootfsPath;
-  /// Callback DISTINTO de onConnect para cuando "Abrir terminal SSH" se
-  /// pulsa DESDE DENTRO del explorador SFTP (no desde esta lista). onConnect
-  /// ya trae su propio pop() pensado para cerrar solo esta pantalla; desde
-  /// el explorador hay una pantalla mas de por medio, asi que hace falta
-  /// una navegacion distinta (quien la reciba decide cuanto cerrar).
   final void Function(SshHost host)? onOpenTerminalFromSftp;
+
   const HostsScreen({
     super.key,
     required this.onConnect,
@@ -79,9 +68,113 @@ class _HostsScreenState extends State<HostsScreen> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _exportHosts() async {
+    final hosts = _svc.hosts;
+    final list = [];
+    
+    for (final h in hosts) {
+      final json = h.toJson();
+      final pwd = await SshCredentialsStore.readPassword(h.id);
+      if (pwd != null && pwd.isNotEmpty) {
+        json['password_export'] = pwd; // Clave temporal solo para el export
+      }
+      list.add(json);
+    }
+    
+    final jsonString = const JsonEncoder.withIndent('  ').convert(list);
+    
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _C.card,
+        title: const Text('Exportar Hosts', style: TextStyle(color: _C.textHi)),
+        content: SingleChildScrollView(
+          child: SelectableText(jsonString, style: const TextStyle(color: _C.textLo, fontSize: 11, fontFamily: 'monospace')),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cerrar', style: TextStyle(color: _C.textLo)),
+          ),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: jsonString));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copiado al portapapeles')));
+              Navigator.pop(ctx);
+            },
+            child: const Text('Copiar JSON', style: TextStyle(color: _C.accent)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _importHosts() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _C.card,
+        title: const Text('Importar Hosts', style: TextStyle(color: _C.textHi)),
+        content: TextField(
+          controller: ctrl,
+          maxLines: 8,
+          style: const TextStyle(color: _C.textHi, fontSize: 12, fontFamily: 'monospace'),
+          decoration: InputDecoration(
+            hintText: 'Pega el JSON exportado aquí...',
+            hintStyle: const TextStyle(color: _C.textLo),
+            filled: true,
+            fillColor: _C.cardAlt,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: _C.textLo)),
+          ),
+          TextButton(
+            onPressed: () async {
+              try {
+                final list = jsonDecode(ctrl.text) as List<dynamic>;
+                int count = 0;
+                for (final item in list) {
+                  final map = item as Map<String, dynamic>;
+                  final pwd = map.remove('password_export') as String?;
+                  final host = SshHost.fromJson(map);
+                  
+                  final existing = _svc.hosts.where((h) => h.id == host.id).toList();
+                  if (existing.isNotEmpty) {
+                    await _svc.update(host);
+                  } else {
+                    await _svc.add(host);
+                  }
+                  
+                  if (pwd != null && pwd.isNotEmpty) {
+                    await SshCredentialsStore.savePassword(host.id, pwd);
+                  }
+                  count++;
+                }
+                if (mounted) {
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$count hosts importados/actualizados')));
+                }
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error: JSON inválido o corrupto')));
+              }
+            },
+            child: const Text('Importar', style: TextStyle(color: _C.accent)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final hosts = _svc.hosts;
+
     return Scaffold(
       backgroundColor: _C.bg,
       appBar: AppBar(
@@ -98,12 +191,24 @@ class _HostsScreenState extends State<HostsScreen> {
               if (mounted) setState(() {});
             },
           ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, color: _C.textLo),
+            color: _C.card,
+            onSelected: (val) {
+              if (val == 'export') _exportHosts();
+              if (val == 'import') _importHosts();
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(value: 'export', child: Text('Exportar hosts', style: TextStyle(color: _C.textHi))),
+              const PopupMenuItem(value: 'import', child: Text('Importar hosts', style: TextStyle(color: _C.textHi))),
+            ],
+          ),
         ],
       ),
       body: hosts.isEmpty
-          ? Center(
+          ? const Center(
               child: Text('Sin hosts todavía · toca + para añadir uno',
-                  style: const TextStyle(color: _C.textLo, fontSize: 13)),
+                  style: TextStyle(color: _C.textLo, fontSize: 13)),
             )
           : ListView.builder(
               padding: const EdgeInsets.symmetric(vertical: 8),
@@ -121,6 +226,7 @@ class _HostsScreenState extends State<HostsScreen> {
   Widget _hostTile(SshHost h) {
     final color = _osColors[h.osTag] ?? _osColors['generic']!;
     final icon = _osIcons[h.osTag] ?? _osIcons['generic']!;
+
     return Dismissible(
       key: ValueKey(h.id),
       direction: DismissDirection.endToStart,
@@ -166,8 +272,6 @@ class _HostsScreenState extends State<HostsScreen> {
                         onOpenTerminal: widget.onOpenTerminalFromSftp,
                       ),
                     )).then((_) {
-                      // Al volver puede haber cambiado el estado de conexion
-                      // (por ejemplo, si se desconecto desde dentro).
                       if (mounted) setState(() {});
                     }),
                   ),
@@ -250,9 +354,6 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
     _password = TextEditingController();
     _osTag = e?.osTag ?? 'generic';
 
-    // La contrasena vive en almacenamiento cifrado, no en el host -- se
-    // carga aparte y de forma asincrona. Un host nuevo no tiene id todavia,
-    // asi que no hay nada que cargar hasta la primera vez que se guarde.
     if (e != null) {
       SshCredentialsStore.readPassword(e.id).then((pwd) {
         if (mounted && pwd != null) setState(() => _password.text = pwd);
@@ -312,10 +413,8 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
         osTag: _osTag,
       ));
     }
-
-    // Contrasena aparte, cifrada -- nunca dentro del objeto SshHost.
+    
     await SshCredentialsStore.savePassword(hostId, password);
-
     if (mounted) Navigator.pop(context);
   }
 
