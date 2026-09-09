@@ -32,7 +32,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
   static const int _maxSessions = 5;
-  static const String _appVersion = 'v14.18';
+  static const String _appVersion = 'v14.19';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
   final List<String> _logLines = [];
@@ -225,12 +225,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     s.controller.clearSelection();
   }
 
-  Future<void> _paste() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text;
-    if (text != null && text.isNotEmpty) _active.terminal.textInput(text);
-  }
-
   void _selectAll() {
     final buf = _active.terminal.buffer;
     final topAbsolute = (buf.height - buf.viewHeight - buf.scrollBack).clamp(0, buf.height - 1).toInt();
@@ -248,38 +242,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => KeybarSettingsScreen(initial: _keybarConfig, onChanged: (newConfig) { setState(() => _keybarConfig = List.from(newConfig)); }),
     ));
-  }
-
-  void _showSessions() {
-    showModalBottomSheet<void>(
-      context: context, backgroundColor: const Color(0xFF1A1A1A),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ..._sessions.asMap().entries.map((e) {
-              final i = e.key; final s = e.value; final active = i == _activeIndex;
-              return ListTile(
-                dense: true,
-                leading: Icon(s.sourceHost != null ? Icons.dns_rounded : Icons.computer, size: 20, color: s.sourceHost != null ? Colors.lightBlueAccent : Colors.tealAccent),
-                title: Text(s.name, style: TextStyle(color: active ? Colors.white : Colors.white70)),
-                subtitle: Text(s.sourceHost != null ? s.sourceHost!.name : 'Sesión local (Debian)', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.white38)),
-                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (active) const Icon(Icons.check, color: Colors.greenAccent, size: 20),
-                  if (_sessions.length > 1) IconButton(icon: const Icon(Icons.close, color: Colors.redAccent, size: 18), onPressed: () { Navigator.pop(ctx); _closeSession(i); }),
-                ]),
-                onTap: () { Navigator.pop(ctx); _switchTo(i); },
-              );
-            }),
-            const Divider(color: Colors.white24),
-            if (_sessions.length < _maxSessions)
-              ListTile(dense: true, leading: const Icon(Icons.add, color: Colors.greenAccent, size: 20), title: const Text('Nueva sesión', style: TextStyle(color: Colors.white)), onTap: () { Navigator.pop(ctx); _addSession(); }),
-            ListTile(dense: true, leading: const Icon(Icons.restart_alt, color: Colors.amberAccent, size: 20), title: const Text('Reiniciar sesión actual', style: TextStyle(color: Colors.white)), onTap: () { Navigator.pop(ctx); _active.restart(columns: _active.terminal.viewWidth, rows: _active.terminal.viewHeight); }),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
   }
 
   void _showSettings() {
@@ -331,9 +293,19 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
               const ListTile(title: Text('Utilidades', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), dense: true),
               const Divider(color: Colors.white24),
               _scriptTile(ctx, s, 'Autocompletar (Doble Tab)', '\t\t', icon: Icons.keyboard_tab),
-              _scriptTile(ctx, s, 'Pegar', '', icon: Icons.paste, customAction: () async { Navigator.pop(ctx); await _paste(); }),
-              _scriptTile(ctx, s, 'Copiar toda la sesión', '', icon: Icons.copy_all, customAction: () => _copyEntireSession(s)),
+              _scriptTile(ctx, s, 'Pegar', '', icon: Icons.paste, customAction: () async {
+                final data = await Clipboard.getData(Clipboard.kTextPlain);
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (data?.text != null && data!.text!.isNotEmpty) {
+                  s.terminal.textInput(data.text!);
+                }
+              }),
+              _scriptTile(ctx, s, 'Copiar toda la sesión', '', icon: Icons.copy_all, customAction: () { Navigator.pop(ctx); _copyEntireSession(s); }),
               _scriptTile(ctx, s, 'Limpiar terminal (clear)', 'clear\n', icon: Icons.cleaning_services),
+              _scriptTile(ctx, s, 'Reiniciar sesión actual', '', icon: Icons.restart_alt, customAction: () {
+                Navigator.pop(ctx);
+                s.restart(columns: s.terminal.viewWidth, rows: s.terminal.viewHeight);
+              }),
               _scriptTile(ctx, s, 'Espacio en disco (df -h)', 'df -h\n', icon: Icons.storage),
               _scriptTile(ctx, s, 'Mapeos de unidades (mount)', 'mount | column -t\n', icon: Icons.usb),
               _scriptTile(ctx, s, 'Info de red (ip a)', 'ip a\n', icon: Icons.network_cell),
@@ -352,10 +324,10 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       dense: true, leading: Icon(icon ?? Icons.code, color: Colors.lightBlueAccent, size: 20),
       title: Text(label, style: const TextStyle(color: Colors.white)),
       onTap: () {
-        Navigator.pop(ctx);
         if (customAction != null) {
           customAction();
         } else {
+          Navigator.pop(ctx);
           s.terminal.textInput(cmd);
         }
       },
@@ -392,20 +364,52 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
           child: Row(
             children: [
               IconButton(tooltip: 'Agente IA', onPressed: () => setState(() => _showAgent = true), icon: const Icon(Icons.psychology, color: Colors.lightBlueAccent, size: 22)),
-              const SizedBox(width: 2),
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque, onTap: _showSessions,
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Flexible(child: Text.rich(TextSpan(children: [const TextSpan(text: 'XTR Terminal '), const TextSpan(text: _appVersion, style: TextStyle(color: Colors.white38)), if (_sessions.length > 1) TextSpan(text: '  ·  ${_active.name} ${_activeIndex + 1}/${_sessions.length}', style: const TextStyle(color: Colors.white38))]), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70, fontSize: 13, fontFamily: 'monospace'))),
-                    const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white38),
-                  ]),
-                ),
-              ),
+              const SizedBox(width: 8),
+              const Expanded(child: Text('XTR Terminal $_appVersion', style: TextStyle(color: Colors.white70, fontSize: 14, fontFamily: 'monospace', fontWeight: FontWeight.bold))),
               IconButton(tooltip: 'Hosts SSH / SFTP', onPressed: _openHosts, icon: const Icon(Icons.dns_rounded, color: Colors.lightBlueAccent, size: 22)),
               if (_active.sourceHost != null) IconButton(tooltip: _sftpOpen.contains(_active) ? 'Volver a la shell' : 'SFTP de este host', onPressed: () => _toggleSftp(_active), icon: Icon(_sftpOpen.contains(_active) ? Icons.terminal : Icons.folder_open, color: Colors.amberAccent, size: 22)),
               if (_sessions.length < _maxSessions) IconButton(tooltip: 'Nueva sesión', onPressed: _addSession, icon: const Icon(Icons.add, color: Colors.greenAccent, size: 22)),
             ],
+          ),
+        ),
+        Container(
+          height: 38,
+          color: const Color(0xFF121212),
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            itemCount: _sessions.length,
+            itemBuilder: (context, i) {
+              final s = _sessions[i];
+              final isActive = i == _activeIndex;
+              return GestureDetector(
+                onTap: () => _switchTo(i),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: isActive ? const Color(0xFF2A2A2A) : Colors.transparent,
+                    border: Border(bottom: BorderSide(color: isActive ? Colors.lightBlueAccent : Colors.transparent, width: 2)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(s.sourceHost != null ? Icons.dns_rounded : Icons.computer, size: 14, color: s.sourceHost != null ? Colors.lightBlueAccent : Colors.tealAccent),
+                      const SizedBox(width: 8),
+                      Text(s.name, style: TextStyle(color: isActive ? Colors.white : Colors.white54, fontSize: 13, fontWeight: isActive ? FontWeight.bold : FontWeight.normal)),
+                      if (_sessions.length > 1) ...[
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => _closeSession(i),
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), shape: BoxShape.circle),
+                            child: const Icon(Icons.close, size: 12, color: Colors.white70),
+                          ),
+                        )
+                      ]
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
         ),
         Expanded(
@@ -421,7 +425,10 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
                 onDoubleTap: () => _showQuickScripts(s),
                 child: TermuxSelectionOverlay(
                   terminal: s.terminal, controller: s.controller, terminalViewKey: viewKey, scrollController: s.scrollController,
-                  onCopy: _copySelection, onPaste: _paste, onSelectAll: _selectAll,
+                  onCopy: _copySelection, onPaste: () async {
+                    final data = await Clipboard.getData(Clipboard.kTextPlain);
+                    if (data?.text != null && data!.text!.isNotEmpty) s.terminal.textInput(data.text!);
+                  }, onSelectAll: _selectAll,
                   child: TerminalView(s.terminal, key: viewKey, controller: s.controller, focusNode: focusNode, autofocus: true, backgroundOpacity: 1.0, deleteDetection: true, keyboardType: TextInputType.visiblePassword, scrollController: s.scrollController, textStyle: TerminalStyle(fontSize: _fontSize, fontFamily: 'monospace')),
                 ),
               );
