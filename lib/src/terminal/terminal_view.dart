@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 
 import '../container/container_manager.dart';
@@ -35,7 +36,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   /// Versión visible en la barra de título. La actualiza el instalador de
   /// cada release (sed sobre este literal) — no editar a mano.
-  static const String _appVersion = 'v14.13';
+  static const String _appVersion = 'v14.14';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
   final List<String> _logLines = [];
@@ -43,6 +44,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   bool _spinning = false;
   bool _booting = true;
   bool _showAgent = false;
+  bool _showHostsOnStartup = false;
   String? _error;
 
   final Map<int, FocusNode> _focusNodes = {};
@@ -87,6 +89,9 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   Future<void> _boot() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      _showHostsOnStartup = prefs.getBool('showHostsOnStartup') ?? false;
+
       _keybarConfig = await KeybarConfig.load();
       await _manager.initContainer(log: _appendLog);
 
@@ -107,7 +112,12 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
       SchedulerBinding.instance.addPostFrameCallback((_) {
         WidgetsBinding.instance.endOfFrame.then((_) {
-          if (mounted) _startActiveSession();
+          if (mounted) {
+            _startActiveSession();
+            if (_showHostsOnStartup) {
+              Future.delayed(const Duration(milliseconds: 150), _openHosts);
+            }
+          }
         });
       });
     } catch (e) {
@@ -361,37 +371,60 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       context: context,
       backgroundColor: const Color(0xFF1A1A1A),
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.keyboard, color: Colors.greenAccent),
-              title: const Text('Configurar teclado', style: TextStyle(color: Colors.white)),
-              subtitle: const Text('Mostrar, ocultar y reordenar teclas', style: TextStyle(color: Colors.white54)),
-              onTap: () { Navigator.pop(ctx); _openKeybarSettings(); },
-            ),
-            ListTile(
-              leading: const Icon(Icons.format_size, color: Colors.greenAccent),
-              title: const Text('Tamaño de fuente', style: TextStyle(color: Colors.white)),
-              subtitle: Text('${_fontSize.toInt()} pt', style: const TextStyle(color: Colors.white54)),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.remove, color: Colors.white),
-                    tooltip: 'Reducir fuente',
-                    onPressed: () { _changeFont(-1); Navigator.pop(ctx); _showSettings(); },
+        child: StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.keyboard, color: Colors.greenAccent),
+                  title: const Text('Configurar teclado', style: TextStyle(color: Colors.white)),
+                  subtitle: const Text('Mostrar, ocultar y reordenar teclas', style: TextStyle(color: Colors.white54)),
+                  onTap: () { Navigator.pop(ctx); _openKeybarSettings(); },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.format_size, color: Colors.greenAccent),
+                  title: const Text('Tamaño de fuente', style: TextStyle(color: Colors.white)),
+                  subtitle: Text('${_fontSize.toInt()} pt', style: const TextStyle(color: Colors.white54)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.remove, color: Colors.white),
+                        tooltip: 'Reducir fuente',
+                        onPressed: () {
+                          _changeFont(-1);
+                          setModalState(() {});
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add, color: Colors.white),
+                        tooltip: 'Aumentar fuente',
+                        onPressed: () {
+                          _changeFont(1);
+                          setModalState(() {});
+                        },
+                      ),
+                    ],
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.add, color: Colors.white),
-                    tooltip: 'Aumentar fuente',
-                    onPressed: () { _changeFont(1); Navigator.pop(ctx); _showSettings(); },
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-          ],
+                ),
+                SwitchListTile(
+                  activeColor: Colors.greenAccent,
+                  secondary: const Icon(Icons.rocket_launch, color: Colors.amberAccent),
+                  title: const Text('Arranque directo en Hosts', style: TextStyle(color: Colors.white)),
+                  subtitle: const Text('Abrir lista SSH/SFTP automáticamente al iniciar', style: TextStyle(color: Colors.white54)),
+                  value: _showHostsOnStartup,
+                  onChanged: (bool value) async {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('showHostsOnStartup', value);
+                    setState(() => _showHostsOnStartup = value);
+                    setModalState(() => _showHostsOnStartup = value);
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -602,8 +635,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
               final focusNode = _focusNodes.putIfAbsent(i, () => FocusNode());
               final viewKey = _viewKeys.putIfAbsent(i, () => GlobalKey<TerminalViewState>());
               
-              // Modificación central v14.13: Detector translúcido que permite convivir
-              // con los gestos base del SelectionOverlay y TerminalView.
               final terminalPane = GestureDetector(
                 behavior: HitTestBehavior.translucent,
                 onDoubleTap: () => _showQuickScripts(s),
