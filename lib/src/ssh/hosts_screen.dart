@@ -1,7 +1,7 @@
-// lib/src/ssh/hosts_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:file_selector/file_selector.dart';
+
 import 'ssh_host.dart';
 import 'ssh_hosts_service.dart';
 import 'ssh_credentials_store.dart';
@@ -20,17 +20,12 @@ class _C {
 }
 
 const Map<String, Color> _osColors = {
-  'debian': Color(0xFFD70A53),
-  'ubuntu': Color(0xFFE95420),
-  'raspbian': Color(0xFFC51A4A),
-  'generic': Color(0xFF2D5F8A),
+  'debian': Color(0xFFD70A53), 'ubuntu': Color(0xFFE95420),
+  'raspbian': Color(0xFFC51A4A), 'generic': Color(0xFF2D5F8A),
 };
-
 const Map<String, IconData> _osIcons = {
-  'debian': Icons.blur_circular,
-  'ubuntu': Icons.blur_circular,
-  'raspbian': Icons.blur_circular,
-  'generic': Icons.dns_rounded,
+  'debian': Icons.blur_circular, 'ubuntu': Icons.blur_circular,
+  'raspbian': Icons.blur_circular, 'generic': Icons.dns_rounded,
 };
 
 class HostsScreen extends StatefulWidget {
@@ -38,12 +33,7 @@ class HostsScreen extends StatefulWidget {
   final String? rootfsPath;
   final void Function(SshHost host)? onOpenTerminalFromSftp;
 
-  const HostsScreen({
-    super.key,
-    required this.onConnect,
-    this.rootfsPath,
-    this.onOpenTerminalFromSftp,
-  });
+  const HostsScreen({super.key, required this.onConnect, this.rootfsPath, this.onOpenTerminalFromSftp});
 
   @override
   State<HostsScreen> createState() => _HostsScreenState();
@@ -76,105 +66,64 @@ class _HostsScreenState extends State<HostsScreen> {
       final json = h.toJson();
       final pwd = await SshCredentialsStore.readPassword(h.id);
       if (pwd != null && pwd.isNotEmpty) {
-        json['password_export'] = pwd; // Clave temporal solo para el export
+        json['password_export'] = pwd;
       }
       list.add(json);
     }
     
     final jsonString = const JsonEncoder.withIndent('  ').convert(list);
     
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _C.card,
-        title: const Text('Exportar Hosts', style: TextStyle(color: _C.textHi)),
-        content: SingleChildScrollView(
-          child: SelectableText(jsonString, style: const TextStyle(color: _C.textLo, fontSize: 11, fontFamily: 'monospace')),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cerrar', style: TextStyle(color: _C.textLo)),
-          ),
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: jsonString));
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copiado al portapapeles')));
-              Navigator.pop(ctx);
-            },
-            child: const Text('Copiar JSON', style: TextStyle(color: _C.accent)),
-          ),
-        ],
-      ),
-    );
+    try {
+      final FileSaveLocation? result = await getSaveLocation(suggestedName: 'xtr_hosts_backup.json');
+      if (result != null) {
+        final file = XFile.fromData(utf8.encode(jsonString));
+        await file.saveTo(result.path);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Hosts exportados correctamente al archivo')));
+        }
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al exportar: $e')));
+    }
   }
 
-  void _importHosts() {
-    final ctrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _C.card,
-        title: const Text('Importar Hosts', style: TextStyle(color: _C.textHi)),
-        content: TextField(
-          controller: ctrl,
-          maxLines: 8,
-          style: const TextStyle(color: _C.textHi, fontSize: 12, fontFamily: 'monospace'),
-          decoration: InputDecoration(
-            hintText: 'Pega el JSON exportado aquí...',
-            hintStyle: const TextStyle(color: _C.textLo),
-            filled: true,
-            fillColor: _C.cardAlt,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar', style: TextStyle(color: _C.textLo)),
-          ),
-          TextButton(
-            onPressed: () async {
-              try {
-                final list = jsonDecode(ctrl.text) as List<dynamic>;
-                int count = 0;
-                for (final item in list) {
-                  final map = item as Map<String, dynamic>;
-                  final pwd = map.remove('password_export') as String?;
-                  final host = SshHost.fromJson(map);
-                  
-                  final existing = _svc.hosts.where((h) => h.id == host.id).toList();
-                  if (existing.isNotEmpty) {
-                    await _svc.update(host);
-                  } else {
-                    await _svc.add(host);
-                  }
-                  
-                  if (pwd != null && pwd.isNotEmpty) {
-                    await SshCredentialsStore.savePassword(host.id, pwd);
-                  }
-                  count++;
-                }
-                if (mounted) {
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$count hosts importados/actualizados')));
-                }
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error: JSON inválido o corrupto')));
-              }
-            },
-            child: const Text('Importar', style: TextStyle(color: _C.accent)),
-          ),
-        ],
-      ),
-    );
+  Future<void> _importHosts() async {
+    try {
+      const XTypeGroup typeGroup = XTypeGroup(label: 'JSONs', extensions: <String>['json']);
+      final XFile? file = await openFile(acceptedTypeGroups: <XTypeGroup>[typeGroup]);
+      
+      if (file == null) return;
+      
+      final content = await file.readAsString();
+      final list = jsonDecode(content) as List<dynamic>;
+      int count = 0;
+      
+      for (final item in list) {
+        final map = item as Map<String, dynamic>;
+        final pwd = map.remove('password_export') as String?;
+        final host = SshHost.fromJson(map);
+        
+        final existing = _svc.hosts.where((h) => h.id == host.id).toList();
+        if (existing.isNotEmpty) {
+          await _svc.update(host);
+        } else {
+          await _svc.add(host);
+        }
+        
+        if (pwd != null && pwd.isNotEmpty) {
+          await SshCredentialsStore.savePassword(host.id, pwd);
+        }
+        count++;
+      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$count hosts importados con éxito')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error: Archivo inválido o corrupto')));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final hosts = _svc.hosts;
-
     return Scaffold(
       backgroundColor: _C.bg,
       appBar: AppBar(
@@ -199,17 +148,14 @@ class _HostsScreenState extends State<HostsScreen> {
               if (val == 'import') _importHosts();
             },
             itemBuilder: (ctx) => [
-              const PopupMenuItem(value: 'export', child: Text('Exportar hosts', style: TextStyle(color: _C.textHi))),
-              const PopupMenuItem(value: 'import', child: Text('Importar hosts', style: TextStyle(color: _C.textHi))),
+              const PopupMenuItem(value: 'export', child: Text('Exportar hosts a fichero', style: TextStyle(color: _C.textHi))),
+              const PopupMenuItem(value: 'import', child: Text('Importar hosts de fichero', style: TextStyle(color: _C.textHi))),
             ],
           ),
         ],
       ),
       body: hosts.isEmpty
-          ? const Center(
-              child: Text('Sin hosts todavía · toca + para añadir uno',
-                  style: TextStyle(color: _C.textLo, fontSize: 13)),
-            )
+          ? const Center(child: Text('Sin hosts todavía · toca + para añadir uno', style: TextStyle(color: _C.textLo, fontSize: 13)))
           : ListView.builder(
               padding: const EdgeInsets.symmetric(vertical: 8),
               itemCount: hosts.length,
@@ -226,35 +172,16 @@ class _HostsScreenState extends State<HostsScreen> {
   Widget _hostTile(SshHost h) {
     final color = _osColors[h.osTag] ?? _osColors['generic']!;
     final icon = _osIcons[h.osTag] ?? _osIcons['generic']!;
-
     return Dismissible(
-      key: ValueKey(h.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        color: _C.err,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        child: const Icon(Icons.delete, color: Colors.white),
-      ),
-      confirmDismiss: (_) => _confirmDelete(h),
-      onDismissed: (_) => _svc.remove(h.id),
+      key: ValueKey(h.id), direction: DismissDirection.endToStart,
+      background: Container(color: _C.err, alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete, color: Colors.white)),
+      confirmDismiss: (_) => _confirmDelete(h), onDismissed: (_) => _svc.remove(h.id),
       child: ListTile(
-        onTap: () async {
-          await _svc.touch(h.id);
-          widget.onConnect(h);
-        },
+        onTap: () async { await _svc.touch(h.id); widget.onConnect(h); },
         onLongPress: () => _openEditor(existing: h),
-        leading: Container(
-          width: 42,
-          height: 42,
-          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(10)),
-          child: Icon(icon, color: Colors.white, size: 22),
-        ),
+        leading: Container(width: 42, height: 42, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: Colors.white, size: 22)),
         title: Text(h.name, style: const TextStyle(color: _C.textHi, fontWeight: FontWeight.w500)),
-        subtitle: Text(
-          '${h.username}@${h.hostname}${h.port != 22 ? ':${h.port}' : ''}',
-          style: const TextStyle(color: _C.textLo, fontSize: 12),
-        ),
+        subtitle: Text('${h.username}@${h.hostname}${h.port != 22 ? ':${h.port}' : ''}', style: const TextStyle(color: _C.textLo, fontSize: 12)),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -264,27 +191,12 @@ class _HostsScreenState extends State<HostsScreen> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.folder_open, color: _C.textLo, size: 20),
-                    tooltip: 'Explorar archivos (SFTP)',
                     onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => SftpBrowserScreen(
-                        host: h,
-                        rootfsPath: widget.rootfsPath!,
-                        onOpenTerminal: widget.onOpenTerminalFromSftp,
-                      ),
-                    )).then((_) {
-                      if (mounted) setState(() {});
-                    }),
+                      builder: (_) => SftpBrowserScreen(host: h, rootfsPath: widget.rootfsPath!, onOpenTerminal: widget.onOpenTerminalFromSftp),
+                    )).then((_) { if (mounted) setState(() {}); }),
                   ),
                   if (SftpConnectionPool.instance.isConnected(h.id))
-                    Positioned(
-                      right: 6,
-                      top: 6,
-                      child: Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(color: Color(0xFF34C759), shape: BoxShape.circle),
-                      ),
-                    ),
+                    Positioned(right: 6, top: 6, child: Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF34C759), shape: BoxShape.circle))),
                 ],
               ),
             const Icon(Icons.chevron_right, color: _C.textLo),
@@ -302,10 +214,8 @@ class _HostsScreenState extends State<HostsScreen> {
         title: const Text('¿Eliminar host?', style: TextStyle(color: _C.textHi)),
         content: Text(h.name, style: const TextStyle(color: _C.textLo)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancelar', style: TextStyle(color: _C.textLo))),
-          TextButton(onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Eliminar', style: TextStyle(color: _C.err))),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar', style: TextStyle(color: _C.textLo))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Eliminar', style: TextStyle(color: _C.err))),
         ],
       ),
     );
@@ -313,31 +223,19 @@ class _HostsScreenState extends State<HostsScreen> {
   }
 
   void _openEditor({SshHost? existing}) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => _HostEditorSheet(existing: existing),
-    );
+    showModalBottomSheet(context: context, backgroundColor: Colors.transparent, isScrollControlled: true, builder: (_) => _HostEditorSheet(existing: existing));
   }
 }
 
 class _HostEditorSheet extends StatefulWidget {
   final SshHost? existing;
   const _HostEditorSheet({this.existing});
-
   @override
   State<_HostEditorSheet> createState() => _HostEditorSheetState();
 }
 
 class _HostEditorSheetState extends State<_HostEditorSheet> {
-  late final TextEditingController _name;
-  late final TextEditingController _hostname;
-  late final TextEditingController _port;
-  late final TextEditingController _username;
-  late final TextEditingController _keyPath;
-  late final TextEditingController _password;
-  late final TextEditingController _initialPath;
+  late final TextEditingController _name, _hostname, _port, _username, _keyPath, _password, _initialPath;
   String _osTag = 'generic';
   bool _obscurePassword = true;
 
@@ -353,35 +251,13 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
     _initialPath = TextEditingController(text: e?.initialPath ?? '');
     _password = TextEditingController();
     _osTag = e?.osTag ?? 'generic';
-
-    if (e != null) {
-      SshCredentialsStore.readPassword(e.id).then((pwd) {
-        if (mounted && pwd != null) setState(() => _password.text = pwd);
-      });
-    }
+    if (e != null) SshCredentialsStore.readPassword(e.id).then((pwd) { if (mounted && pwd != null) setState(() => _password.text = pwd); });
   }
 
   @override
-  void dispose() {
-    _name.dispose();
-    _hostname.dispose();
-    _port.dispose();
-    _username.dispose();
-    _keyPath.dispose();
-    _password.dispose();
-    _initialPath.dispose();
-    super.dispose();
-  }
+  void dispose() { _name.dispose(); _hostname.dispose(); _port.dispose(); _username.dispose(); _keyPath.dispose(); _password.dispose(); _initialPath.dispose(); super.dispose(); }
 
-  InputDecoration _dec(String label, {String? hint}) => InputDecoration(
-        labelText: label,
-        hintText: hint,
-        labelStyle: const TextStyle(color: _C.textLo),
-        hintStyle: const TextStyle(color: _C.textLo),
-        filled: true,
-        fillColor: _C.cardAlt,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-      );
+  InputDecoration _dec(String label, {String? hint}) => InputDecoration(labelText: label, hintText: hint, labelStyle: const TextStyle(color: _C.textLo), hintStyle: const TextStyle(color: _C.textLo), filled: true, fillColor: _C.cardAlt, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none));
 
   Future<void> _save() async {
     final hostname = _hostname.text.trim();
@@ -397,21 +273,10 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
     String hostId;
     if (widget.existing != null) {
       hostId = widget.existing!.id;
-      await SshHostsService.instance.update(widget.existing!.copyWith(
-        name: name, hostname: hostname, port: port, username: username,
-        keyPath: keyPath.isEmpty ? null : keyPath,
-        initialPath: initialPath.isEmpty ? null : initialPath,
-        osTag: _osTag,
-      ));
+      await SshHostsService.instance.update(widget.existing!.copyWith(name: name, hostname: hostname, port: port, username: username, keyPath: keyPath.isEmpty ? null : keyPath, initialPath: initialPath.isEmpty ? null : initialPath, osTag: _osTag));
     } else {
       hostId = SshHostsService.instance.newId();
-      await SshHostsService.instance.add(SshHost(
-        id: hostId,
-        name: name, hostname: hostname, port: port, username: username,
-        keyPath: keyPath.isEmpty ? null : keyPath,
-        initialPath: initialPath.isEmpty ? null : initialPath,
-        osTag: _osTag,
-      ));
+      await SshHostsService.instance.add(SshHost(id: hostId, name: name, hostname: hostname, port: port, username: username, keyPath: keyPath.isEmpty ? null : keyPath, initialPath: initialPath.isEmpty ? null : initialPath, osTag: _osTag));
     }
     
     await SshCredentialsStore.savePassword(hostId, password);
@@ -423,88 +288,29 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: Container(
-        decoration: const BoxDecoration(
-          color: _C.bg,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-        ),
+        decoration: const BoxDecoration(color: _C.bg, borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         child: SingleChildScrollView(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
             children: [
-              Text(widget.existing == null ? 'Nuevo host' : 'Editar host',
-                  style: const TextStyle(color: _C.textHi, fontSize: 17, fontWeight: FontWeight.w600)),
+              Text(widget.existing == null ? 'Nuevo host' : 'Editar host', style: const TextStyle(color: _C.textHi, fontSize: 17, fontWeight: FontWeight.w600)),
               const SizedBox(height: 14),
-              TextField(controller: _name, style: const TextStyle(color: _C.textHi),
-                  decoration: _dec('Nombre', hint: 'RPi5, opcional — usa el host si se deja vacío')),
+              TextField(controller: _name, style: const TextStyle(color: _C.textHi), decoration: _dec('Nombre', hint: 'RPi5, opcional')),
               const SizedBox(height: 10),
-              TextField(controller: _hostname, style: const TextStyle(color: _C.textHi),
-                  decoration: _dec('Host', hint: '192.168.10.140 o dominio')),
+              TextField(controller: _hostname, style: const TextStyle(color: _C.textHi), decoration: _dec('Host', hint: '192.168.10.140 o dominio')),
               const SizedBox(height: 10),
-              Row(children: [
-                Expanded(
-                  flex: 2,
-                  child: TextField(controller: _username, style: const TextStyle(color: _C.textHi),
-                      decoration: _dec('Usuario')),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TextField(controller: _port, keyboardType: TextInputType.number,
-                      style: const TextStyle(color: _C.textHi), decoration: _dec('Puerto')),
-                ),
-              ]),
+              Row(children: [ Expanded(flex: 2, child: TextField(controller: _username, style: const TextStyle(color: _C.textHi), decoration: _dec('Usuario'))), const SizedBox(width: 10), Expanded(child: TextField(controller: _port, keyboardType: TextInputType.number, style: const TextStyle(color: _C.textHi), decoration: _dec('Puerto'))), ]),
               const SizedBox(height: 10),
-              TextField(controller: _keyPath, style: const TextStyle(color: _C.textHi),
-                  decoration: _dec('Clave privada (opcional)', hint: '/root/.ssh/id_ed25519')),
+              TextField(controller: _keyPath, style: const TextStyle(color: _C.textHi), decoration: _dec('Clave privada (opcional)', hint: '/root/.ssh/id_ed25519')),
               const SizedBox(height: 10),
-              TextField(
-                controller: _password,
-                obscureText: _obscurePassword,
-                style: const TextStyle(color: _C.textHi),
-                decoration: _dec('Contrasena (opcional)', hint: 'Se guarda cifrada, no en texto plano').copyWith(
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility,
-                        color: _C.textLo, size: 18),
-                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                  ),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.only(top: 4, left: 4),
-                child: Text(
-                  'Se usa en el explorador de archivos (SFTP). En una pestana de terminal '
-                  'normal seguiras tecleandola tu, como en cualquier ssh.',
-                  style: TextStyle(color: _C.textLo, fontSize: 10.5),
-                ),
-              ),
+              TextField(controller: _password, obscureText: _obscurePassword, style: const TextStyle(color: _C.textHi), decoration: _dec('Contraseña (opcional)', hint: 'Se guarda cifrada').copyWith(suffixIcon: IconButton(icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility, color: _C.textLo, size: 18), onPressed: () => setState(() => _obscurePassword = !_obscurePassword)))),
               const SizedBox(height: 10),
-              TextField(controller: _initialPath, style: const TextStyle(color: _C.textHi),
-                  decoration: _dec('Carpeta inicial (opcional)', hint: '/  o  /var/www')),
+              TextField(controller: _initialPath, style: const TextStyle(color: _C.textHi), decoration: _dec('Carpeta inicial (opcional)', hint: '/  o  /var/www')),
               const SizedBox(height: 14),
-              Wrap(
-                spacing: 8,
-                children: _osColors.keys.map((tag) {
-                  final selected = tag == _osTag;
-                  return ChoiceChip(
-                    label: Text(tag),
-                    selected: selected,
-                    onSelected: (_) => setState(() => _osTag = tag),
-                    selectedColor: _osColors[tag],
-                    backgroundColor: _C.cardAlt,
-                    labelStyle: TextStyle(color: selected ? Colors.white : _C.textLo, fontSize: 12),
-                  );
-                }).toList(),
-              ),
+              Wrap(spacing: 8, children: _osColors.keys.map((tag) { final selected = tag == _osTag; return ChoiceChip(label: Text(tag), selected: selected, onSelected: (_) => setState(() => _osTag = tag), selectedColor: _osColors[tag], backgroundColor: _C.cardAlt, labelStyle: TextStyle(color: selected ? Colors.white : _C.textLo, fontSize: 12)); }).toList()),
               const SizedBox(height: 18),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _save,
-                  style: ElevatedButton.styleFrom(backgroundColor: _C.accent, padding: const EdgeInsets.symmetric(vertical: 14)),
-                  child: Text(widget.existing == null ? 'Añadir' : 'Guardar', style: const TextStyle(color: Colors.white)),
-                ),
-              ),
+              SizedBox(width: double.infinity, child: ElevatedButton(onPressed: _save, style: ElevatedButton.styleFrom(backgroundColor: _C.accent, padding: const EdgeInsets.symmetric(vertical: 14)), child: Text(widget.existing == null ? 'Añadir' : 'Guardar', style: const TextStyle(color: Colors.white)))),
             ],
           ),
         ),

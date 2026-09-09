@@ -23,7 +23,6 @@ import '../sftp/sftp_favorites_service.dart';
 
 class TerminalScreen extends StatefulWidget {
   const TerminalScreen({super.key});
-
   @override
   State<TerminalScreen> createState() => _TerminalScreenState();
 }
@@ -33,10 +32,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
   static const int _maxSessions = 5;
-
-  /// Versión visible en la barra de título. La actualiza el instalador de
-  /// cada release (sed sobre este literal) — no editar a mano.
-  static const String _appVersion = 'v14.14';
+  static const String _appVersion = 'v14.16';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
   final List<String> _logLines = [];
@@ -49,7 +45,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   final Map<int, FocusNode> _focusNodes = {};
   final Map<int, GlobalKey<TerminalViewState>> _viewKeys = {};
-
   final Set<TerminalSession> _sftpOpened = {};
   final Set<TerminalSession> _sftpOpen = {};
 
@@ -122,28 +117,17 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _booting = false;
-      });
+      setState(() { _error = e.toString(); _booting = false; });
     }
   }
 
   void _addSession({bool initial = false}) {
-    if (_sessions.length >= _maxSessions) {
-      _toast('Máximo $_maxSessions sesiones');
-      return;
-    }
-    final n = _sessions.length + 1;
-    final session = TerminalSession('Sesión $n');
-    _sessions.add(session);
-
+    if (_sessions.length >= _maxSessions) { _toast('Máximo $_maxSessions sesiones'); return; }
+    _sessions.add(TerminalSession('Sesión ${_sessions.length + 1}'));
     if (!initial) {
       setState(() => _activeIndex = _sessions.length - 1);
       SchedulerBinding.instance.addPostFrameCallback((_) {
-        WidgetsBinding.instance.endOfFrame.then((_) {
-          if (mounted) _startActiveSession();
-        });
+        WidgetsBinding.instance.endOfFrame.then((_) { if (mounted) _startActiveSession(); });
       });
     }
   }
@@ -155,14 +139,9 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   }
 
   Future<void> _connectToHost(SshHost host) async {
-    if (_sessions.length >= _maxSessions) {
-      _toast('Máximo $_maxSessions sesiones');
-      return;
-    }
-
+    if (_sessions.length >= _maxSessions) { _toast('Máximo $_maxSessions sesiones'); return; }
     var command = host.toSshCommand();
     final hasKey = host.keyPath != null && host.keyPath!.trim().isNotEmpty;
-
     if (!hasKey) {
       final pwd = await SshCredentialsStore.readPassword(host.id);
       if (!mounted) return;
@@ -177,19 +156,10 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
         } catch (_) {}
       }
     }
-
-    final session = TerminalSession(host.name, customCommand: command, sourceHost: host);
-    _sessions.add(session);
-
-    setState(() {
-      _activeIndex = _sessions.length - 1;
-      _showAgent = false;
-    });
-
+    _sessions.add(TerminalSession(host.name, customCommand: command, sourceHost: host));
+    setState(() { _activeIndex = _sessions.length - 1; _showAgent = false; });
     SchedulerBinding.instance.addPostFrameCallback((_) {
-      WidgetsBinding.instance.endOfFrame.then((_) {
-        if (mounted) _startActiveSession();
-      });
+      WidgetsBinding.instance.endOfFrame.then((_) { if (mounted) _startActiveSession(); });
     });
   }
 
@@ -197,8 +167,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     if (s.sourceHost == null) return;
     setState(() {
       if (_sftpOpen.remove(s)) return;
-      _sftpOpened.add(s);
-      _sftpOpen.add(s);
+      _sftpOpened.add(s); _sftpOpen.add(s);
     });
   }
 
@@ -206,14 +175,8 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => HostsScreen(
         rootfsPath: _manager.rootfsPath,
-        onConnect: (host) {
-          Navigator.of(context).pop();
-          _connectToHost(host);
-        },
-        onOpenTerminalFromSftp: (host) {
-          Navigator.of(context).popUntil((r) => r.isFirst);
-          _connectToHost(host);
-        },
+        onConnect: (host) { Navigator.of(context).pop(); _connectToHost(host); },
+        onOpenTerminalFromSftp: (host) { Navigator.of(context).popUntil((r) => r.isFirst); _connectToHost(host); },
       ),
     ));
   }
@@ -222,53 +185,50 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     if (index == _activeIndex) return;
     setState(() => _activeIndex = index);
     SchedulerBinding.instance.addPostFrameCallback((_) {
-      WidgetsBinding.instance.endOfFrame.then((_) {
-        if (mounted) _startActiveSession();
-      });
+      WidgetsBinding.instance.endOfFrame.then((_) { if (mounted) _startActiveSession(); });
     });
   }
 
   void _closeSession(int index) {
-    if (_sessions.length == 1) {
-      _toast('No puedes cerrar la última sesión');
-      return;
-    }
+    if (_sessions.length == 1) { _toast('No puedes cerrar la última sesión'); return; }
     final s = _sessions[index];
-    _sftpOpen.remove(s);
-    _sftpOpened.remove(s);
-    s.dispose();
+    _sftpOpen.remove(s); _sftpOpened.remove(s); s.dispose();
     setState(() {
       _sessions.removeAt(index);
-      if (_activeIndex >= _sessions.length) {
-        _activeIndex = _sessions.length - 1;
-      }
+      if (_activeIndex >= _sessions.length) _activeIndex = _sessions.length - 1;
     });
   }
 
-  void _changeFont(double delta) {
-    setState(() {
-      _fontSize = (_fontSize + delta).clamp(_minFont, _maxFont);
-    });
-  }
+  void _changeFont(double delta) { setState(() { _fontSize = (_fontSize + delta).clamp(_minFont, _maxFont); }); }
 
   void _copySelection() {
     final sel = _active.controller.selection;
     if (sel != null) {
       final text = _active.terminal.buffer.getText(sel);
+      if (text.isNotEmpty) { Clipboard.setData(ClipboardData(text: text)); _active.controller.clearSelection(); _toast('Copiado al portapapeles'); }
+    }
+  }
+  
+  void _copyEntireSession(TerminalSession s) {
+    final buf = s.terminal.buffer;
+    final base = buf.createAnchor(0, 0);
+    final extent = buf.createAnchor(buf.viewWidth - 1, buf.height - 1);
+    s.controller.setSelection(base, extent);
+    final sel = s.controller.selection;
+    if (sel != null) {
+      final text = buf.getText(sel);
       if (text.isNotEmpty) {
         Clipboard.setData(ClipboardData(text: text));
-        _active.controller.clearSelection();
-        _toast('Copiado al portapapeles');
+        _toast('Sesión completa copiada');
       }
     }
+    s.controller.clearSelection();
   }
 
   Future<void> _paste() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
-    if (text != null && text.isNotEmpty) {
-      _active.terminal.textInput(text);
-    }
+    if (text != null && text.isNotEmpty) _active.terminal.textInput(text);
   }
 
   void _selectAll() {
@@ -281,84 +241,40 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   }
 
   void _toast(String msg) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg), duration: const Duration(seconds: 1)),
-      );
-    }
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 1)));
   }
 
   void _openKeybarSettings() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => KeybarSettingsScreen(
-          initial: _keybarConfig,
-          onChanged: (newConfig) {
-            setState(() => _keybarConfig = List.from(newConfig));
-          },
-        ),
-      ),
-    );
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => KeybarSettingsScreen(initial: _keybarConfig, onChanged: (newConfig) { setState(() => _keybarConfig = List.from(newConfig)); }),
+    ));
   }
 
   void _showSessions() {
     showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A1A),
+      context: context, backgroundColor: const Color(0xFF1A1A1A),
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ..._sessions.asMap().entries.map((e) {
-              final i = e.key;
-              final s = e.value;
-              final active = i == _activeIndex;
+              final i = e.key; final s = e.value; final active = i == _activeIndex;
               return ListTile(
                 dense: true,
-                leading: Icon(
-                  s.sourceHost != null ? Icons.dns_rounded : Icons.computer,
-                  size: 20,
-                  color: s.sourceHost != null ? Colors.lightBlueAccent : Colors.tealAccent,
-                ),
+                leading: Icon(s.sourceHost != null ? Icons.dns_rounded : Icons.computer, size: 20, color: s.sourceHost != null ? Colors.lightBlueAccent : Colors.tealAccent),
                 title: Text(s.name, style: TextStyle(color: active ? Colors.white : Colors.white70)),
-                subtitle: Text(
-                  s.sourceHost != null ? s.sourceHost!.name : 'Sesión local (Debian)',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Colors.white38),
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (active) const Icon(Icons.check, color: Colors.greenAccent, size: 20),
-                    if (_sessions.length > 1)
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.redAccent, size: 18),
-                        tooltip: 'Cerrar sesión',
-                        onPressed: () { Navigator.pop(ctx); _closeSession(i); },
-                      ),
-                  ],
-                ),
+                subtitle: Text(s.sourceHost != null ? s.sourceHost!.name : 'Sesión local (Debian)', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.white38)),
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (active) const Icon(Icons.check, color: Colors.greenAccent, size: 20),
+                  if (_sessions.length > 1) IconButton(icon: const Icon(Icons.close, color: Colors.redAccent, size: 18), onPressed: () { Navigator.pop(ctx); _closeSession(i); }),
+                ]),
                 onTap: () { Navigator.pop(ctx); _switchTo(i); },
               );
             }),
             const Divider(color: Colors.white24),
             if (_sessions.length < _maxSessions)
-              ListTile(
-                dense: true,
-                leading: const Icon(Icons.add, color: Colors.greenAccent, size: 20),
-                title: const Text('Nueva sesión', style: TextStyle(color: Colors.white)),
-                onTap: () { Navigator.pop(ctx); _addSession(); },
-              ),
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.restart_alt, color: Colors.amberAccent, size: 20),
-              title: const Text('Reiniciar sesión actual', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _active.restart(columns: _active.terminal.viewWidth, rows: _active.terminal.viewHeight);
-              },
-            ),
+              ListTile(dense: true, leading: const Icon(Icons.add, color: Colors.greenAccent, size: 20), title: const Text('Nueva sesión', style: TextStyle(color: Colors.white)), onTap: () { Navigator.pop(ctx); _addSession(); }),
+            ListTile(dense: true, leading: const Icon(Icons.restart_alt, color: Colors.amberAccent, size: 20), title: const Text('Reiniciar sesión actual', style: TextStyle(color: Colors.white)), onTap: () { Navigator.pop(ctx); _active.restart(columns: _active.terminal.viewWidth, rows: _active.terminal.viewHeight); }),
             const SizedBox(height: 8),
           ],
         ),
@@ -368,51 +284,24 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   void _showSettings() {
     showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A1A),
+      context: context, backgroundColor: const Color(0xFF1A1A1A),
       builder: (ctx) => SafeArea(
         child: StatefulBuilder(
           builder: (BuildContext context, StateSetter setModalState) {
             return Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                ListTile(leading: const Icon(Icons.keyboard, color: Colors.greenAccent), title: const Text('Configurar teclado', style: TextStyle(color: Colors.white)), subtitle: const Text('Mostrar, ocultar y reordenar teclas', style: TextStyle(color: Colors.white54)), onTap: () { Navigator.pop(ctx); _openKeybarSettings(); }),
                 ListTile(
-                  leading: const Icon(Icons.keyboard, color: Colors.greenAccent),
-                  title: const Text('Configurar teclado', style: TextStyle(color: Colors.white)),
-                  subtitle: const Text('Mostrar, ocultar y reordenar teclas', style: TextStyle(color: Colors.white54)),
-                  onTap: () { Navigator.pop(ctx); _openKeybarSettings(); },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.format_size, color: Colors.greenAccent),
-                  title: const Text('Tamaño de fuente', style: TextStyle(color: Colors.white)),
-                  subtitle: Text('${_fontSize.toInt()} pt', style: const TextStyle(color: Colors.white54)),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.remove, color: Colors.white),
-                        tooltip: 'Reducir fuente',
-                        onPressed: () {
-                          _changeFont(-1);
-                          setModalState(() {});
-                        },
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.add, color: Colors.white),
-                        tooltip: 'Aumentar fuente',
-                        onPressed: () {
-                          _changeFont(1);
-                          setModalState(() {});
-                        },
-                      ),
-                    ],
-                  ),
+                  leading: const Icon(Icons.format_size, color: Colors.greenAccent), title: const Text('Tamaño de fuente', style: TextStyle(color: Colors.white)), subtitle: Text('${_fontSize.toInt()} pt', style: const TextStyle(color: Colors.white54)),
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    IconButton(icon: const Icon(Icons.remove, color: Colors.white), onPressed: () { _changeFont(-1); setModalState(() {}); }),
+                    IconButton(icon: const Icon(Icons.add, color: Colors.white), onPressed: () { _changeFont(1); setModalState(() {}); }),
+                  ]),
                 ),
                 SwitchListTile(
-                  activeColor: Colors.greenAccent,
-                  secondary: const Icon(Icons.rocket_launch, color: Colors.amberAccent),
-                  title: const Text('Arranque directo en Hosts', style: TextStyle(color: Colors.white)),
-                  subtitle: const Text('Abrir lista SSH/SFTP automáticamente al iniciar', style: TextStyle(color: Colors.white54)),
+                  activeColor: Colors.greenAccent, secondary: const Icon(Icons.rocket_launch, color: Colors.amberAccent),
+                  title: const Text('Arranque directo en Hosts', style: TextStyle(color: Colors.white)), subtitle: const Text('Abrir lista SSH/SFTP al iniciar', style: TextStyle(color: Colors.white54)),
                   value: _showHostsOnStartup,
                   onChanged: (bool value) async {
                     final prefs = await SharedPreferences.getInstance();
@@ -432,22 +321,16 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   void _showQuickScripts(TerminalSession s) {
     showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A1A),
+      context: context, backgroundColor: const Color(0xFF1A1A1A),
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const ListTile(
-              title: Text('Scripts Rápidos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              dense: true,
-            ),
+            const ListTile(title: Text('Utilidades', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), dense: true),
             const Divider(color: Colors.white24),
-            _scriptTile(ctx, s, 'Autocompletar (Doble Tab)', '\t\t', icon: Icons.keyboard_tab),
+            _scriptTile(ctx, s, 'Copiar toda la sesión', '', icon: Icons.copy_all, customAction: () => _copyEntireSession(s)),
             _scriptTile(ctx, s, 'Limpiar terminal (clear)', 'clear\n', icon: Icons.cleaning_services),
-            _scriptTile(ctx, s, 'Monitor de recursos (htop)', 'htop\n', icon: Icons.memory),
-            _scriptTile(ctx, s, 'Interfaces de red (ip a)', 'ip a\n', icon: Icons.network_cell),
-            _scriptTile(ctx, s, 'Consumo de disco (ncdu)', 'ncdu\n', icon: Icons.storage),
+            _scriptTile(ctx, s, 'Autocompletar (Doble Tab)', '\t\t', icon: Icons.keyboard_tab),
             const SizedBox(height: 8),
           ],
         ),
@@ -455,14 +338,17 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     );
   }
 
-  Widget _scriptTile(BuildContext ctx, TerminalSession s, String label, String cmd, {IconData? icon}) {
+  Widget _scriptTile(BuildContext ctx, TerminalSession s, String label, String cmd, {IconData? icon, VoidCallback? customAction}) {
     return ListTile(
-      dense: true,
-      leading: Icon(icon ?? Icons.code, color: Colors.lightBlueAccent, size: 20),
+      dense: true, leading: Icon(icon ?? Icons.code, color: Colors.lightBlueAccent, size: 20),
       title: Text(label, style: const TextStyle(color: Colors.white)),
       onTap: () {
         Navigator.pop(ctx);
-        s.terminal.textInput(cmd);
+        if (customAction != null) {
+          customAction();
+        } else {
+          s.terminal.textInput(cmd);
+        }
       },
     );
   }
@@ -470,12 +356,8 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    for (final n in _focusNodes.values) {
-      n.dispose();
-    }
-    for (final s in _sessions) {
-      s.dispose();
-    }
+    for (final n in _focusNodes.values) n.dispose();
+    for (final s in _sessions) s.dispose();
     super.dispose();
   }
 
@@ -488,141 +370,32 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   @override
   Widget build(BuildContext context) {
-    if (_error != null) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: SingleChildScrollView(
-              child: Text('ERROR:\n$_error', style: const TextStyle(color: Colors.red, fontFamily: 'monospace')),
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (_booting) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('LinuxContainer · arranque', style: TextStyle(color: Colors.white38, fontFamily: 'monospace', fontSize: 12)),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: _logLines.length,
-                    itemBuilder: (ctx, i) => Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 1),
-                      child: Text(
-                        _logLines[i],
-                        style: TextStyle(color: _lineColor(_logLines[i]), fontFamily: 'monospace', fontSize: 13, height: 1.3),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                LinearProgressIndicator(value: _spinning ? null : _progress, backgroundColor: Colors.white10, color: Colors.greenAccent),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: _showAgent ? _agentView() : _terminalView(),
-      ),
-    );
-  }
-
-  Widget _agentView() {
-    return AgentDashboard(
-      onClose: () => setState(() => _showAgent = false),
-    );
+    if (_error != null) return Scaffold(backgroundColor: Colors.black, body: SafeArea(child: Padding(padding: const EdgeInsets.all(16), child: SingleChildScrollView(child: Text('ERROR:\n$_error', style: const TextStyle(color: Colors.red, fontFamily: 'monospace'))))));
+    if (_booting) return Scaffold(backgroundColor: Colors.black, body: SafeArea(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('LinuxContainer · arranque', style: TextStyle(color: Colors.white38, fontFamily: 'monospace', fontSize: 12)), const SizedBox(height: 12), Expanded(child: ListView.builder(itemCount: _logLines.length, itemBuilder: (ctx, i) => Padding(padding: const EdgeInsets.symmetric(vertical: 1), child: Text(_logLines[i], style: TextStyle(color: _lineColor(_logLines[i]), fontFamily: 'monospace', fontSize: 13, height: 1.3))))), const SizedBox(height: 12), LinearProgressIndicator(value: _spinning ? null : _progress, backgroundColor: Colors.white10, color: Colors.greenAccent), const SizedBox(height: 8)]))));
+    return Scaffold(backgroundColor: Colors.black, body: SafeArea(child: _showAgent ? AgentDashboard(onClose: () => setState(() => _showAgent = false)) : _terminalView()));
   }
 
   Widget _terminalView() {
     return Column(
       children: [
         Container(
-          color: const Color(0xFF1A1A1A),
-          padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+          color: const Color(0xFF1A1A1A), padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
           child: Row(
             children: [
-              IconButton(
-                tooltip: 'Agente IA',
-                onPressed: () => setState(() => _showAgent = true),
-                icon: const Icon(Icons.psychology, color: Colors.lightBlueAccent, size: 22),
-              ),
+              IconButton(tooltip: 'Agente IA', onPressed: () => setState(() => _showAgent = true), icon: const Icon(Icons.psychology, color: Colors.lightBlueAccent, size: 22)),
               const SizedBox(width: 2),
               Expanded(
                 child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _showSessions,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Text.rich(
-                          TextSpan(
-                            children: [
-                              const TextSpan(text: 'XTR Terminal '),
-                              const TextSpan(
-                                text: _appVersion,
-                                style: TextStyle(color: Colors.white38),
-                              ),
-                              if (_sessions.length > 1)
-                                TextSpan(
-                                  text: '  ·  ${_active.name} ${_activeIndex + 1}/${_sessions.length}',
-                                  style: const TextStyle(color: Colors.white38),
-                                ),
-                            ],
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 13,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                      ),
-                      const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white38),
-                    ],
-                  ),
+                  behavior: HitTestBehavior.opaque, onTap: _showSessions,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Flexible(child: Text.rich(TextSpan(children: [const TextSpan(text: 'XTR Terminal '), const TextSpan(text: _appVersion, style: TextStyle(color: Colors.white38)), if (_sessions.length > 1) TextSpan(text: '  ·  ${_active.name} ${_activeIndex + 1}/${_sessions.length}', style: const TextStyle(color: Colors.white38))]), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70, fontSize: 13, fontFamily: 'monospace'))),
+                    const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white38),
+                  ]),
                 ),
               ),
-              IconButton(
-                tooltip: 'Hosts SSH / SFTP',
-                onPressed: _openHosts,
-                icon: const Icon(Icons.dns_rounded, color: Colors.lightBlueAccent, size: 22),
-              ),
-              if (_active.sourceHost != null)
-                IconButton(
-                  tooltip: _sftpOpen.contains(_active)
-                      ? 'Volver a la shell'
-                      : 'SFTP de este host',
-                  onPressed: () => _toggleSftp(_active),
-                  icon: Icon(
-                    _sftpOpen.contains(_active) ? Icons.terminal : Icons.folder_open,
-                    color: Colors.amberAccent,
-                    size: 22,
-                  ),
-                ),
-              if (_sessions.length < _maxSessions)
-                IconButton(
-                  tooltip: 'Nueva sesión',
-                  onPressed: _addSession,
-                  icon: const Icon(Icons.add, color: Colors.greenAccent, size: 22),
-                ),
+              IconButton(tooltip: 'Hosts SSH / SFTP', onPressed: _openHosts, icon: const Icon(Icons.dns_rounded, color: Colors.lightBlueAccent, size: 22)),
+              if (_active.sourceHost != null) IconButton(tooltip: _sftpOpen.contains(_active) ? 'Volver a la shell' : 'SFTP de este host', onPressed: () => _toggleSftp(_active), icon: Icon(_sftpOpen.contains(_active) ? Icons.terminal : Icons.folder_open, color: Colors.amberAccent, size: 22)),
+              if (_sessions.length < _maxSessions) IconButton(tooltip: 'Nueva sesión', onPressed: _addSession, icon: const Icon(Icons.add, color: Colors.greenAccent, size: 22)),
             ],
           ),
         ),
@@ -630,8 +403,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
           child: IndexedStack(
             index: _activeIndex,
             children: _sessions.asMap().entries.map((entry) {
-              final i = entry.key;
-              final s = entry.value;
+              final i = entry.key; final s = entry.value;
               final focusNode = _focusNodes.putIfAbsent(i, () => FocusNode());
               final viewKey = _viewKeys.putIfAbsent(i, () => GlobalKey<TerminalViewState>());
               
@@ -639,58 +411,24 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
                 behavior: HitTestBehavior.translucent,
                 onDoubleTap: () => _showQuickScripts(s),
                 child: TermuxSelectionOverlay(
-                  terminal: s.terminal,
-                  controller: s.controller,
-                  terminalViewKey: viewKey,
-                  scrollController: s.scrollController,
-                  onCopy: _copySelection,
-                  onPaste: _paste,
-                  onSelectAll: _selectAll,
-                  child: TerminalView(
-                    s.terminal,
-                    key: viewKey,
-                    controller: s.controller,
-                    focusNode: focusNode,
-                    autofocus: true,
-                    backgroundOpacity: 1.0,
-                    deleteDetection: true,
-                    keyboardType: TextInputType.visiblePassword,
-                    scrollController: s.scrollController,
-                    textStyle: TerminalStyle(fontSize: _fontSize, fontFamily: 'monospace'),
-                  ),
+                  terminal: s.terminal, controller: s.controller, terminalViewKey: viewKey, scrollController: s.scrollController,
+                  onCopy: _copySelection, onPaste: _paste, onSelectAll: _selectAll,
+                  child: TerminalView(s.terminal, key: viewKey, controller: s.controller, focusNode: focusNode, autofocus: true, backgroundOpacity: 1.0, deleteDetection: true, keyboardType: TextInputType.visiblePassword, scrollController: s.scrollController, textStyle: TerminalStyle(fontSize: _fontSize, fontFamily: 'monospace')),
                 ),
               );
 
               if (s.sourceHost == null) return terminalPane;
               final sftpOpen = _sftpOpen.contains(s);
-              
               return Stack(
                 children: [
                   Offstage(offstage: sftpOpen, child: terminalPane),
-                  if (_sftpOpened.contains(s))
-                    Offstage(
-                      offstage: !sftpOpen,
-                      child: SftpBrowserScreen(
-                        host: s.sourceHost!,
-                        rootfsPath: _manager.rootfsPath!,
-                        embedded: true,
-                        onOpenTerminal: (_) =>
-                            setState(() => _sftpOpen.remove(s)),
-                      ),
-                    ),
+                  if (_sftpOpened.contains(s)) Offstage(offstage: !sftpOpen, child: SftpBrowserScreen(host: s.sourceHost!, rootfsPath: _manager.rootfsPath!, embedded: true, onOpenTerminal: (_) => setState(() => _sftpOpen.remove(s)))),
                 ],
               );
             }).toList(),
           ),
         ),
-        if (!_sftpOpen.contains(_active))
-          TerminalKeybar(
-            terminal: _active.terminal,
-            config: _keybarConfig,
-            onFontIncrease: () => _changeFont(1),
-            onFontDecrease: () => _changeFont(-1),
-            onMenu: _showSettings,
-          ),
+        if (!_sftpOpen.contains(_active)) TerminalKeybar(terminal: _active.terminal, config: _keybarConfig, onFontIncrease: () => _changeFont(1), onFontDecrease: () => _changeFont(-1), onMenu: _showSettings),
       ],
     );
   }
