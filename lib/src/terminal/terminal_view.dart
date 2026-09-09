@@ -32,7 +32,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
   static const int _maxSessions = 5;
-  static const String _appVersion = 'v14.17';
+  static const String _appVersion = 'v14.18';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
   final List<String> _logLines = [];
@@ -331,7 +331,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
               const ListTile(title: Text('Utilidades', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), dense: true),
               const Divider(color: Colors.white24),
               _scriptTile(ctx, s, 'Autocompletar (Doble Tab)', '\t\t', icon: Icons.keyboard_tab),
-              _scriptTile(ctx, s, 'Tabular', '\t', icon: Icons.space_bar),
+              _scriptTile(ctx, s, 'Pegar', '', icon: Icons.paste, customAction: () async { Navigator.pop(ctx); await _paste(); }),
               _scriptTile(ctx, s, 'Copiar toda la sesión', '', icon: Icons.copy_all, customAction: () => _copyEntireSession(s)),
               _scriptTile(ctx, s, 'Limpiar terminal (clear)', 'clear\n', icon: Icons.cleaning_services),
               _scriptTile(ctx, s, 'Espacio en disco (df -h)', 'df -h\n', icon: Icons.storage),
