@@ -1,9 +1,9 @@
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:xterm/xterm.dart';
+
 import '../container/container_manager.dart';
 import 'terminal_keybar.dart';
 import 'terminal_session.dart';
@@ -35,22 +35,19 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   /// Versión visible en la barra de título. La actualiza el instalador de
   /// cada release (sed sobre este literal) — no editar a mano.
-  static const String _appVersion = 'v14.8';
+  static const String _appVersion = 'v14.13';
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
-
   final List<String> _logLines = [];
   double? _progress = 0.0;
   bool _spinning = false;
   bool _booting = true;
-  bool _showAgent = false; // Arranca en terminal (menú lc-menu)
+  bool _showAgent = false;
   String? _error;
+
   final Map<int, FocusNode> _focusNodes = {};
   final Map<int, GlobalKey<TerminalViewState>> _viewKeys = {};
 
-  /// Sesiones SSH con el panel SFTP montado / visible. Se guarda el OBJETO
-  /// sesión (no el índice) por la misma razón que sourceHost: cerrar una
-  /// pestaña desplaza índices y un mapa por índice apuntaría mal.
   final Set<TerminalSession> _sftpOpened = {};
   final Set<TerminalSession> _sftpOpen = {};
 
@@ -90,9 +87,9 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   Future<void> _boot() async {
     try {
-      // Carga la configuración del teclado guardada
       _keybarConfig = await KeybarConfig.load();
       await _manager.initContainer(log: _appendLog);
+
       if (_manager.isReady) {
         final svc = AgentServices();
         svc.startAgent();
@@ -101,10 +98,13 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
         await SshHostsService.instance.loadFrom(_manager.rootfsPath!);
         await SftpFavoritesService.instance.loadFrom(_manager.rootfsPath!);
       }
+
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
+
       _addSession(initial: true);
       setState(() => _booting = false);
+
       SchedulerBinding.instance.addPostFrameCallback((_) {
         WidgetsBinding.instance.endOfFrame.then((_) {
           if (mounted) _startActiveSession();
@@ -127,6 +127,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     final n = _sessions.length + 1;
     final session = TerminalSession('Sesión $n');
     _sessions.add(session);
+
     if (!initial) {
       setState(() => _activeIndex = _sessions.length - 1);
       SchedulerBinding.instance.addPostFrameCallback((_) {
@@ -148,13 +149,10 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       _toast('Máximo $_maxSessions sesiones');
       return;
     }
+
     var command = host.toSshCommand();
-    // Contraseña guardada en el Keystore (la misma que ya usa SFTP): se
-    // vuelca a un fichero 600 dentro del rootfs y sshpass la lee de ahí.
-    // Con clave (-i) no hace falta: la autenticación ya va por otro camino.
-    // El passfile se conserva para que "Reiniciar sesión" también entre
-    // sin teclear; vive solo dentro del contenedor, en este dispositivo.
     final hasKey = host.keyPath != null && host.keyPath!.trim().isNotEmpty;
+
     if (!hasKey) {
       final pwd = await SshCredentialsStore.readPassword(host.id);
       if (!mounted) return;
@@ -163,20 +161,21 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
           final rel = '/root/.xtr/sshpass_${host.id}';
           final f = File('${_manager.rootfsPath!}$rel');
           await f.parent.create(recursive: true);
-          await f.writeAsString('$pwd\n'); // sshpass -f lee la 1ª línea
+          await f.writeAsString('$pwd\n');
           await Process.run('chmod', ['600', f.path]);
           command = host.toSshCommandWithPassfile(rel);
-        } catch (_) {
-          // Sin passfile no pasa nada grave: el pty pedirá la contraseña.
-        }
+        } catch (_) {}
       }
     }
+
     final session = TerminalSession(host.name, customCommand: command, sourceHost: host);
     _sessions.add(session);
+
     setState(() {
       _activeIndex = _sessions.length - 1;
       _showAgent = false;
     });
+
     SchedulerBinding.instance.addPostFrameCallback((_) {
       WidgetsBinding.instance.endOfFrame.then((_) {
         if (mounted) _startActiveSession();
@@ -184,16 +183,11 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     });
   }
 
-  /// Alterna shell <-> explorador SFTP del mismo host DENTRO de la sesión
-  /// SSH. El panel se crea perezoso la primera vez (entonces conecta) y se
-  /// queda montado en el árbol: conserva carpeta, scroll y selección entre
-  /// cambios. La shell sigue viva debajo (Offstage) y el circuito se cierra
-  /// con onOpenTerminal, que simplemente vuelve a mostrar la terminal.
   void _toggleSftp(TerminalSession s) {
     if (s.sourceHost == null) return;
     setState(() {
-      if (_sftpOpen.remove(s)) return; // estaba abierto -> volver a la shell
-      _sftpOpened.add(s);              // primera vez: montar el panel
+      if (_sftpOpen.remove(s)) return;
+      _sftpOpened.add(s);
       _sftpOpen.add(s);
     });
   }
@@ -207,9 +201,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
           _connectToHost(host);
         },
         onOpenTerminalFromSftp: (host) {
-          // Se viene de mas adentro (explorador SFTP dentro de Hosts SSH),
-          // asi que hay que cerrar dos pantallas, no una. popUntil hasta la
-          // raiz es mas robusto que contar pops a mano.
           Navigator.of(context).popUntil((r) => r.isFirst);
           _connectToHost(host);
         },
@@ -244,7 +235,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     });
   }
 
-
   void _changeFont(double delta) {
     setState(() {
       _fontSize = (_fontSize + delta).clamp(_minFont, _maxFont);
@@ -271,16 +261,10 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     }
   }
 
-  /// Selecciona todo lo VISIBLE ahora mismo (el viewport), no todo el
-  /// historial — para eso ya esta "Sesion completa" en el Portapapeles.
   void _selectAll() {
     final buf = _active.terminal.buffer;
-    final topAbsolute = (buf.height - buf.viewHeight - buf.scrollBack)
-        .clamp(0, buf.height - 1)
-        .toInt();
-    final bottomAbsolute = (topAbsolute + buf.viewHeight - 1)
-        .clamp(0, buf.height - 1)
-        .toInt();
+    final topAbsolute = (buf.height - buf.viewHeight - buf.scrollBack).clamp(0, buf.height - 1).toInt();
+    final bottomAbsolute = (topAbsolute + buf.viewHeight - 1).clamp(0, buf.height - 1).toInt();
     final base = buf.createAnchor(0, topAbsolute);
     final extent = buf.createAnchor(buf.viewWidth - 1, bottomAbsolute);
     _active.controller.setSelection(base, extent);
@@ -413,6 +397,43 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     );
   }
 
+  void _showQuickScripts(TerminalSession s) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A1A),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text('Scripts Rápidos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              dense: true,
+            ),
+            const Divider(color: Colors.white24),
+            _scriptTile(ctx, s, 'Autocompletar (Doble Tab)', '\t\t', icon: Icons.keyboard_tab),
+            _scriptTile(ctx, s, 'Limpiar terminal (clear)', 'clear\n', icon: Icons.cleaning_services),
+            _scriptTile(ctx, s, 'Monitor de recursos (htop)', 'htop\n', icon: Icons.memory),
+            _scriptTile(ctx, s, 'Interfaces de red (ip a)', 'ip a\n', icon: Icons.network_cell),
+            _scriptTile(ctx, s, 'Consumo de disco (ncdu)', 'ncdu\n', icon: Icons.storage),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _scriptTile(BuildContext ctx, TerminalSession s, String label, String cmd, {IconData? icon}) {
+    return ListTile(
+      dense: true,
+      leading: Icon(icon ?? Icons.code, color: Colors.lightBlueAccent, size: 20),
+      title: Text(label, style: const TextStyle(color: Colors.white)),
+      onTap: () {
+        Navigator.pop(ctx);
+        s.terminal.textInput(cmd);
+      },
+    );
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -457,8 +478,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('LinuxContainer · arranque', style: TextStyle(color:
-Colors.white38, fontFamily: 'monospace', fontSize: 12)),
+                const Text('LinuxContainer · arranque', style: TextStyle(color: Colors.white38, fontFamily: 'monospace', fontSize: 12)),
                 const SizedBox(height: 12),
                 Expanded(
                   child: ListView.builder(
@@ -482,9 +502,6 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
       );
     }
 
-    // El agente y la terminal nunca se muestran a la vez: pantalla completa
-    // para cada uno, conmutados por un botón. Así el input del agente tiene
-    // todo el espacio y el teclado no se solapa.
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -495,7 +512,6 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
 
   Widget _agentView() {
     return AgentDashboard(
-      // El botón de "ocultar" del dashboard ahora lleva a la terminal.
       onClose: () => setState(() => _showAgent = false),
     );
   }
@@ -503,9 +519,6 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
   Widget _terminalView() {
     return Column(
       children: [
-        // Barra superior: navegación + acciones principales. Hosts SSH/SFTP
-        // siempre visibles (lo más usado); el resto vive en hojas: tocar el
-        // título abre las sesiones y ⋮ del keybar abre ajustes.
         Container(
           color: const Color(0xFF1A1A1A),
           padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
@@ -588,40 +601,40 @@ Colors.white38, fontFamily: 'monospace', fontSize: 12)),
               final s = entry.value;
               final focusNode = _focusNodes.putIfAbsent(i, () => FocusNode());
               final viewKey = _viewKeys.putIfAbsent(i, () => GlobalKey<TerminalViewState>());
-              // Seleccion estilo Termux: el long-press nativo de xterm
-              // selecciona la palabra y el overlay dibuja asas arrastrables
-              // + barra Copiar/Pegar/Todo. La geometria celda<->pixel la da
-              // el propio paquete (renderTerminal.getOffset/getCellOffset);
-              // no hace falta calibracion (onTapUp esta muerto en xterm
-              // 4.0.0: por eso el sistema anterior nunca dibujo las asas).
-              final terminalPane = TermuxSelectionOverlay(
-                terminal: s.terminal,
-                controller: s.controller,
-                terminalViewKey: viewKey,
-                scrollController: s.scrollController,
-                onCopy: _copySelection,
-                onPaste: _paste,
-                onSelectAll: _selectAll,
-                child: TerminalView(
-                  s.terminal,
-                  key: viewKey,
+              
+              // Modificación central v14.13: Detector translúcido que permite convivir
+              // con los gestos base del SelectionOverlay y TerminalView.
+              final terminalPane = GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onDoubleTap: () => _showQuickScripts(s),
+                child: TermuxSelectionOverlay(
+                  terminal: s.terminal,
                   controller: s.controller,
-                  focusNode: focusNode,
-                  autofocus: true,
-                  backgroundOpacity: 1.0,
-                  deleteDetection: true,
-                  keyboardType: TextInputType.visiblePassword,
+                  terminalViewKey: viewKey,
                   scrollController: s.scrollController,
-                  textStyle: TerminalStyle(fontSize: _fontSize, fontFamily: 'monospace'),
+                  onCopy: _copySelection,
+                  onPaste: _paste,
+                  onSelectAll: _selectAll,
+                  child: TerminalView(
+                    s.terminal,
+                    key: viewKey,
+                    controller: s.controller,
+                    focusNode: focusNode,
+                    autofocus: true,
+                    backgroundOpacity: 1.0,
+                    deleteDetection: true,
+                    keyboardType: TextInputType.visiblePassword,
+                    scrollController: s.scrollController,
+                    textStyle: TerminalStyle(fontSize: _fontSize, fontFamily: 'monospace'),
+                  ),
                 ),
               );
 
               if (s.sourceHost == null) return terminalPane;
               final sftpOpen = _sftpOpen.contains(s);
+              
               return Stack(
                 children: [
-                  // La terminal no se desmonta nunca: solo se oculta, y su
-                  // PTY y su scrollback siguen vivos mientras miras SFTP.
                   Offstage(offstage: sftpOpen, child: terminalPane),
                   if (_sftpOpened.contains(s))
                     Offstage(
