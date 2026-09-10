@@ -17,7 +17,9 @@ class SshHost {
   });
 
   String toSshCommand() {
-    final b = StringBuffer('ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=4 ');
+    // TCPKeepAlive=no evita cortes por inactividad a nivel kernel.
+    // ServerAliveInterval=120 y Max=15 otorgan ~30 minutos de tolerancia al cambiar de app.
+    final b = StringBuffer('ssh -o StrictHostKeyChecking=accept-new -o TCPKeepAlive=no -o ServerAliveInterval=120 -o ServerAliveCountMax=15 ');
     if (port != 22) b.write('-p $port ');
     if (keyPath != null && keyPath!.trim().isNotEmpty) {
       b.write('-i ${keyPath!.trim()} ');
