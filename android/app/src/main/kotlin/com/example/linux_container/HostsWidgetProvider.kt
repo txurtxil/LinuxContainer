@@ -14,11 +14,11 @@ import android.widget.RemoteViews
  * Widget de escritorio "XTR Hosts": lista los hosts SSH y los favoritos SFTP
  * (espejo JSON en FlutterSharedPreferences, escrito por WidgetSync.dart).
  *
- * v14.22 — adaptable al tamano:
- *  - Nace en 3x2 celdas (hosts_widget_info.xml) y se redimensiona libre.
- *  - updateOne() elige layout NORMAL (widget_hosts) o COMPACTO
- *    (widget_hosts_compact) segun las celdas reales del launcher, y pasa el
- *    modo al RemoteViewsService con EXTRA_COMPACT para las filas.
+ * v14.22/14.23 — adaptable al tamano:
+ *  - Puede encogerse hasta 2x1 celdas (hosts_widget_info.xml).
+ *  - updateOne() elige layout NORMAL / COMPACTO / MICRO segun las celdas
+ *    reales del launcher, y pasa el modo al RemoteViewsService con
+ *    EXTRA_MODE para las filas.
  *  - onAppWidgetOptionsChanged() re-aplica al redimensionar.
  *  - El titulo (y el texto de vacio) abren la app.
  */
@@ -26,17 +26,26 @@ class HostsWidgetProvider : AppWidgetProvider() {
 
     companion object {
         const val ACTION_REFRESH = "com.example.linux_container.widget.REFRESH"
-        const val EXTRA_COMPACT = "com.example.linux_container.widget.COMPACT"
+        const val EXTRA_MODE = "com.example.linux_container.widget.MODE"
+
+        const val MODE_NORMAL = 0
+        const val MODE_COMPACT = 1
+        const val MODE_MICRO = 2
 
         /** dp -> celdas del launcher (formula oficial: 70*n - 30). */
         private fun cellsFor(dp: Int): Int = if (dp <= 0) 1 else (dp + 30) / 70
 
-        /** Compacto cuando hay 2 celdas o menos en cualquier eje. */
-        fun isCompact(options: Bundle?): Boolean {
-            if (options == null) return false
+        /** Modo segun celdas reales: 1 celda en cualquier eje -> MICRO;
+         *  2 o menos -> COMPACTO; mas -> NORMAL. */
+        fun modeFor(options: Bundle?): Int {
+            if (options == null) return MODE_NORMAL
             val w = cellsFor(options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH))
             val h = cellsFor(options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT))
-            return w <= 2 || h <= 2
+            return when {
+                w <= 1 || h <= 1 -> MODE_MICRO
+                w <= 2 || h <= 2 -> MODE_COMPACT
+                else -> MODE_NORMAL
+            }
         }
 
         /** Llamado desde MainActivity (canal xtr/widget "refresh") y desde el
@@ -51,17 +60,20 @@ class HostsWidgetProvider : AppWidgetProvider() {
         }
 
         private fun updateOne(context: Context, mgr: AppWidgetManager, widgetId: Int) {
-            val compact = isCompact(mgr.getAppWidgetOptions(widgetId))
-            val layout = if (compact) R.layout.widget_hosts_compact
-                         else R.layout.widget_hosts
+            val mode = modeFor(mgr.getAppWidgetOptions(widgetId))
+            val layout = when (mode) {
+                MODE_MICRO -> R.layout.widget_hosts_micro
+                MODE_COMPACT -> R.layout.widget_hosts_compact
+                else -> R.layout.widget_hosts
+            }
             val views = RemoteViews(context.packageName, layout)
 
             // Adapter de la lista -> nuestro RemoteViewsService. La data URI
             // hace unico el intent por (widgetId, modo): sin ella el sistema
             // cachea la factory del primer widget y todos compartirian modo.
             val svcIntent = Intent(context, HostsWidgetService::class.java).apply {
-                putExtra(EXTRA_COMPACT, compact)
-                data = Uri.parse("xtrwidget://hosts/$widgetId/$compact")
+                putExtra(EXTRA_MODE, mode)
+                data = Uri.parse("xtrwidget://hosts/$widgetId/$mode")
             }
             views.setRemoteAdapter(R.id.widget_list, svcIntent)
             views.setEmptyView(R.id.widget_list, R.id.widget_empty)

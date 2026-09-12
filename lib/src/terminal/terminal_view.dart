@@ -33,10 +33,13 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
   static const int _maxSessions = 5;
-  static const String _appVersion = 'v14.22';
+  static const String _appVersion = 'v14.23';
 
   // Canal con el lado nativo para el widget de escritorio (XTR Hosts).
   static const MethodChannel _widgetCh = MethodChannel('xtr/widget');
+  // Canal keep-alive: foreground service que mantiene el proceso (y las
+  // sesiones SSH/SFTP hijas) vivo con la app en segundo plano.
+  static const MethodChannel _keepAliveCh = MethodChannel('xtr/keepalive');
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
   final List<String> _logLines = [];
@@ -45,6 +48,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   bool _booting = true;
   bool _showAgent = false;
   bool _showHostsOnStartup = false;
+  bool _keepAlive = true;
   String? _error;
 
   final Map<int, FocusNode> _focusNodes = {};
@@ -90,6 +94,13 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     try {
       final prefs = await SharedPreferences.getInstance();
       _showHostsOnStartup = prefs.getBool('showHostsOnStartup') ?? false;
+      // Keep-alive en 2o plano: por defecto ON. Sin un foreground service
+      // Android mata el proceso al minimizar y las sesiones mueren con el
+      // (el ServerAliveInterval no sirve si el proceso ya no existe).
+      _keepAlive = prefs.getBool('keepAliveService') ?? true;
+      if (_keepAlive) {
+        try { await _keepAliveCh.invokeMethod('start'); } catch (_) {}
+      }
 
       _keybarConfig = await KeybarConfig.load();
       await _manager.initContainer(log: _appendLog);
@@ -332,6 +343,26 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
                     await prefs.setBool('showHostsOnStartup', value);
                     setState(() => _showHostsOnStartup = value);
                     setModalState(() => _showHostsOnStartup = value);
+                  },
+                ),
+                SwitchListTile(
+                  activeColor: Colors.greenAccent, secondary: const Icon(Icons.bolt, color: Colors.greenAccent),
+                  title: const Text('Mantener sesiones en 2º plano', style: TextStyle(color: Colors.white)), subtitle: const Text('Servicio en primer plano + wake lock (notificación persistente)', style: TextStyle(color: Colors.white54)),
+                  value: _keepAlive,
+                  onChanged: (bool value) async {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('keepAliveService', value);
+                    try { await _keepAliveCh.invokeMethod(value ? 'start' : 'stop'); } catch (_) {}
+                    setState(() => _keepAlive = value);
+                    setModalState(() => _keepAlive = value);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.battery_saver, color: Colors.orangeAccent),
+                  title: const Text('Excluir de optimización de batería', style: TextStyle(color: Colors.white)),
+                  subtitle: const Text('Evita que Android/Samsung mate la app en segundo plano', style: TextStyle(color: Colors.white54)),
+                  onTap: () async {
+                    try { await _keepAliveCh.invokeMethod('batterySettings'); } catch (_) {}
                   },
                 ),
                 const SizedBox(height: 8),

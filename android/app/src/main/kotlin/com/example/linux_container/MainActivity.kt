@@ -30,6 +30,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val MEDIAPIPE_STREAM = "xtr/mediapipe/stream"
     private val CHANNEL_MAIN     = "xtr/main"
     private val WIDGET_CH        = "xtr/widget"
+    private val KEEPALIVE_CH     = "xtr/keepalive"
 
     // Accion pendiente procedente del widget de escritorio (click en una
     // fila SSH/SFTP). Se guarda aqui y Flutter la recoge con
@@ -254,6 +255,42 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // ── KeepAlive: foreground service para sesiones en 2o plano ──
+        // Lo controla Dart (Ajustes -> "Mantener sesiones en 2o plano",
+        // por defecto ON). Distinto de AgentForegroundService: aquel vive
+        // solo mientras el agente esta activo; este protege las sesiones
+        // SSH/SFTP siempre que la app este abierta.
+        MethodChannel(messenger, KEEPALIVE_CH)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> {
+                        val i = Intent(this, KeepAliveService::class.java)
+                        i.action = KeepAliveService.ACTION_START
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i)
+                        else startService(i)
+                        result.success(true)
+                    }
+                    "stop" -> {
+                        val i = Intent(this, KeepAliveService::class.java)
+                        i.action = KeepAliveService.ACTION_STOP
+                        startService(i)
+                        result.success(true)
+                    }
+                    "isRunning" -> result.success(KeepAliveService.isRunning)
+                    // Ajustes del sistema para excluir la app de la
+                    // optimizacion de bateria (Samsung la aplica con dureza).
+                    "batterySettings" -> {
+                        try {
+                            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("SETTINGS", e.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     // ── Widget: captura del intent con extras xtr_widget_* ────

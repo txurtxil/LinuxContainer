@@ -197,9 +197,15 @@ class TermuxSelectionOverlayState extends State<TermuxSelectionOverlay> {
   // --- Arrastre de asas -----------------------------------------------------
 
   void _startDrag(bool isStartHandle, DragStartDetails d) {
-    _dragging = true;
-    _draggingStartHandle = isStartHandle;
-    _dragFixed = isStartHandle ? _selEnd : _selStart;
+    // setState OBLIGATORIO: en v14.22 se cambiaba _dragging sin setState;
+    // al soltar el dedo _onController() solo reconstruye si la seleccion
+    // cambio (y durante el arrastre ya se sincronizo), asi que la barra
+    // quedaba oculta para siempre hasta que llegaba output al terminal.
+    setState(() {
+      _dragging = true;
+      _draggingStartHandle = isStartHandle;
+      _dragFixed = isStartHandle ? _selEnd : _selStart;
+    });
     _lastFingerGlobal = d.globalPosition;
   }
 
@@ -220,9 +226,11 @@ class TermuxSelectionOverlayState extends State<TermuxSelectionOverlay> {
   void _cancelDrag() => _finishDrag();
 
   void _finishDrag() {
-    _dragging = false;
-    _dragFixed = null;
     _stopAutoScroll();
+    setState(() {
+      _dragging = false;
+      _dragFixed = null;
+    });
     _onController(); // resincroniza con la selección final
   }
 
@@ -440,6 +448,15 @@ class TermuxSelectionOverlayState extends State<TermuxSelectionOverlay> {
         final below = lastBottom + 10;
         top = (maxH.isFinite && below + barH > maxH - 4) ? 8.0 : below;
       }
+    }
+    // CLAMP obligatorio (v14.23): en una sesion con output activo la
+    // seleccion se desplaza con el buffer y firstTop/lastBottom salen del
+    // viewport; sin clamp la barra se posicionaba FUERA de pantalla y
+    // "desaparecia" aunque la seleccion siguiera viva.
+    if (maxH.isFinite) {
+      top = top.clamp(4.0, math.max(4.0, maxH - barH - 4)).toDouble();
+    } else if (top < 4) {
+      top = 4;
     }
 
     return Positioned(
