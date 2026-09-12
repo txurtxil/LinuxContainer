@@ -14,10 +14,15 @@ import org.json.JSONArray
  * Estructura esperada:
  *   flutter.widget_hosts_json: [{"id","name","username","hostname","port","osTag"}]
  *   flutter.widget_sftp_json:  [{"id","hostId","hostName","path","label"}]
+ *
+ * v14.22: modo compacto (EXTRA_COMPACT) -> filas de una linea con avatar
+ * pequeno; el titulo combina nombre y detalle.
  */
 class HostsWidgetService : RemoteViewsService() {
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory =
-        HostsWidgetFactory(applicationContext)
+        HostsWidgetFactory(
+            applicationContext,
+            intent.getBooleanExtra(HostsWidgetProvider.EXTRA_COMPACT, false))
 }
 
 private data class Row(
@@ -29,8 +34,10 @@ private data class Row(
     val osTag: String,     // solo SSH
 )
 
-private class HostsWidgetFactory(private val context: Context) :
-    RemoteViewsService.RemoteViewsFactory {
+private class HostsWidgetFactory(
+    private val context: Context,
+    private val compact: Boolean,
+) : RemoteViewsService.RemoteViewsFactory {
 
     private val rows = mutableListOf<Row>()
 
@@ -83,16 +90,21 @@ private class HostsWidgetFactory(private val context: Context) :
         // El launcher puede pedir una posicion obsoleta mientras se
         // rehace el dataset: nunca devolver null (crashea el host).
         if (position < 0 || position >= rows.size) {
-            return RemoteViews(context.packageName, R.layout.widget_row_ssh)
+            return RemoteViews(context.packageName,
+                if (compact) R.layout.widget_row_ssh_small else R.layout.widget_row_ssh)
         }
         val row = rows[position]
         return if (row.isSftp) sftpView(row) else sshView(row)
     }
 
     private fun sshView(row: Row): RemoteViews {
-        val v = RemoteViews(context.packageName, R.layout.widget_row_ssh)
-        v.setTextViewText(R.id.row_title, row.title)
-        v.setTextViewText(R.id.row_subtitle, row.subtitle)
+        val v = RemoteViews(context.packageName,
+            if (compact) R.layout.widget_row_ssh_small else R.layout.widget_row_ssh)
+        // En compacto el detalle va en la misma linea: "nombre · user@host".
+        v.setTextViewText(R.id.row_title,
+            if (compact && row.subtitle.isNotEmpty()) "${row.title} · ${row.subtitle}"
+            else row.title)
+        if (!compact) v.setTextViewText(R.id.row_subtitle, row.subtitle)
         v.setTextViewText(R.id.row_avatar, row.title.firstOrNull()?.uppercase() ?: "?")
         v.setInt(R.id.row_avatar, "setBackgroundResource", avatarFor(row.osTag))
         v.setOnClickFillInIntent(R.id.widget_row_root, Intent().apply {
@@ -103,9 +115,12 @@ private class HostsWidgetFactory(private val context: Context) :
     }
 
     private fun sftpView(row: Row): RemoteViews {
-        val v = RemoteViews(context.packageName, R.layout.widget_row_sftp)
-        v.setTextViewText(R.id.row_title, row.title)
-        v.setTextViewText(R.id.row_subtitle, row.subtitle)
+        val v = RemoteViews(context.packageName,
+            if (compact) R.layout.widget_row_sftp_small else R.layout.widget_row_sftp)
+        v.setTextViewText(R.id.row_title,
+            if (compact && row.subtitle.isNotEmpty()) "${row.title} — ${row.subtitle}"
+            else row.title)
+        if (!compact) v.setTextViewText(R.id.row_subtitle, row.subtitle)
         v.setOnClickFillInIntent(R.id.widget_row_root, Intent().apply {
             putExtra("xtr_widget_type", "sftp")
             putExtra("xtr_widget_host_id", row.hostId)
@@ -122,7 +137,8 @@ private class HostsWidgetFactory(private val context: Context) :
     }
 
     override fun getLoadingView(): RemoteViews? = null
-    override fun getViewTypeCount(): Int = 2
+    // 4 layouts de fila posibles: ssh/sftp x normal/compacto.
+    override fun getViewTypeCount(): Int = 4
     override fun getItemId(position: Int): Long = position.toLong()
     override fun hasStableIds(): Boolean = true
     override fun getCount(): Int = rows.size

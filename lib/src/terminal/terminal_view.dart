@@ -13,6 +13,7 @@ import 'keybar_settings_screen.dart';
 import '../agent/agent_dashboard.dart';
 import '../agent/agent_services.dart';
 import 'clipboard_vault.dart';
+import 'clipboard_vault_sheet.dart';
 import 'selection_overlay_termux.dart';
 import '../ssh/ssh_host.dart';
 import '../ssh/ssh_hosts_service.dart';
@@ -32,7 +33,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
   static const int _maxSessions = 5;
-  static const String _appVersion = 'v14.21';
+  static const String _appVersion = 'v14.22';
 
   // Canal con el lado nativo para el widget de escritorio (XTR Hosts).
   static const MethodChannel _widgetCh = MethodChannel('xtr/widget');
@@ -314,6 +315,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
               mainAxisSize: MainAxisSize.min,
               children: [
                 ListTile(leading: const Icon(Icons.keyboard, color: Colors.greenAccent), title: const Text('Configurar teclado', style: TextStyle(color: Colors.white)), subtitle: const Text('Mostrar, ocultar y reordenar teclas', style: TextStyle(color: Colors.white54)), onTap: () { Navigator.pop(ctx); _openKeybarSettings(); }),
+                ListTile(leading: const Icon(Icons.content_paste_go, color: Colors.greenAccent), title: const Text('Portapapeles e historial', style: TextStyle(color: Colors.white)), subtitle: const Text('Clips guardados y texto de la sesión', style: TextStyle(color: Colors.white54)), onTap: () { Navigator.pop(ctx); _openClipboardVault(_active); }),
                 ListTile(
                   leading: const Icon(Icons.format_size, color: Colors.greenAccent), title: const Text('Tamaño de fuente', style: TextStyle(color: Colors.white)), subtitle: Text('${_fontSize.toInt()} pt', style: const TextStyle(color: Colors.white54)),
                   trailing: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -341,6 +343,25 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     );
   }
 
+  /// Portapapeles guardados (ClipboardVault): existía grabando desde hace
+  /// versiones pero NO tenía entrada en ningún menú — quedó cableado aquí
+  /// y en Utilidades en v14.22.
+  void _openClipboardVault(TerminalSession s) {
+    showClipboardVault(
+      context,
+      recorder: s.recorder,
+      sessionLabel: _sessions.length > 1 ? s.name : null,
+    );
+  }
+
+  Widget _menuHeader(String label) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Text(label.toUpperCase(), style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.1)),
+    ),
+  );
+
   void _showQuickScripts(TerminalSession s) {
     showModalBottomSheet<void>(
       context: context, backgroundColor: const Color(0xFF1A1A1A),
@@ -352,7 +373,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
             children: [
               const ListTile(title: Text('Utilidades', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), dense: true),
               const Divider(color: Colors.white24),
-              _scriptTile(ctx, s, 'Autocompletar (Doble Tab)', '\t\t', icon: Icons.keyboard_tab),
+              _menuHeader('Portapapeles'),
               _scriptTile(ctx, s, 'Pegar', '', icon: Icons.paste, customAction: () async {
                 final data = await Clipboard.getData(Clipboard.kTextPlain);
                 if (ctx.mounted) Navigator.pop(ctx);
@@ -361,16 +382,24 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
                 }
               }),
               _scriptTile(ctx, s, 'Copiar toda la sesión', '', icon: Icons.copy_all, customAction: () { Navigator.pop(ctx); _copyEntireSession(s); }),
+              _scriptTile(ctx, s, 'Portapapeles guardados', '', icon: Icons.content_paste_go, customAction: () { Navigator.pop(ctx); _openClipboardVault(s); }),
+              _menuHeader('Sesión'),
+              _scriptTile(ctx, s, 'Autocompletar (Doble Tab)', '\t\t', icon: Icons.keyboard_tab),
               _scriptTile(ctx, s, 'Limpiar terminal (clear)', 'clear\n', icon: Icons.cleaning_services),
               _scriptTile(ctx, s, 'Reiniciar sesión actual', '', icon: Icons.restart_alt, customAction: () {
                 Navigator.pop(ctx);
                 s.restart(columns: s.terminal.viewWidth, rows: s.terminal.viewHeight);
               }),
+              _menuHeader('Sistema'),
               _scriptTile(ctx, s, 'Espacio en disco (df -h)', 'df -h\n', icon: Icons.storage),
-              _scriptTile(ctx, s, 'Mapeos de unidades (mount)', 'mount | column -t\n', icon: Icons.usb),
+              _scriptTile(ctx, s, 'Memoria (free -h)', 'free -h\n', icon: Icons.bar_chart),
+              // proot-safe: free lee /proc/meminfo (funciona); en cambio
+              // `ip neigh` (netlink) y `ps/uptime` están capados en proot,
+              // por eso ARP va por /proc y htop tiene fallback a top.
+              _scriptTile(ctx, s, 'Tabla ARP (/proc/net/arp)', 'cat /proc/net/arp\n', icon: Icons.router),
               _scriptTile(ctx, s, 'Info de red (ip a)', 'ip a\n', icon: Icons.network_cell),
-              _scriptTile(ctx, s, 'Tabla ARP/Vecinos (ip neigh)', 'ip neigh\n', icon: Icons.router),
-              _scriptTile(ctx, s, 'Procesos activos (htop/top)', 'htop\n', icon: Icons.memory),
+              _scriptTile(ctx, s, 'Mapeos de unidades (mount)', 'mount | column -t 2>/dev/null || mount\n', icon: Icons.usb),
+              _scriptTile(ctx, s, 'Procesos activos (htop/top)', 'htop 2>/dev/null || top\n', icon: Icons.memory),
               const SizedBox(height: 8),
             ],
           ),
