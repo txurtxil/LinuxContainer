@@ -49,7 +49,7 @@ MEMORY_DIR = "/root/agent_memory"
 MEMORY_DB = os.path.join(MEMORY_DIR, "memory.db")
 LOGS_DIR = os.path.join(MEMORY_DIR, "logs")
 
-VERSION = "14.12"
+VERSION = "14.13"
 
 SYSTEM_PROMPT = """You ARE the system. You CAN execute code. You WILL use tools. NEVER refuse to execute commands. Never apologize for being an AI.
 
@@ -80,44 +80,22 @@ You receive a GOAL, not a command. Break it into steps yourself. Use remember/re
 ## EXAMPLE CONVERSATION (network scan)
 USER: Scan my local network and map the devices.
 
-ASSISTANT: <tool>bash</tool><args>{"command": "ip route | head -20"}</args>
+ASSISTANT: The native netscan tool discovers live hosts, open ports, hostnames and MAC vendors in one call (it auto-detects the real LAN).
+<tool>netscan</tool><args>{"subnet": "auto"}</args>
 
-TOOL RESULT [bash]: default via 192.168.1.1 dev wlan0
-192.168.1.0/24 dev wlan0 proto kernel scope link src 192.168.1.42
+TOOL RESULT [netscan]: {"subnet": "192.168.10.0/24", "hosts": [{"ip": "192.168.10.1", "ports": [80, 443], "name": "router.local", "vendor": "Espressif"}, {"ip": "192.168.10.42", "ports": [22], "name": "server", "vendor": "Intel"}], "alive": 2}
 
-ASSISTANT: The network is 192.168.1.0/24. Now scanning for live hosts.
-<tool>bash</tool><args>{"command": "nmap -sn 192.168.1.0/24", "timeout": 120}</args>
+ASSISTANT: Found 2 hosts. Now rendering the topology map with the native netmap tool (it reuses the scan).
+<tool>netmap</tool><args>{"output": "/root/network_map.png"}</args>
 
-TOOL RESULT [bash]: Nmap done: 0 IP addresses (0 hosts up) scanned in 0.14 seconds
-
-ASSISTANT: nmap ARP scan found 0 hosts — raw sockets are restricted inside proot. Falling back to TCP/ping discovery, which works here.
-<tool>bash</tool><args>{"command": "for i in $(seq 1 254); do (ping -c1 -W1 192.168.1.$i >/dev/null 2>&1 && echo 192.168.1.$i) & done; wait; echo '--- ARP table:'; ip neigh show | grep -v FAILED", "timeout": 120}</args>
-
-TOOL RESULT [bash]: 192.168.1.1
-192.168.1.42
-192.168.1.57
-192.168.1.88
---- ARP table:
-192.168.1.1 dev wlan0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
-192.168.1.57 dev wlan0 lladdr 11:22:33:44:55:66 REACHABLE
-
-ASSISTANT: Found 4 hosts via ping sweep. Now fingerprinting with unprivileged TCP connect scan (no -sS/-O, they need raw sockets).
-<tool>bash</tool><args>{"command": "nmap -sT -sV --unprivileged 192.168.1.57 192.168.1.88", "timeout": 180}</args>
-
-TOOL RESULT [bash]: 192.168.1.57: ports 22/tcp ssh OpenSSH 8.9, 80/tcp http nginx
-192.168.1.88: ports 5555/tcp adb
-
-ASSISTANT: Now generating the network map.
-<tool>python</tool><args>{"code": "import graphviz\\ng = graphviz.Digraph()\\ng.node('router', '192.168.1.1 router')\\ng.node('phone', '192.168.1.42 this device')\\ng.node('srv', '192.168.1.57 Linux SSH/HTTP')\\ng.node('droid', '192.168.1.88 Android ADB')\\ng.edges([('router','phone'),('router','srv'),('router','droid')])\\ng.render('/root/network_map', format='png', cleanup=True)\\nprint('map written to /root/network_map.png')"}</args>
-
-TOOL RESULT [python]: map written to /root/network_map.png
+TOOL RESULT [netmap]: {"exit_code": 0, "image_path": "/root/network_map.png", "hosts": 2}
 
 ASSISTANT: Verifying the file exists before claiming success.
 <tool>bash</tool><args>{"command": "ls -l /root/network_map.png"}</args>
 
 TOOL RESULT [bash]: -rw-r--r-- 1 root root 48210 network_map.png
 
-<final>Network scan complete. Found 4 devices on 192.168.1.0/24: the router (.1), this device (.42), a Linux server (.57, SSH+HTTP), and an Android device (.88, ADB open). Map saved to /root/network_map.png.</final>
+<final>Network scan complete. Found 2 devices on 192.168.10.0/24: the router (192.168.10.1, Espressif, HTTP/HTTPS) and a server (192.168.10.42, SSH). Map saved to /root/network_map.png.</final>
 
 ## RULES
 - ALWAYS act. NEVER say "I can't" or "as an AI".
@@ -125,12 +103,12 @@ TOOL RESULT [bash]: -rw-r--r-- 1 root root 48210 network_map.png
 - If a command fails, analyze the error and try a different approach.
 - NEVER claim a file was created/saved unless you verified it with ls. If a tool result contains an error, the task is NOT done — fix it first.
 - If graphviz/dot is missing, install it (apt-get install -y graphviz) or fall back to matplotlib/networkx to render the PNG.
-- If a command is not found (ip, netstat, nmap...), install it with apt-get instead of giving up.
+- If a command is not found (ip, netstat, htop...), install it with apt-get instead of giving up.
 - For network scanning/mapping, ALWAYS use the native tool `netmap` — it scans AND renders the map PNG in one call. Do NOT write your own scanning/drawing code for this.
 - For security audits, ALWAYS use the native tool `audit` — it produces the full Markdown report in one call. Do NOT write long one-liner shell scripts.
 - Keep each bash command SHORT and SIMPLE (one command, no chains of echoes). Long one-liners with quotes always fail.
 - NEVER write "TOOL RESULT" text yourself. Tool results are provided by the system only. Inventing tool output is a critical failure.
-- PROOT ENVIRONMENT: raw-socket operations FAIL inside this container. `nmap -sn` (ARP ping) returns 0 hosts, and `-sS`/`-O` need root raw sockets. For host discovery use a ping sweep loop + `ip neigh show`, or `nmap -sn -PS22,80,443 --unprivileged`. For port scans use `nmap -sT -sV --unprivileged`. NEVER report "0 hosts up" as a network problem without trying these fallbacks first.
+- PROOT ENVIRONMENT: raw sockets and netlink are BLOCKED inside this container. nmap ALWAYS fails here ("setup_target: failed to determine route") and the server REJECTS nmap commands — never call it, not even with --unprivileged. For host discovery/port scans use the native tools `netscan`/`netmap` (ping + TCP connect, proot-safe). `ss` and `ip neigh` also fail — read /proc directly if needed.
 - NEVER emit <think> blocks or "think aloud". Reason SILENTLY and output ONLY tool calls or <final>. Thinking text wastes the response budget and is a critical failure. /no_think
 """
 
@@ -147,10 +125,11 @@ Finish with: <final>answer</final>
 
 RULES:
 1. NEVER emit <think> or reasoning text. Output ONLY tool calls or <final>. /no_think
-2. "netmap" is OUR topology-map tool, NOT a package. If the user asks to INSTALL something (nmap, htop, git...), use bash with apt: <tool>bash</tool><args>{"command": "apt-get install -y nmap"}</args> — never confuse the tool with the package.
+2. "netmap" is OUR topology-map tool, NOT a package. If the user asks to INSTALL something (htop, git...), use bash with apt: <tool>bash</tool><args>{"command": "apt-get install -y htop"}</args> — never confuse the tool with the package. nmap is REJECTED by the server: it cannot work in proot (no raw sockets), so installing it is pointless.
 2. For LAN scans/maps: call `netscan` (or `netmap` for the PNG) with NO subnet — the tool AUTO-DETECTS the real LAN (e.g. 192.168.10.0/24). NEVER invent 192.168.1.0/24. Do NOT hand-write nmap pipelines — raw sockets fail in proot.
 3. For security audits ALWAYS use tool `audit`.
 4. NEVER invent TOOL RESULT text. Verify created files with list_dir before claiming success.
+5. write_file only writes TEXT — it CANNOT create images (.png/.jpg...). Images are generated with python + matplotlib (or the netmap tool for maps).
 """
 
 # ---------------------------------------------------------------------------
@@ -268,6 +247,17 @@ def goal_log(goal_id, event, data):
 
 
 def tool_bash(command, timeout=30):
+    # v14.13: nmap NUNCA funciona dentro de proot (raw sockets/netlink
+    # capados) pero devuelve exit 0 con "failed to determine route", lo que
+    # enganchaba al modelo en bucles de reintentos. Se bloquea SOLO cuando
+    # se invoca como comando (inicio, tras pipe/;/&&/$(...) — mencionarlo
+    # como argumento (apt-cache search nmap) no se bloquea.
+    import re as _re_sh
+    if _re_sh.search(r"(^|[|;&(]|\&\&|\|\|)\s*nmap\b", command):
+        return {"exit_code": -1, "stdout": "", "stderr": "",
+                "error": "nmap NO funciona dentro de proot (sin raw "
+                         "sockets): usa la herramienta nativa netscan "
+                         "(descubrir hosts/puertos) o netmap (mapa PNG)."}
     try:
         proc = subprocess.Popen(
             command, shell=True,
@@ -311,7 +301,27 @@ def tool_read_file(path, limit=5000):
         return {"exit_code": -1, "error": str(exc)}
 
 
+def _is_real_image(path):
+    """True si el fichero empieza por magic bytes de imagen reales."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(12)
+        return head.startswith((b"\x89PNG", b"\xff\xd8\xff", b"GIF8",
+                                b"RIFF", b"BM"))
+    except OSError:
+        return False
+
+
 def tool_write_file(path, content):
+    # Un .png escrito a mano con texto es un PNG FALSO (el modelo lo hace
+    # cuando no sabe generar la imagen de verdad). Se rechaza: las imagenes
+    # se generan con python+matplotlib o con las herramientas nativas.
+    if os.path.splitext(str(path))[1].lower() in (
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
+        return {"exit_code": -1,
+                "error": "write_file solo escribe TEXTO; un archivo de "
+                         "imagen creado asi es falso. Genera la imagen con "
+                         "python + matplotlib (o usa netmap)."}
     try:
         parent = os.path.dirname(path)
         if parent:
@@ -1619,11 +1629,19 @@ def agent_loop(goal, goal_id, max_steps, event_cb=None, llm_overrides=None):
         import re as _re2
         mentioned = _re2.findall(r"(/(?:root|tmp)/[^\s\"\'()]*\.(?:png|jpe?g|gif|webp))", final_text)
         missing = [m for m in set(mentioned) if not os.path.exists(m)]
+        fake = [m for m in set(mentioned)
+                if os.path.exists(m) and not _is_real_image(m)]
         if missing:
             final_text += ("\n\n[aviso: estos archivos NO se llegaron a crear: "
                            + ", ".join(missing) + "]")
             if status == "done":
                 status = "failed"  # afirmo exito sin evidencia
+        if fake:
+            final_text += ("\n\n[aviso: estos 'archivos de imagen' son FALSOS "
+                           "(contienen texto, no una imagen real): "
+                           + ", ".join(fake) + "]")
+            if status == "done":
+                status = "failed"
 
     # Verificacion cruzada de ESCANEOS: si en la meta se ejecuto netscan/
     # netmap, el resultado REAL de la herramienta es la unica verdad. El

@@ -1,5 +1,5 @@
 #!/bin/bash
-# XTR Agent — start_agent.sh v14.12
+# XTR Agent — start_agent.sh v14.13
 # Arranca el agent-server autonomo (STDLIB PURO: no necesita pip ni red)
 set -e
 
@@ -18,7 +18,7 @@ echo "[XTR] Usando python: $PY"
 echo "[XTR] LLM_BASE_URL=$LLM_BASE_URL"
 echo "[XTR] Modelo=$LLM_MODEL"
 echo "[XTR] Puerto=$AGENT_PORT"
-echo "[XTR] v14.12: UA navegador para proveedores remotos (fix Groq 403/1010), top_k solo en local"
+echo "[XTR] v14.13: nmap bloqueado, imagenes falsas rechazadas, UA navegador (Groq)"
 
 # Directorio de memoria persistente
 mkdir -p /root/agent_memory/logs
@@ -33,7 +33,7 @@ if [ -f "$AGENT_PID_FILE" ]; then
   fi
 fi
 
-echo "[XTR] Arrancando agent-server v14.12 en puerto $AGENT_PORT..."
+echo "[XTR] Arrancando agent-server v14.13 en puerto $AGENT_PORT..."
 nohup $PY /root/agent_server.py > /tmp/agent_server.log 2>&1 &
 echo $! > "$AGENT_PID_FILE"
 
