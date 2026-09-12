@@ -12,6 +12,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'ssh_host.dart';
+import '../widget/widget_sync.dart';
 
 class SshHostsService extends ChangeNotifier {
   static final SshHostsService instance = SshHostsService._();
@@ -49,6 +50,8 @@ class SshHostsService extends ChangeNotifier {
         ..clear()
         ..addAll(list.map((e) => SshHost.fromJson(e as Map<String, dynamic>)));
       notifyListeners();
+      // Espejo para el widget de escritorio (fire-and-forget).
+      Future.microtask(WidgetSync.push);
     } catch (_) {
       // JSON corrupto o ilegible: se sigue con la lista vacia en vez de
       // tirar la pantalla de hosts abajo por un fichero roto.
@@ -63,6 +66,8 @@ class SshHostsService extends ChangeNotifier {
       final list = _hosts.map((h) => h.toJson()).toList();
       await f.writeAsString(const JsonEncoder.withIndent('  ').convert(list));
     } catch (_) {}
+    // Espejo para el widget de escritorio (fire-and-forget).
+    Future.microtask(WidgetSync.push);
   }
 
   Future<void> add(SshHost host) async {

@@ -29,6 +29,13 @@ class MainActivity : FlutterFragmentActivity() {
     private val MEDIAPIPE        = "xtr/mediapipe"
     private val MEDIAPIPE_STREAM = "xtr/mediapipe/stream"
     private val CHANNEL_MAIN     = "xtr/main"
+    private val WIDGET_CH        = "xtr/widget"
+
+    // Accion pendiente procedente del widget de escritorio (click en una
+    // fila SSH/SFTP). Se guarda aqui y Flutter la recoge con
+    // "getPendingAction" (fetch+clear atomico: sin duplicados ni perdidas).
+    private var widgetChannel: MethodChannel? = null
+    private var pendingWidgetAction: Map<String, Any?>? = null
 
     private val REQUEST_IMPORT = 4711
     private var pendingImport: MethodChannel.Result? = null
@@ -226,6 +233,46 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // ── Widget de escritorio (hosts SSH / favoritos SFTP) ──
+        val wch = MethodChannel(messenger, WIDGET_CH)
+        widgetChannel = wch
+        wch.setMethodCallHandler { call, result ->
+            when (call.method) {
+                // WidgetSync.dart acaba de escribir el espejo JSON en prefs:
+                // refrescar la lista del widget.
+                "refresh" -> {
+                    HostsWidgetProvider.requestRefresh(applicationContext)
+                    result.success(true)
+                }
+                // Flutter recoge (y limpia) la accion pendiente del widget.
+                "getPendingAction" -> {
+                    val a = pendingWidgetAction
+                    pendingWidgetAction = null
+                    result.success(a)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    // ── Widget: captura del intent con extras xtr_widget_* ────
+    private fun handleWidgetIntent(intent: Intent?) {
+        val type = intent?.getStringExtra("xtr_widget_type") ?: return
+        val action = mutableMapOf<String, Any?>("type" to type)
+        intent.getStringExtra("xtr_widget_host_id")?.let { action["hostId"] = it }
+        intent.getStringExtra("xtr_widget_path")?.let { action["path"] = it }
+        pendingWidgetAction = action
+        // Aviso ligero: si Flutter ya esta escuchando, pide la accion y la
+        // procesa al momento (app en caliente). Si no, la recogera en el
+        // arranque con getPendingAction (app en frio).
+        widgetChannel?.invokeMethod("onWidgetAction", null)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWidgetIntent(intent)
     }
 
     // ── onCreate: diálogo de primer arranque ──────────────────
@@ -244,6 +291,8 @@ class MainActivity : FlutterFragmentActivity() {
         imagePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             handlePickedTestImage(uri)
         }
+        // Click del widget en frio (la app se abre por el PendingIntent).
+        handleWidgetIntent(intent)
         // El rootfs lo gestiona ContainerBootstrap.dart (sistema original)
     }
 

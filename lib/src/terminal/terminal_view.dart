@@ -32,7 +32,10 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
   static const int _maxSessions = 5;
-  static const String _appVersion = 'v14.19';
+  static const String _appVersion = 'v14.21';
+
+  // Canal con el lado nativo para el widget de escritorio (XTR Hosts).
+  static const MethodChannel _widgetCh = MethodChannel('xtr/widget');
 
   List<KeyConfigItem> _keybarConfig = KeyCatalog.defaultConfig;
   final List<String> _logLines = [];
@@ -97,6 +100,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
         await ClipboardVault.instance.loadFrom(_manager.rootfsPath!);
         await SshHostsService.instance.loadFrom(_manager.rootfsPath!);
         await SftpFavoritesService.instance.loadFrom(_manager.rootfsPath!);
+        _initWidgetChannel();
       }
 
       await Future.delayed(const Duration(milliseconds: 300));
@@ -232,6 +236,62 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
     final base = buf.createAnchor(0, topAbsolute);
     final extent = buf.createAnchor(buf.viewWidth - 1, bottomAbsolute);
     _active.controller.setSelection(base, extent);
+  }
+
+  // ── Widget de escritorio (XTR Hosts) ──────────────────────────────────
+
+  /// Escucha los avisos del lado nativo y recoge la accion pendiente
+  /// (fetch+clear atomico en "getPendingAction": sin duplicados).
+  void _initWidgetChannel() {
+    _widgetCh.setMethodCallHandler((call) async {
+      if (call.method == 'onWidgetAction') await _consumeWidgetAction();
+    });
+    // Arranque en frio por click del widget.
+    _consumeWidgetAction();
+  }
+
+  Future<void> _consumeWidgetAction() async {
+    try {
+      final Map<dynamic, dynamic>? action =
+          await _widgetCh.invokeMethod<Map<dynamic, dynamic>>('getPendingAction');
+      if (action != null) _handleWidgetAction(action);
+    } catch (_) {}
+  }
+
+  void _handleWidgetAction(Map<dynamic, dynamic> action) {
+    if (!mounted || !_manager.isReady) return;
+    final type = action['type']?.toString();
+    final hostId = action['hostId']?.toString();
+    if (hostId == null || hostId.isEmpty) return;
+    final matches = SshHostsService.instance.hosts.where((h) => h.id == hostId);
+    if (matches.isEmpty) {
+      _toast('El host del widget ya no existe');
+      return;
+    }
+    final host = matches.first;
+    if (type == 'sftp') {
+      final path = action['path']?.toString();
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SftpBrowserScreen(
+          host: host,
+          rootfsPath: _manager.rootfsPath!,
+          initialDir: (path != null && path.isNotEmpty) ? path : null,
+          onOpenTerminal: (h) {
+            Navigator.of(context).popUntil((r) => r.isFirst);
+            _connectToHost(h);
+          },
+        ),
+      ));
+    } else {
+      _connectToHost(host);
+    }
+  }
+
+  Future<void> _pasteClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data?.text != null && data!.text!.isNotEmpty) {
+      _active.terminal.textInput(data.text!);
+    }
   }
 
   void _toast(String msg) {
@@ -444,7 +504,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
             }).toList(),
           ),
         ),
-        if (!_sftpOpen.contains(_active)) TerminalKeybar(terminal: _active.terminal, config: _keybarConfig, onFontIncrease: () => _changeFont(1), onFontDecrease: () => _changeFont(-1), onMenu: _showSettings),
+        if (!_sftpOpen.contains(_active)) TerminalKeybar(terminal: _active.terminal, config: _keybarConfig, onFontIncrease: () => _changeFont(1), onFontDecrease: () => _changeFont(-1), onMenu: _showSettings, onCopy: _copySelection, onPaste: _pasteClipboard),
       ],
     );
   }

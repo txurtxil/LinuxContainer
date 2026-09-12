@@ -42,6 +42,22 @@
                 android:value="Mantiene activos el servidor de inferencia local y el agente mientras la app esta en segundo plano"/>
         </service>
 
+        <!-- Widget de escritorio: hosts SSH + favoritos SFTP -->
+        <receiver
+            android:name=".HostsWidgetProvider"
+            android:exported="false"
+            android:label="XTR Hosts">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/hosts_widget_info"/>
+        </receiver>
+        <service
+            android:name=".HostsWidgetService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"/>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

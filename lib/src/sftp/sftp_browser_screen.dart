@@ -44,12 +44,18 @@ class SftpBrowserScreen extends StatefulWidget {
   /// alternante shell<->SFTP): sin flecha atrás y barra más baja.
   final bool embedded;
 
+  /// Ruta inicial explicita (deep-link desde el widget de escritorio con un
+  /// favorito SFTP). Manda sobre la ultima carpeta visitada y sobre el
+  /// initialPath del host.
+  final String? initialDir;
+
   const SftpBrowserScreen({
     super.key,
     required this.host,
     required this.rootfsPath,
     this.onOpenTerminal,
     this.embedded = false,
+    this.initialDir,
   });
 
   @override
@@ -67,7 +73,9 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
   // home del usuario remoto como siempre ('.' es lo que ya usaba sftp).
   // La última carpeta visitada en este host manda sobre la ruta inicial:
   // al alternar shell<->SFTP (o reabrir desde Hosts) vuelves donde estabas.
-  late String _path = SftpConnectionPool.instance.lastPathFor(widget.host.id) ??
+  // Un deep-link del widget (initialDir) manda sobre todo lo anterior.
+  late String _path = widget.initialDir ??
+      SftpConnectionPool.instance.lastPathFor(widget.host.id) ??
       ((widget.host.initialPath?.trim().isNotEmpty ?? false)
           ? widget.host.initialPath!.trim()
           : '.');

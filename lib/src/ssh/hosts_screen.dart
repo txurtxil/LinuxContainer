@@ -25,10 +25,6 @@ const Map<String, Color> _osColors = {
   'debian': Color(0xFFD70A53), 'ubuntu': Color(0xFFE95420),
   'raspbian': Color(0xFFC51A4A), 'generic': Color(0xFF2D5F8A),
 };
-const Map<String, IconData> _osIcons = {
-  'debian': Icons.blur_circular, 'ubuntu': Icons.blur_circular,
-  'raspbian': Icons.blur_circular, 'generic': Icons.dns_rounded,
-};
 
 class HostsScreen extends StatefulWidget {
   final void Function(SshHost host) onConnect;
@@ -43,6 +39,8 @@ class HostsScreen extends StatefulWidget {
 
 class _HostsScreenState extends State<HostsScreen> {
   final _svc = SshHostsService.instance;
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
 
   @override
   void initState() {
@@ -53,11 +51,21 @@ class _HostsScreenState extends State<HostsScreen> {
   @override
   void dispose() {
     _svc.removeListener(_onChange);
+    _searchCtrl.dispose();
     super.dispose();
   }
 
   void _onChange() {
     if (mounted) setState(() {});
+  }
+
+  List<SshHost> get _filtered {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return _svc.hosts;
+    return _svc.hosts.where((h) =>
+        h.name.toLowerCase().contains(q) ||
+        h.hostname.toLowerCase().contains(q) ||
+        h.username.toLowerCase().contains(q)).toList();
   }
 
   Future<void> _exportHosts() async {
@@ -127,7 +135,7 @@ class _HostsScreenState extends State<HostsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final hosts = _svc.hosts;
+    final hosts = _filtered;
     return Scaffold(
       backgroundColor: _C.bg,
       appBar: AppBar(
@@ -158,13 +166,43 @@ class _HostsScreenState extends State<HostsScreen> {
           ),
         ],
       ),
-      body: hosts.isEmpty
-          ? const Center(child: Text('Sin hosts todavía · toca + para añadir uno', style: TextStyle(color: _C.textLo, fontSize: 13)))
-          : ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: hosts.length,
-              itemBuilder: (context, i) => _hostTile(hosts[i]),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: TextField(
+              controller: _searchCtrl,
+              onChanged: (v) => setState(() => _query = v),
+              style: const TextStyle(color: _C.textHi, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Buscar host…',
+                hintStyle: const TextStyle(color: _C.textLo, fontSize: 14),
+                prefixIcon: const Icon(Icons.search, color: _C.textLo, size: 20),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close, color: _C.textLo, size: 18),
+                        onPressed: () { _searchCtrl.clear(); setState(() => _query = ''); },
+                      ),
+                filled: true,
+                fillColor: _C.cardAlt,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+              ),
             ),
+          ),
+          Expanded(
+            child: hosts.isEmpty
+                ? Center(child: Text(_query.isEmpty ? 'Sin hosts todavía · toca + para añadir uno' : 'Ningún host coincide con la búsqueda', style: const TextStyle(color: _C.textLo, fontSize: 13)))
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    itemCount: hosts.length,
+                    itemBuilder: (context, i) => _hostTile(hosts[i]),
+                  ),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: _C.accent,
         onPressed: () => _openEditor(),
@@ -175,7 +213,8 @@ class _HostsScreenState extends State<HostsScreen> {
 
   Widget _hostTile(SshHost h) {
     final color = _osColors[h.osTag] ?? _osColors['generic']!;
-    final icon = _osIcons[h.osTag] ?? _osIcons['generic']!;
+    // Avatar estilo Termius: cuadrado redondeado con la inicial del host.
+    final initial = h.name.trim().isEmpty ? '?' : h.name.trim()[0].toUpperCase();
     return Dismissible(
       key: ValueKey(h.id), direction: DismissDirection.endToStart,
       background: Container(color: _C.err, alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete, color: Colors.white)),
@@ -183,7 +222,12 @@ class _HostsScreenState extends State<HostsScreen> {
       child: ListTile(
         onTap: () async { await _svc.touch(h.id); widget.onConnect(h); },
         onLongPress: () => _openEditor(existing: h),
-        leading: Container(width: 42, height: 42, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: Colors.white, size: 22)),
+        leading: Container(
+          width: 42, height: 42,
+          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(12)),
+          alignment: Alignment.center,
+          child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        ),
         title: Text(h.name, style: const TextStyle(color: _C.textHi, fontWeight: FontWeight.w500)),
         subtitle: Text('${h.username}@${h.hostname}${h.port != 22 ? ':${h.port}' : ''}', style: const TextStyle(color: _C.textLo, fontSize: 12)),
         trailing: Row(

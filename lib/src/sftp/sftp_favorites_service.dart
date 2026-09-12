@@ -10,6 +10,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../widget/widget_sync.dart';
+
 class SftpFavorite {
   final String id;
   final String hostId;
@@ -50,6 +52,9 @@ class SftpFavoritesService extends ChangeNotifier {
   List<SftpFavorite> forHost(String hostId) =>
       _favorites.where((f) => f.hostId == hostId).toList();
 
+  /// Todos los favoritos (lo usa WidgetSync para el espejo del widget).
+  List<SftpFavorite> get all => List<SftpFavorite>.unmodifiable(_favorites);
+
   bool isFavorite(String hostId, String path) =>
       _favorites.any((f) => f.hostId == hostId && f.path == path);
 
@@ -65,6 +70,7 @@ class SftpFavoritesService extends ChangeNotifier {
         ..clear()
         ..addAll(list.map((e) => SftpFavorite.fromJson(e as Map<String, dynamic>)));
       notifyListeners();
+      Future.microtask(WidgetSync.push);
     } catch (_) {}
   }
 
@@ -76,6 +82,7 @@ class SftpFavoritesService extends ChangeNotifier {
       final list = _favorites.map((h) => h.toJson()).toList();
       await f.writeAsString(const JsonEncoder.withIndent('  ').convert(list));
     } catch (_) {}
+    Future.microtask(WidgetSync.push);
   }
 
   Future<void> toggle(String hostId, String path) async {
