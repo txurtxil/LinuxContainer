@@ -44,7 +44,7 @@ class SftpFavoritesService extends ChangeNotifier {
   static final SftpFavoritesService instance = SftpFavoritesService._();
   SftpFavoritesService._();
 
-  static const String _fileRel = '/root/.xtr/sftp_favorites.json';
+  static const String _fileRel = '/sftp_favorites.json';
 
   String? _rootfsPath;
   final List<SftpFavorite> _favorites = [];

@@ -39,7 +39,7 @@ class SftpEntry {
 }
 
 class SftpService {
-  static const String _knownHostsRel = '/root/.xtr/sftp_known_hosts.json';
+  static const String _knownHostsRel = '/ssh_known_hosts.json';
   static const String _downloadDirAbs = '/storage/emulated/0/Download/xtr_sftp';
 
   final SshHost host;
@@ -89,7 +89,12 @@ class SftpService {
 
     List<SSHKeyPair>? identities;
     if (host.keyPath != null && host.keyPath!.trim().isNotEmpty) {
-      final keyFile = File('$rootfsPath${host.keyPath}');
+      // keyPath: '/keys/<nombre>' en el almacén de la app; tolerancia a
+      // rutas legacy '/root/.ssh/<nombre>' (las migra AppPaths).
+      var keyFile = File('$rootfsPath${host.keyPath}');
+      if (!await keyFile.exists() && host.keyPath!.startsWith('/root/.ssh/')) {
+        keyFile = File('$rootfsPath/keys/${host.keyPath!.split('/').last}');
+      }
       if (await keyFile.exists()) {
         identities = SSHKeyPair.fromPem(await keyFile.readAsString());
       }

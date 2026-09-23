@@ -34,15 +34,6 @@
             </intent-filter>
         </activity>
 
-        <service
-            android:name=".AgentForegroundService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Mantiene activos el servidor de inferencia local y el agente mientras la app esta en segundo plano"/>
-        </service>
-
         <!-- Widget de escritorio: hosts SSH + favoritos SFTP -->
         <receiver
             android:name=".HostsWidgetProvider"

@@ -1,17 +1,14 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xterm/xterm.dart';
 
-import '../container/container_manager.dart';
+import '../storage/app_paths.dart';
 import 'terminal_keybar.dart';
 import 'terminal_session.dart';
 import 'keybar_config.dart';
 import 'keybar_settings_screen.dart';
-import '../agent/agent_dashboard.dart';
-import '../agent/agent_services.dart';
 import 'clipboard_vault.dart';
 import 'clipboard_vault_sheet.dart';
 import 'selection_overlay_termux.dart';
@@ -29,11 +26,10 @@ class TerminalScreen extends StatefulWidget {
 }
 
 class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObserver {
-  final ContainerManager _manager = ContainerManager();
   final List<TerminalSession> _sessions = [];
   int _activeIndex = 0;
   static const int _maxSessions = 5;
-  static const String _appVersion = 'v14.23';
+  static const String _appVersion = 'v14.24';
 
   // Canal con el lado nativo para el widget de escritorio (XTR Hosts).
   static const MethodChannel _widgetCh = MethodChannel('xtr/widget');
@@ -46,7 +42,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   double? _progress = 0.0;
   bool _spinning = false;
   bool _booting = true;
-  bool _showAgent = false;
   bool _showHostsOnStartup = false;
   bool _keepAlive = true;
   String? _error;
@@ -71,7 +66,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && !_showAgent) {
+    if (state == AppLifecycleState.resumed) {
       Future.delayed(const Duration(milliseconds: 150), () {
         if (mounted) {
           _focusNodes[_activeIndex]?.requestFocus();
@@ -103,17 +98,15 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       }
 
       _keybarConfig = await KeybarConfig.load();
-      await _manager.initContainer(log: _appendLog);
 
-      if (_manager.isReady) {
-        final svc = AgentServices();
-        svc.startAgent();
-        svc.startCron();
-        await ClipboardVault.instance.loadFrom(_manager.rootfsPath!);
-        await SshHostsService.instance.loadFrom(_manager.rootfsPath!);
-        await SftpFavoritesService.instance.loadFrom(_manager.rootfsPath!);
-        _initWidgetChannel();
-      }
+      // v14.24: sin contenedor Debian — los datos viven en el almacenamiento
+      // privado de la app y se migran desde el rootfs antiguo si existe.
+      await AppPaths.init();
+      await AppPaths.migrateLegacyData();
+      await ClipboardVault.instance.loadFrom(AppPaths.base);
+      await SshHostsService.instance.loadFrom(AppPaths.base);
+      await SftpFavoritesService.instance.loadFrom(AppPaths.base);
+      _initWidgetChannel();
 
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
@@ -156,24 +149,16 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
 
   Future<void> _connectToHost(SshHost host) async {
     if (_sessions.length >= _maxSessions) { _toast('Máximo $_maxSessions sesiones'); return; }
-    var command = host.toSshCommand();
+    // La contraseña guardada (Keystore) se inyecta en el cliente dartssh2;
+    // el hack del fichero sshpass dentro del rootfs muere con el contenedor.
+    String? pwd;
     final hasKey = host.keyPath != null && host.keyPath!.trim().isNotEmpty;
     if (!hasKey) {
-      final pwd = await SshCredentialsStore.readPassword(host.id);
+      pwd = await SshCredentialsStore.readPassword(host.id);
       if (!mounted) return;
-      if (pwd != null && pwd.isNotEmpty) {
-        try {
-          final rel = '/root/.xtr/sshpass_${host.id}';
-          final f = File('${_manager.rootfsPath!}$rel');
-          await f.parent.create(recursive: true);
-          await f.writeAsString('$pwd\n');
-          await Process.run('chmod', ['600', f.path]);
-          command = host.toSshCommandWithPassfile(rel);
-        } catch (_) {}
-      }
     }
-    _sessions.add(TerminalSession(host.name, customCommand: command, sourceHost: host));
-    setState(() { _activeIndex = _sessions.length - 1; _showAgent = false; });
+    _sessions.add(TerminalSession(host.name, sourceHost: host, password: pwd));
+    setState(() => _activeIndex = _sessions.length - 1);
     SchedulerBinding.instance.addPostFrameCallback((_) {
       WidgetsBinding.instance.endOfFrame.then((_) { if (mounted) _startActiveSession(); });
     });
@@ -190,7 +175,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   void _openHosts() {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => HostsScreen(
-        rootfsPath: _manager.rootfsPath,
+        rootfsPath: AppPaths.base,
         onConnect: (host) { Navigator.of(context).pop(); _connectToHost(host); },
         onOpenTerminalFromSftp: (host) { Navigator.of(context).popUntil((r) => r.isFirst); _connectToHost(host); },
       ),
@@ -271,7 +256,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   }
 
   void _handleWidgetAction(Map<dynamic, dynamic> action) {
-    if (!mounted || !_manager.isReady) return;
+    if (!mounted) return;
     final type = action['type']?.toString();
     final hostId = action['hostId']?.toString();
     if (hostId == null || hostId.isEmpty) return;
@@ -286,7 +271,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => SftpBrowserScreen(
           host: host,
-          rootfsPath: _manager.rootfsPath!,
+          rootfsPath: AppPaths.base,
           initialDir: (path != null && path.isNotEmpty) ? path : null,
           onOpenTerminal: (h) {
             Navigator.of(context).popUntil((r) => r.isFirst);
@@ -473,7 +458,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
   Widget build(BuildContext context) {
     if (_error != null) return Scaffold(backgroundColor: Colors.black, body: SafeArea(child: Padding(padding: const EdgeInsets.all(16), child: SingleChildScrollView(child: Text('ERROR:\n$_error', style: const TextStyle(color: Colors.red, fontFamily: 'monospace'))))));
     if (_booting) return Scaffold(backgroundColor: Colors.black, body: SafeArea(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('LinuxContainer · arranque', style: TextStyle(color: Colors.white38, fontFamily: 'monospace', fontSize: 12)), const SizedBox(height: 12), Expanded(child: ListView.builder(itemCount: _logLines.length, itemBuilder: (ctx, i) => Padding(padding: const EdgeInsets.symmetric(vertical: 1), child: Text(_logLines[i], style: TextStyle(color: _lineColor(_logLines[i]), fontFamily: 'monospace', fontSize: 13, height: 1.3))))), const SizedBox(height: 12), LinearProgressIndicator(value: _spinning ? null : _progress, backgroundColor: Colors.white10, color: Colors.greenAccent), const SizedBox(height: 8)]))));
-    return Scaffold(backgroundColor: Colors.black, body: SafeArea(child: _showAgent ? AgentDashboard(onClose: () => setState(() => _showAgent = false)) : _terminalView()));
+    return Scaffold(backgroundColor: Colors.black, body: SafeArea(child: _terminalView()));
   }
 
   Widget _terminalView() {
@@ -483,7 +468,6 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
           color: const Color(0xFF1A1A1A), padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
           child: Row(
             children: [
-              IconButton(tooltip: 'Agente IA', onPressed: () => setState(() => _showAgent = true), icon: const Icon(Icons.psychology, color: Colors.lightBlueAccent, size: 22)),
               const SizedBox(width: 8),
               const Expanded(child: Text('XTR Terminal $_appVersion', style: TextStyle(color: Colors.white70, fontSize: 14, fontFamily: 'monospace', fontWeight: FontWeight.bold))),
               IconButton(tooltip: 'Hosts SSH / SFTP', onPressed: _openHosts, icon: const Icon(Icons.dns_rounded, color: Colors.lightBlueAccent, size: 22)),
@@ -558,7 +542,7 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
               return Stack(
                 children: [
                   Offstage(offstage: sftpOpen, child: terminalPane),
-                  if (_sftpOpened.contains(s)) Offstage(offstage: !sftpOpen, child: SftpBrowserScreen(host: s.sourceHost!, rootfsPath: _manager.rootfsPath!, embedded: true, onOpenTerminal: (_) => setState(() => _sftpOpen.remove(s)))),
+                  if (_sftpOpened.contains(s)) Offstage(offstage: !sftpOpen, child: SftpBrowserScreen(host: s.sourceHost!, rootfsPath: AppPaths.base, embedded: true, onOpenTerminal: (_) => setState(() => _sftpOpen.remove(s)))),
                 ],
               );
             }).toList(),

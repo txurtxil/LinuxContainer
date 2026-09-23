@@ -17,13 +17,12 @@ import android.os.PowerManager
  * sesiones SSH/SFTP de flutter_pty, que son procesos hijos) cuando la app
  * pasa a segundo plano. Es el mismo enfoque que Termux: foreground service
  * con notificacion persistente + PARTIAL_WAKE_LOCK para que los keepalives
- * SSH (ServerAliveInterval=15) y los timers de proot sigan disparando con
- * la pantalla apagada.
+ * SSH (keepAliveInterval de dartssh2) sigan disparando con la pantalla
+ * apagada.
  *
- * Por que no basta AgentForegroundService: ese lo arranca Dart SOLO mientras
- * el agente esta activo; sin agente, Android mata la app en background y las
- * sesiones mueren con ella. Este servicio es independiente del agente y se
- * controla desde Ajustes ("Mantener sesiones en 2o plano", por defecto ON).
+ * Android mata la app en background y las sesiones mueren con ella; este
+ * servicio lo evita y se controla desde Ajustes ("Mantener sesiones en 2o
+ * plano", por defecto ON).
  */
 class KeepAliveService : Service() {
     companion object {

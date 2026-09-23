@@ -86,7 +86,7 @@ class ClipboardVault extends ChangeNotifier {
   // que no se controlan desde aquí.
   static const int systemClipboardSafeBytes = 200 * 1024;
   static const int _maxHistory = 60;
-  static const String _historyFileRel = '/root/.xtr/clipboard_history.jsonl';
+  static const String _historyFileRel = '/clipboard_history.jsonl';
 
   final List<ClipboardEntry> _history = [];
   List<ClipboardEntry> get history => List.unmodifiable(_history);

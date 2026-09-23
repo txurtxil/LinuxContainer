@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
@@ -7,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import 'ssh_host.dart';
 import 'ssh_hosts_service.dart';
 import 'ssh_credentials_store.dart';
+import '../storage/app_paths.dart';
 import '../sftp/sftp_browser_screen.dart';
 import '../sftp/sftp_connection_pool.dart';
 
@@ -283,9 +285,13 @@ class _HostEditorSheet extends StatefulWidget {
 }
 
 class _HostEditorSheetState extends State<_HostEditorSheet> {
-  late final TextEditingController _name, _hostname, _port, _username, _keyPath, _password, _initialPath;
+  late final TextEditingController _name, _hostname, _port, _username, _password, _initialPath;
   String _osTag = 'generic';
   bool _obscurePassword = true;
+
+  /// Claves importadas en el almacén de la app (solo nombres de fichero).
+  List<String> _keys = [];
+  String? _selectedKey;
 
   @override
   void initState() {
@@ -295,15 +301,37 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
     _hostname = TextEditingController(text: e?.hostname ?? '');
     _port = TextEditingController(text: (e?.port ?? 22).toString());
     _username = TextEditingController(text: e?.username ?? 'root');
-    _keyPath = TextEditingController(text: e?.keyPath ?? '');
     _initialPath = TextEditingController(text: e?.initialPath ?? '');
     _password = TextEditingController();
     _osTag = e?.osTag ?? 'generic';
+    // keyPath guardado: '/keys/<nombre>' (o legacy '/root/.ssh/<nombre>').
+    _selectedKey = e?.keyPath?.split('/').last;
+    _reloadKeys();
     if (e != null) SshCredentialsStore.readPassword(e.id).then((pwd) { if (mounted && pwd != null) setState(() => _password.text = pwd); });
   }
 
+  Future<void> _reloadKeys() async {
+    final keys = await AppPaths.listKeys();
+    if (mounted) setState(() => _keys = keys);
+  }
+
+  /// Importa una clave privada desde el almacenamiento del teléfono.
+  /// Se leen bytes vía XFile (file_selector devuelve content:// en Android
+  /// y dart:io no puede abrirlos) y se copian al almacén de la app.
+  Future<void> _importKey() async {
+    try {
+      final XFile? f = await openFile();
+      if (f == null) return;
+      final bytes = await f.readAsBytes();
+      final name = f.name.isEmpty ? 'id_imported' : f.name;
+      await File('${AppPaths.keysDir}/$name').writeAsBytes(bytes);
+      await _reloadKeys();
+      if (mounted) setState(() => _selectedKey = name);
+    } catch (_) {}
+  }
+
   @override
-  void dispose() { _name.dispose(); _hostname.dispose(); _port.dispose(); _username.dispose(); _keyPath.dispose(); _password.dispose(); _initialPath.dispose(); super.dispose(); }
+  void dispose() { _name.dispose(); _hostname.dispose(); _port.dispose(); _username.dispose(); _password.dispose(); _initialPath.dispose(); super.dispose(); }
 
   InputDecoration _dec(String label, {String? hint}) => InputDecoration(labelText: label, hintText: hint, labelStyle: const TextStyle(color: _C.textLo), hintStyle: const TextStyle(color: _C.textLo), filled: true, fillColor: _C.cardAlt, border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none));
 
@@ -314,7 +342,7 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
 
     final name = _name.text.trim().isEmpty ? hostname : _name.text.trim();
     final port = int.tryParse(_port.text.trim()) ?? 22;
-    final keyPath = _keyPath.text.trim();
+    final keyPath = _selectedKey == null ? '' : '/keys/$_selectedKey';
     final initialPath = _initialPath.text.trim();
     final password = _password.text;
 
@@ -329,6 +357,44 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
     
     await SshCredentialsStore.savePassword(hostId, password);
     if (mounted) Navigator.pop(context);
+  }
+
+  /// Selector de clave privada: desplegable con las claves del almacén de la
+  /// app + botón para importar desde el teléfono.
+  Widget _keySelector() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(color: _C.cardAlt, borderRadius: BorderRadius.circular(10)),
+      child: Row(
+        children: [
+          const Icon(Icons.key, color: _C.textLo, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _keys.contains(_selectedKey) ? _selectedKey : null,
+                isExpanded: true,
+                hint: const Text('Clave privada (opcional)', style: TextStyle(color: _C.textLo, fontSize: 14)),
+                dropdownColor: _C.card,
+                style: const TextStyle(color: _C.textHi, fontSize: 14),
+                items: [
+                  ..._keys.map((k) => DropdownMenuItem<String>(
+                        value: k,
+                        child: Text(k, overflow: TextOverflow.ellipsis),
+                      )),
+                ],
+                onChanged: (v) => setState(() => _selectedKey = v),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Importar clave desde el teléfono',
+            icon: const Icon(Icons.download, color: _C.accent, size: 20),
+            onPressed: _importKey,
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -350,7 +416,7 @@ class _HostEditorSheetState extends State<_HostEditorSheet> {
               const SizedBox(height: 10),
               Row(children: [ Expanded(flex: 2, child: TextField(controller: _username, style: const TextStyle(color: _C.textHi), decoration: _dec('Usuario'))), const SizedBox(width: 10), Expanded(child: TextField(controller: _port, keyboardType: TextInputType.number, style: const TextStyle(color: _C.textHi), decoration: _dec('Puerto'))), ]),
               const SizedBox(height: 10),
-              TextField(controller: _keyPath, style: const TextStyle(color: _C.textHi), decoration: _dec('Clave privada (opcional)', hint: '/root/.ssh/id_ed25519')),
+              _keySelector(),
               const SizedBox(height: 10),
               TextField(controller: _password, obscureText: _obscurePassword, style: const TextStyle(color: _C.textHi), decoration: _dec('Contraseña (opcional)', hint: 'Se guarda cifrada').copyWith(suffixIcon: IconButton(icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility, color: _C.textLo, size: 18), onPressed: () => setState(() => _obscurePassword = !_obscurePassword)))),
               const SizedBox(height: 10),

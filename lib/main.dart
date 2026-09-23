@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'src/terminal/terminal_view.dart';
 
 void main() {
-  runApp(const LinuxContainerApp());
+  runApp(const XtrTerminalApp());
 }
 
-class LinuxContainerApp extends StatelessWidget {
-  const LinuxContainerApp({super.key});
+class XtrTerminalApp extends StatelessWidget {
+  const XtrTerminalApp({super.key});
 
   @override
   Widget build(BuildContext context) {

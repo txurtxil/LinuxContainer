@@ -9,11 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  http: ^1.2.0
   path_provider: ^2.1.3
-  permission_handler: ^11.3.1
   cupertino_icons: ^1.0.8
-  archive: ^4.0.9
   xterm: ^4.0.0
   flutter_pty: ^0.4.2
   dartssh2: ^3.3.1
@@ -28,9 +25,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/agent_server.py
-    - assets/rootfs_overlay/root/agent/
-    - assets/rootfs_overlay/usr/local/bin/
-    - assets/container/rootfs.tar.xz
-    - assets/scripts/lc-menu.sh

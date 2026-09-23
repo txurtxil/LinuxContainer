@@ -18,7 +18,7 @@ class SshHostsService extends ChangeNotifier {
   static final SshHostsService instance = SshHostsService._();
   SshHostsService._();
 
-  static const String _fileRel = '/root/.xtr/ssh_hosts.json';
+  static const String _fileRel = '/ssh_hosts.json';
 
   String? _rootfsPath;
   final List<SshHost> _hosts = [];

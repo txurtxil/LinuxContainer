@@ -27,7 +27,7 @@ class TerminalMatch {
 }
 
 class TerminalRecorder {
-  static const String _sessionsDirRel = '/root/.xtr/sessions';
+  static const String _sessionsDirRel = '/sessions';
   static const int _maxTotalBytes = 50 * 1024 * 1024; // 50 MB en disco, entre TODAS las sesiones
   static const int _tailBytes = 200 * 1024; // colchón en RAM si el disco falla
 
