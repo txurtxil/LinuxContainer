@@ -19,6 +19,7 @@ import 'sftp_service.dart';
 import 'sftp_favorites_service.dart';
 import 'sftp_connection_pool.dart';
 import 'local_file_picker_screen.dart';
+import 'sftp_text_editor_screen.dart';
 
 class _C {
   static const bg = Color(0xFF1C1C1E);
@@ -793,6 +794,19 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
   }
 
   void _showActions(SftpEntry e) {
+  void _edit(SftpEntry e) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SftpTextEditorScreen(
+          fileName: e.name,
+          loader: () => _svc.readFile(_fullPath(e)),
+          saver: (bytes) => _svc.writeFile(_fullPath(e), bytes),
+        ),
+      ),
+    ).then((_) => _load(_path));
+  }
+
     showModalBottomSheet(
       context: context,
       backgroundColor: _C.card,
@@ -806,7 +820,14 @@ class _SftpBrowserScreenState extends State<SftpBrowserScreen> {
                 title: const Text('Descargar', style: TextStyle(color: _C.textHi)),
                 onTap: () { Navigator.pop(ctx); _download(e); },
               ),
-            if (e.isDirectory)
+            
+      if (!e.isDirectory)
+        ListTile(
+          leading: const Icon(Icons.edit_outlined, color: _C.accent),
+          title: const Text("Editar", style: TextStyle(color: _C.textHi)),
+          onTap: () { Navigator.pop(ctx); _edit(e); },
+        ),
+if (e.isDirectory)
               ListTile(
                 leading: const Icon(Icons.download_for_offline_outlined, color: _C.accent),
                 title: const Text('Descargar carpeta (recursivo)', style: TextStyle(color: _C.textHi)),

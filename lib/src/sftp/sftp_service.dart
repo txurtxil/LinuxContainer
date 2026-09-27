@@ -16,6 +16,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
 
@@ -246,6 +247,37 @@ class SftpService {
     final sftp = _sftp;
     if (sftp == null) throw StateError('No conectado');
     await sftp.rename(oldPath, newPath);
+  }
+
+  /// Lee un fichero remoto COMPLETO a memoria. Pensado para el editor de
+  /// texto; no usar con ficheros grandes. Mismo camino que download() pero
+  /// con un sink en memoria en lugar de un fichero local.
+  Future<Uint8List> readFile(String remotePath) async {
+    final sftp = _sftp;
+    if (sftp == null) throw StateError('No conectado');
+    final controller = StreamController<List<int>>();
+    final builder = BytesBuilder();
+    final done = controller.stream.forEach(builder.add);
+    await sftp.download(remotePath, controller.sink, closeDestination: true);
+    await done;
+    return builder.takeBytes();
+  }
+
+  /// Sobrescribe un fichero remoto con [bytes], truncando lo que hubiera.
+  /// Es el guardado del editor de texto.
+  Future<void> writeFile(String remotePath, Uint8List bytes) async {
+    final sftp = _sftp;
+    if (sftp == null) throw StateError('No conectado');
+    final remoteFile = await sftp.open(
+      remotePath,
+      mode: SftpFileOpenMode.create | SftpFileOpenMode.truncate | SftpFileOpenMode.write,
+    );
+    try {
+      final uploader = remoteFile.write(Stream<Uint8List>.value(bytes));
+      await uploader.done;
+    } finally {
+      await remoteFile.close();
+    }
   }
 
   /// Descarga una CARPETA entera replicando su estructura en
