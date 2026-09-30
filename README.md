@@ -1,3 +1,9 @@
+# ARCHIVADO
+
+El desarrollo de la app continua en **github.com/txurtxil/TermXTR** (terminal SSH/SFTP, releases v2.0.0-v2.8.0 con APK verificados). Este repo se conserva como base historica.
+
+---
+
 # XTR Terminal — LinuxContainer
 
 **Un contenedor Debian completo con un agente IA autónomo, corriendo 100% en local en tu Android.**
